@@ -6,6 +6,7 @@
  * Se instala después de browser-agent.js. Estado: __ai.skillAB (windows, done).
  */
 (() => {
+  const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); (window.__mubotTimers ??= []).push(id); return id; };
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero instalá browser-agent.js';
   const prev = ai.skillAB;

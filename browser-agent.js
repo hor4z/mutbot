@@ -24,6 +24,11 @@
  */
 (() => {
   const old = window.__ai;
+  // Todos los temporizadores del agente (y de tuner/skill-ab) se registran acá: reinstalar
+  // apaga TODO lo anterior, incluso lo que quedó colgado de copias viejas del agente.
+  for (const id of window.__mubotTimers ?? []) clearInterval(id);
+  window.__mubotTimers = [];
+  const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); window.__mubotTimers.push(id); return id; };
   for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.

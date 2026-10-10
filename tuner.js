@@ -10,6 +10,7 @@
  * Se instala después de browser-agent.js, pegándolo en la consola.
  */
 (() => {
+  const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); (window.__mubotTimers ??= []).push(id); return id; };
   const ai = window.__ai, S = __store;
   if (!ai) return 'primero instalá browser-agent.js';
   if (ai.tuner?.timer) clearInterval(ai.tuner.timer);
