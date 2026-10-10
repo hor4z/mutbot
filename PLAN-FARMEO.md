@@ -211,6 +211,7 @@ acumulados. Hasta entonces, nada que saque tiempo del ciclo.
 | 3 | 14,7 | 98 | 2,5 | 1,5 | 3,2 | 7,1 | 22 s | exp por segundo (medición), giro caminando, conglomerados, hambre con rivales |
 | 4 | 17,4 | 83 | 3,0 | 5,1 | 3,6 | 5,5 | 7 s | reset sin warp (aceptado desde Arena 4); perdió ~3 min con un skill trabado |
 | 5 | 14,2 | 101 | 2,2 | 2,5 | 4,6 | 4,7 | 7 s | vigilantes (7 skills trabados destrabados), timers registrados |
+| 6 | 18 | 80 | 5,6 | 1,5 | 5,0 | ~5,5 | 7 s | Devias llenas: saltos por hambre cada 50 s (corregido: máx. 1 cada 2 min); Arena 3 se queda en la entrada |
 
 Ciclo 6: borrar la memoria de campamentos de Arenas (aprendida con la medición truncada) y reaprender; atacar 200→300.
 
