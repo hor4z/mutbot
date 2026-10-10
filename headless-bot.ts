@@ -1,0 +1,1860 @@
+/**
+ * Bot headless de MU — autonomous farming + progression, SIN GUI.
+ *
+ * Juega usando el protocolo real del cliente (mismos packets y cifrado que
+ * src/store.ts), pero sin interfaz ni eventos de mouse/teclado. Corre un
+ * personaje que progresa solo: pelea, sube exp y stats, recoge loot, vende la
+ * basura y repone pociones, siempre a ritmo humano.
+ *
+ * Solo para TU propio OpenMU de prueba, con una cuenta de prueba.
+ *
+ *   bun run headless-bot.ts [opciones]
+ *
+ * Conexión:
+ *   --proxy ws://127.0.0.1:3000        proxy WebSocket (WS -> TCP)
+ *   --cs-host 127.0.0.1 --cs-port 44405  connect server
+ *   --user test1 --pass test1 --char test1Dk
+ *   --allow-remote       permite apuntar a hosts no locales
+ *
+ * Loop autónomo (juega solo, sin GUI, sin flood):
+ *   --auto-seconds 600  cuánto tiempo corre el loop autónomo
+ *   --build str,vit     orden de inversión de puntos de estadística
+ *   --max-stat 300      tope por atributo (default 10000 = sin tope)
+ *   --heal-at 60        usa potion cuando HP% <= este valor
+ *   --skills 41,42      números de skill de ataque, en orden de preferencia
+ *                       (default: los conocidos de DEFAULT_ATTACK_SKILLS)
+ *
+ * Economía (ver AGENTS.md para el detalle del flujo):
+ *   --merchant 500,510  Ids de NPC merchant conocidos. Si no se pasan, el bot
+ *                       los descubre probando los NPCs que ve en scope.
+ *   --buy-slot 12,13    índices de pociones DENTRO de la lista del merchant.
+ *                       El server valida el índice; si está mal contesta
+ *                       NpcItemBuyFailed y no cobra nada.
+ *   --warp 26           antes de arrancar, viaja con el menú de warp (índice de
+ *                       la lista de movimiento del cliente; valida nivel y cobra zen)
+ *   --explore-dir 1     sesga la exploración hacia una dirección (0..7, 1=norte)
+ *   --move dungeon      antes de arrancar, manda "/move <mapa>" por chat
+ *                       (warp del server: valida nivel y cobra zen)
+ *
+ * Control / UI:
+ *   --decision-log r.jsonl  appendea cada decisión como JSONL (una por línea)
+ *                           para que una UI pueda tail-earla.
+ *   --ws-port 8787          telemetría por WebSocket (solo lectura, ver
+ *                           ws-server.ts): estado + decisiones en vivo.
+ */
+import { appendFile } from 'node:fs/promises';
+import { EventBus } from './net/eventBus';
+import { createSocket } from './net/socket';
+import { startStatusServer, type StatusServer } from './ws-server';
+import {
+  SimpleModulusEncryptor,
+  Xor32Encryptor,
+  Xor3Byte,
+} from './net/encryption';
+import { stringToBytes } from './net/utils';
+import {
+  ConnectionInfoPacket,
+  ConnectionInfoRequestPacket,
+  ServerListRequestOldPacket,
+  ServerListResponseOldPacket,
+  ServerListResponsePacket,
+} from './packets';
+import {
+  LoginShortPasswordPacket,
+  RequestCharacterListPacket,
+  SelectCharacterPacket,
+  ConsumeItemRequest075Packet,
+  IncreaseCharacterStatPointPacket,
+  ClientReadyAfterMapChangePacket,
+  TalkToNpcRequestPacket,
+  SellItemToNpcRequestPacket,
+  BuyItemFromNpcRequestPacket,
+  CloseNpcRequestPacket,
+  PickupItemRequest075Packet,
+} from './packets';
+import {
+  LoginResponsePacket,
+  LoginResponseLoginResultEnum,
+  MapObjectOutOfScopePacket,
+  ObjectGotKilledPacket,
+  ExperienceGainedPacket,
+  GameServerEnteredPacket,
+  ObjectWalked075Packet,
+  ObjectMovedPacket,
+  SkillListUpdatePacket,
+  MapChanged075Packet,
+  CurrentHealthAndShieldPacket,
+  CurrentManaAndAbilityPacket,
+  CharacterLevelUpdatePacket,
+  ItemsDroppedPacket,
+  MoneyDropped075Packet,
+  ItemAddedToInventoryPacket,
+  NpcItemSellResultPacket,
+  InventoryMoneyUpdatePacket,
+  NpcItemBuyFailedPacket,
+  NpcWindowResponsePacket,
+  NpcWindowResponseNpcWindowEnum,
+  MasterStatsUpdatePacket,
+  MasterCharacterLevelUpdatePacket,
+  MasterSkillLevelUpdatePacket,
+} from './packets';
+import monstersData from './data/monsters.json';
+import itemsData from './data/items.json';
+
+// TypeNumber reales de monstruos (del propio dataset del juego), para no confundir
+// un NPC amistoso del pueblo (vendedor, etc.) con algo atacable.
+// monsters.json incluye también los NPC amistosos del pueblo (Amy la de las
+// pociones, Berdysh Guard, Malron...), así que el Numb solo no alcanza: hay que
+// filtrar también por atributos de combate. Los monstruos reales se mueven poco
+// (Move <= 12) y tienen AttType != 0; los NPC de pueblo se quedan quietos y no
+// atacan. Antes de este filtro el bot atacaba a Amy y no lograba ninguna kill.
+type MonsterRow = {
+  Numb: number;
+  Move: number;
+  AttType: number;
+  HP: number;
+  AttSpeed: number;
+};
+// Move es el rango de patrulla, no la velocidad: monstruos reales llegan a ~22
+// (Skeleton), los guardias del pueblo (no atacables) tienen 100. Con tope 12 el
+// bot descartaba Skeletons y quedaba ciego en Dungeon.
+const MONSTER_TYPE_NUMBERS = new Set(
+  (monstersData as MonsterRow[])
+    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.Move <= 50 && m.HP > 0)
+    .map((m) => m.Numb),
+);
+
+// ---------------------------------------------------------------------------
+// Args + guard de "solo local"
+// ---------------------------------------------------------------------------
+const args = new Map<string, string>();
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i].startsWith('--')) {
+    const next = argv[i + 1];
+    if (next && !next.startsWith('--')) {
+      args.set(argv[i], next);
+      i++;
+    } else args.set(argv[i], 'true');
+  }
+}
+
+const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
+const CS_HOST = args.get('--cs-host') ?? '127.0.0.1';
+const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
+const USERNAME = args.get('--user') ?? 'test1';
+const PASSWORD = args.get('--pass') ?? 'test1';
+const CHAR_NAME = args.get('--char') ?? 'test1Dk';
+const ALLOW_REMOTE = args.has('--allow-remote');
+// El mundo de mu.mormon.garden está configurado con el perfil de cliente 0.97d
+// (V097D), NO season6. Estos son sus bytes de versión y serial: el server valida
+// ambos y descarta el login en silencio si no coinciden.
+const CLIENT_VERSION = [49, 59, 58, 52, 57]; // "1;:49"
+const CLIENT_SERIAL = 'St0n3agemu97d99i';
+const MAX_USERNAME_LENGTH = 10;
+const MAX_PASSWORD_LENGTH = 10;
+
+const LOCAL = /^(127\.|localhost$|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+const proxyHost = new URL(PROXY).hostname;
+if (!ALLOW_REMOTE && !(LOCAL.test(proxyHost) && LOCAL.test(CS_HOST))) {
+  console.error(`Rechazado: ${proxyHost} / ${CS_HOST} no parecen locales. Agregá --allow-remote si es tuyo.`);
+  process.exit(2);
+}
+
+const log = (...a: unknown[]) => console.log(`[bot]`, ...a);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Estado de envío: misma lógica que Store.sendToCS / Store.sendToGS
+// ---------------------------------------------------------------------------
+const xor32 = new Xor32Encryptor();
+let csSocket: WebSocket | undefined;
+let gsSocket: WebSocket | undefined;
+let gsEncryptor: InstanceType<typeof SimpleModulusEncryptor> | undefined;
+
+function sendToCS(buffer: DataView) {
+  csSocket?.send(buffer);
+}
+
+// El perfil de cliente 0.97d (V097D) que usa mu.mormon.garden tiene SU PROPIO
+// xor32 key. Con el default de season6 el server no puede descifrar los packets
+// C2S y descarta el login sin responder.
+const XOR32_KEY_097D = new Uint8Array([
+  231, 109, 58, 137, 188, 178, 159, 115, 35, 168, 254, 182, 73, 93, 57, 93,
+  138, 203, 99, 141, 234, 125, 43, 95, 195, 177, 233, 131, 41, 81, 232, 86,
+]);
+
+function sendToGS(buffer: DataView) {
+  let packet = new Uint8Array(buffer.buffer);
+  const header = packet[0];
+  const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
+  if (process.env.MUBOT_DEBUG) console.log(`[dbg] C2S plano  (${packet.length}): ${hex(packet)}`);
+  if (!process.env.MUBOT_XOR32_DEFAULT) xor32.xor32Key = XOR32_KEY_097D;
+  xor32.Encrypt(packet);
+  if (process.env.MUBOT_DEBUG) console.log(`[dbg] C2S xor32  (${packet.length}): ${hex(packet)}`);
+  if (gsEncryptor && header >= 0xc3) {
+    packet = gsEncryptor.Encrypt(packet);
+    if (process.env.MUBOT_DEBUG) console.log(`[dbg] C2S cifrado (${packet.length}): ${hex(packet)}`);
+  }
+  gsSocket?.send(packet);
+}
+
+// ---------------------------------------------------------------------------
+// Estado del mundo (lo que el bot cree de sí mismo) — se actualiza con los
+// packets S2C. Es la única fuente de verdad del loop autónomo.
+// ---------------------------------------------------------------------------
+type StatName = 'str' | 'agi' | 'vit' | 'ene';
+
+// En MU el orden de los atributos es fijo: strength, agility, vitality, energy.
+// IncreaseCharacterStatPoint.StatType usa exactamente esos mismos índices.
+const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
+const STAT_INDEX: Record<StatName, number> = { str: 0, agi: 1, vit: 2, ene: 3 };
+
+type ItemSlot = { slot: number; group: number; num: number };
+type SkillInfo = { index: number; number: number; level: number };
+
+const world = {
+  x: 0,
+  y: 0,
+  map: 0,
+  hp: 0,
+  maxHp: 0,
+  mana: 0,
+  maxMana: 0,
+  level: 0,
+  levelUpPoints: 0,
+  stats: { str: 0, agi: 0, vit: 0, ene: 0 } as Record<StatName, number>,
+  skills: new Map<number, SkillInfo>(), // por número de skill
+  inventory: new Map<number, ItemSlot>(), // por slot de inventario
+  npcs: new Map<number, ScopedNpc>(),
+  // Master skill tree: solo tracking pasivo por ahora (ver AGENTS.md,
+  // "Pendiente"). El perfil del server es V097D (pre-season); no sabemos si
+  // manda estos packets hasta verlo en un login real.
+  masterLevel: 0,
+  masterLevelUpPoints: 0,
+  masterSeen: false,
+};
+
+// Servidor de telemetría opcional (--ws-port). Solo lectura: ver ws-server.ts.
+let statusServer: StatusServer | undefined;
+
+function snapshotWorld() {
+  return {
+    x: world.x,
+    y: world.y,
+    map: world.map,
+    hp: world.hp,
+    maxHp: world.maxHp,
+    mana: world.mana,
+    maxMana: world.maxMana,
+    level: world.level,
+    levelUpPoints: world.levelUpPoints,
+    stats: world.stats,
+    inventoryCount: world.inventory.size,
+    inventory: [...world.inventory.values()],
+  };
+}
+
+// Las pociones del set clásico están en el Group 14 (curación 1-3, mana 4-6,
+// SD 35-37) y el Group 13 (Potion of Illusion). Salen de data/items.json.
+// Para un bot que solo necesita sobrevivir, la Small Healing Potion (14/1) es
+// la mejor: se compra barata, se stacks (X=1 Y=1) y alcanza para todo el farm.
+const POTION_GROUP = 14;
+const HEAL_POTION_NUMS = new Set([1, 2, 3]); // small / normal / large healing
+const SELL_INTERVAL_MS = 600;   // respiro entre ventas para no parecer un burst
+// Con esto lleno (de 40 slots) vamos a vender antes de no poder recoger más.
+const SELL_AT_PRESSURE = 0.6;
+
+// Skills de ataque configurables (números de skill, NO índices de lista).
+// Los defaults son los de Dark Knight / Blade Knight del set clásico.
+const DEFAULT_ATTACK_SKILLS = [19, 49, 14, 15, 40, 41, 42, 43, 45, 46, 47, 48, 50, 51, 55];
+
+// ---------------------------------------------------------------------------
+// Métricas
+// ---------------------------------------------------------------------------
+let kicked = false;
+let playerId = -1;
+EventBus.on('wsClosed', (e: any) => {
+  // Solo cuenta si es el socket del game server el que se cerró; cerrar
+  // nosotros mismos el del connect server al pasar al game server no es un "kick".
+  if (gsSocket && e?.socket === gsSocket) {
+    kicked = true;
+  }
+});
+
+function waitFor<T extends string>(event: T | T[], timeoutMs = 8000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      handler.off();
+      reject(new Error(`timeout esperando '${event}'`));
+    }, timeoutMs);
+    const handler = (bytes: any) => {
+      clearTimeout(t);
+      handler.off();
+      resolve(bytes);
+    };
+    handler.off = () => {
+      for (const ev of events) EventBus.off(ev as any, handler);
+    };
+    const events = Array.isArray(event) ? event : [event];
+    for (const ev of events) EventBus.on(ev as any, handler);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 1. Connect server: hello -> server list -> connection info
+// ---------------------------------------------------------------------------
+async function connectToConnectServer() {
+  const { socket } = createSocket({ wsAddress: PROXY, tcpIP: CS_HOST, tcpPort: CS_PORT });
+  csSocket = socket;
+  await waitFor('Hello');
+  log('Connect server: Hello recibido');
+}
+
+async function getGameServerAddress(): Promise<{ ip: string; port: number }> {
+  sendToCS(ServerListRequestOldPacket.createPacket().buffer);
+  const bytes = await waitFor(['ServerListResponse', 'ServerListResponseOld']);
+
+  // F4/06 (ServerListResponse) y F4/02 (ServerListResponseOld) traen layouts
+  // distintos. El moderno solo trae ServerId + LoadPercentage y NO trae la
+  // dirección, así que la dirección siempre sale de --server.
+  // F4/06 y F4/02 traen layouts distintos. El moderno no trae la dirección, así
+// que --server/--connect-addr manda igual. Distinguimos por el subcode (byte 4).
+const sub = bytes.getUint8(4);
+const modern = sub === 0x06;
+const serverId = modern
+  ? new ServerListResponsePacket(bytes).getServers(1)[0]?.ServerId
+  : (() => {
+      const p = new ServerListResponseOldPacket(bytes);
+      return p.getServers(p.ServerCount)[0]?.ServerId;
+    })();
+if (serverId == null) throw new Error(`ServerList raro: subcode=0x${sub.toString(16)} len=${bytes.byteLength}`);
+log(`ServerList (F4/${sub.toString(16).padStart(2, '0')}): ServerId ${serverId}`);
+
+  const reqInfo = ConnectionInfoRequestPacket.createPacket();
+  reqInfo.ServerId = serverId;
+  sendToCS(reqInfo.buffer);
+
+  const infoBytes = await waitFor('ConnectionInfo');
+  const info = new ConnectionInfoPacket(infoBytes);
+  // El cliente real (src/ui/pages/serversPage/index.tsx) IGNORA a propósito la IP
+  // que manda el connect server acá ("//use local host") y usa el host configurado.
+  // La imitamos: el connect server puede anunciar una IP pública autodetectada
+  // (le pasó a esta prueba: devolvió una IP pública real), y conectar el proxy
+  // a lo que diga el server sin validar es justo el open relay que ya reportamos.
+  log(`ConnectionInfo: server anunció ${info.IpAddress}:${info.Port}; uso ${CS_HOST}:${info.Port} (igual que el cliente real)`);
+  return { ip: CS_HOST, port: info.Port };
+}
+
+// ---------------------------------------------------------------------------
+// 2. Game server: hello -> login -> character list -> select
+// ---------------------------------------------------------------------------
+async function connectToGameServer(ip: string, port: number) {
+  csSocket?.close();
+  const { socket } = createSocket({ wsAddress: PROXY, tcpIP: ip, tcpPort: port });
+  gsSocket = socket;
+  gsEncryptor = new SimpleModulusEncryptor();
+  gsEncryptor.encryptionKeys = SimpleModulusEncryptor.DefaultClientKey;
+
+  const bytes = await waitFor('GameServerEntered');
+  const p = new GameServerEnteredPacket(bytes);
+  playerId = p.PlayerId & 0x7fff;
+  log(`Game server: GameServerEntered recibido (playerId=${playerId})`);
+}
+
+function login(username: string, password: string) {
+  const usernameBytes = stringToBytes(username, MAX_USERNAME_LENGTH);
+  const passwordBytes = stringToBytes(password, MAX_PASSWORD_LENGTH);
+  Xor3Byte(usernameBytes);
+  Xor3Byte(passwordBytes);
+
+  if (process.env.MUBOT_LONGLOGIN) {
+    // Experimento: OpenMU trata como LoginLongPassword todo packet >= 42 bytes
+    // (LogInHandlerPlugIn.cs), y el corto de 50 bytes cae ahí con otro layout.
+    const long = new Uint8Array(60);
+    long.set([0xc3, 60, 0xf1, 0x01], 0);
+    const lp = stringToBytes(password, 20);
+    Xor3Byte(lp);
+    long.set(usernameBytes, 4);
+    long.set(lp, 14);
+    new DataView(long.buffer).setUint32(34, Math.floor(performance.now()) >>> 0, false);
+    long.set(CLIENT_VERSION, 38);
+    long.set(stringToBytes(CLIENT_SERIAL, 16), 43);
+    sendToGS(new DataView(long.buffer));
+    return;
+  }
+  const p = LoginShortPasswordPacket.createPacket();
+  // Los setters generados están tipados como number[] pero reciben Uint8Array.
+  p.setUsername(usernameBytes as unknown as number[], usernameBytes.length);
+  p.setPassword(passwordBytes as unknown as number[], passwordBytes.length);
+  p.TickCount = Math.floor(performance.now()) >>> 0;
+  p.setClientVersion(CLIENT_VERSION as unknown as number[]);
+  // Sin serial, OpenMU descarta el login sin mandar LoginResponse (ni error).
+  p.setClientSerial(stringToBytes(CLIENT_SERIAL, 16) as unknown as number[]);
+  sendToGS(p.buffer);
+}
+
+// El XML de packets define el CharacterList "Extended" (34 bytes por personaje y
+// flags extra), pero un server 0.95/0.97 manda el layout chico: CharacterCount en
+// el índice 4, sin UnlockFlags/MoveCnt/IsVaultExtended, y cada CharacterData con
+// 26 bytes. Con el parser del XML el acceso desborda, así que lo parseamos a mano.
+const CHAR_DATA_097_LENGTH = 26;
+const CHAR_LIST_097_HEADER = 5;
+
+// createSocket emite un DataView; otros paths pueden dar Uint8Array. Normalizamos.
+function toBytes(data: any): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof DataView) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  throw new Error(`payload inesperado: ${typeof data}`);
+}
+
+function parseCharacterList097(raw: any) {
+  const bytes = toBytes(raw);
+  const count = bytes[4];
+  const out: Array<{ SlotIndex: number; Name: string; Level: number }> = [];
+
+  for (let i = 0; i < count; i++) {
+    const base = CHAR_LIST_097_HEADER + i * CHAR_DATA_097_LENGTH;
+    if (base + CHAR_DATA_097_LENGTH > bytes.length) break;
+    const nameBytes = bytes.subarray(base + 1, base + 11);
+    const nul = nameBytes.indexOf(0);
+    out.push({
+      SlotIndex: bytes[base],
+      Name: new TextDecoder().decode(nul === -1 ? nameBytes : nameBytes.subarray(0, nul)),
+      Level: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(base + 12, true),
+    });
+  }
+  return out;
+}
+
+// CharacterInformation del XML es el layout Extended. El server 0.95/0.97 manda el
+// layout chico (52 bytes, X/Y en 4/5), así que leemos ese a mano.
+function parseCharacterInformation097(raw: any) {
+  const bytes = toBytes(raw);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return {
+    x: bytes[4],
+    y: bytes[5],
+    map: bytes[6],
+    exp: view.getUint32(8, true),
+    expForNext: view.getUint32(12, true),
+    levelUpPoints: view.getUint16(16, true),
+    str: view.getUint16(18, true),
+    agi: view.getUint16(20, true),
+    vit: view.getUint16(22, true),
+    ene: view.getUint16(24, true),
+    hp: view.getUint16(26, true),
+    maxHp: view.getUint16(28, true),
+    mana: view.getUint16(30, true),
+    maxMana: view.getUint16(32, true),
+    money: view.getUint32(40, true),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Parsers legacy de items y skills (layouts 0.97d, no los del XML)
+// ---------------------------------------------------------------------------
+// El item serializado del server son 12 bytes. Mirando SerializeItem /
+// DeserializeItem del cliente MU JS (src/common/itemSerializer.ts) (que son el par que usa
+// OpenMU para estos packets): byte[0] = num, byte[5] nibble alto = group.
+const ITEM_DATA_LENGTH = 12;
+
+function parseItemData097(itemData: Uint8Array): { group: number; num: number } {
+  return {
+    num: itemData[0],
+    group: (itemData[5] & 0xf0) >> 4,
+  };
+}
+
+// CharacterInventory (F3/10, header C4): count en byte 5, luego StoredItem[].
+// StoredItem = slot (1 byte) + ItemData de 12 bytes.
+function parseInventory097(raw: any): ItemSlot[] {
+  const bytes = toBytes(raw);
+  const count = bytes[5];
+  const out: ItemSlot[] = [];
+  for (let i = 0; i < count; i++) {
+    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
+    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
+    const { group, num } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
+    out.push({ slot: bytes[base], group, num });
+  }
+  return out;
+}
+
+// StoreItemList (C2/0x31): mismo layout que CharacterInventory (count en byte
+// 5, items desde byte 6, stride 1+12), pero el getItems() generado tiene el
+// mismo bug de stride que ya rompía CharacterInventory (calcula el ItemData
+// con longitud 0) — lo parseamos a mano, igual que el inventario.
+type ShopItem = { shopSlot: number; group: number; num: number };
+function parseStoreItemList097(raw: any): ShopItem[] {
+  const bytes = toBytes(raw);
+  const count = bytes[5];
+  const out: ShopItem[] = [];
+  for (let i = 0; i < count; i++) {
+    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
+    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
+    const { group, num } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
+    out.push({ shopSlot: bytes[base], group, num });
+  }
+  return out;
+}
+
+// ItemAddedToInventory (0x22, header C3): slot en byte 3, ItemData desde byte 4.
+function parseItemAdded097(raw: any): ItemSlot | null {
+  const bytes = toBytes(raw);
+  if (bytes.length < 4 + ITEM_DATA_LENGTH) return null;
+  const { group, num } = parseItemData097(bytes.subarray(4, 4 + ITEM_DATA_LENGTH));
+  return { slot: bytes[3], group, num };
+}
+
+// SkillListUpdate (F3/11): count en byte 4 (0xFE = agregó una, 0xFF = quitó una).
+  // Los entries empiezan en el offset 6 (el byte 5 es reservado en 0.97d) y son
+  // de 4 bytes: SkillIndex(1) + SkillNumber(2 LE) + SkillLevel(1).
+  //
+  // OJO: createSocket resuelve por code con `find(p => p.SubCode == null ||
+  // p.SubCode === subCode)`, así que para F3/11 gana el PRIMERO de la lista, que
+  // es 'SkillAdded'. El evento 'SkillListUpdate' nunca se emite contra este
+  // server: hay que escucharlo por 'SkillAdded' y deducir el caso del byte Count.
+  // Bug real encontrado probando un personaje de nivel 1 (pocas/ninguna
+  // skill): para ese caso el packet llega más corto de lo que getSkills()
+  // asume (offset 6 + 4 bytes/entry), y Count puede no caer en 0xfe/0xff ni
+  // matchear cuántas entries realmente caben en el buffer — getSkills()
+  // intentaba leer fuera de rango y tiraba abajo el proceso entero. Por eso
+  // clampeamos Count al tamaño real del buffer: fail-safe (mejor una lista de
+  // skills incompleta que un bot caído), no un fix del protocolo en sí
+  // (todavía no sabemos cuál es el layout correcto para este caso corto).
+  // Layout 0.97d (verificado contra el server real, personaje Horaz): Count en
+  // [4] (0xfe = agregar una, 0xff = quitar una, otro = lista completa) y desde
+  // [5] entradas de 3 bytes {index, number, level}. El parser generado asume 4
+  // bytes/entry (layout 1.xs) y leía basura: "skill 259", world.skills vacío.
+  function readSkillsUpdate(raw: any): { added: SkillInfo[]; removed: SkillInfo[]; full: SkillInfo[] } {
+    const b = toBytes(raw);
+    if (process.env.MUBOT_DEBUG_SKILLS) log(`SkillAdded raw: ${Buffer.from(b).toString('hex')}`);
+    const count = b[4];
+    const entry = (i: number): SkillInfo => ({ index: b[i], number: b[i + 1], level: b[i + 2] });
+    if (count === 0xfe && b.length >= 8) return { added: [entry(5)], removed: [], full: [] };
+    if (count === 0xff && b.length >= 8) return { added: [], removed: [entry(5)], full: [] };
+    const safe = Math.min(count, Math.floor((b.length - 5) / 3));
+    return { added: [], removed: [], full: Array.from({ length: safe }, (_, k) => entry(5 + k * 3)) };
+  }
+
+// ---------------------------------------------------------------------------
+// Tracker de estado: mantiene `world` al día con todo lo que manda el server.
+// Es lo que permite que el bot decida solo (pocarse,=subir stats, Etc.).
+// ---------------------------------------------------------------------------
+function trackWorld() {
+  EventBus.on('CharacterLevelUpdate', (raw: any) => {
+    const p = new CharacterLevelUpdatePacket(raw);
+    world.level = p.Level;
+    world.levelUpPoints = p.LevelUpPoints;
+    if (p.MaximumHealth) world.maxHp = p.MaximumHealth;
+    if (p.MaximumMana) world.maxMana = p.MaximumMana;
+  });
+
+  EventBus.on('CurrentHealthAndShield', (raw: any) => {
+    const p = new CurrentHealthAndShieldPacket(raw);
+    world.hp = p.Health;
+  });
+
+  EventBus.on('CurrentManaAndAbility', (raw: any) => {
+    const p = new CurrentManaAndAbilityPacket(raw);
+    world.mana = p.Mana;
+  });
+
+  // F3/11 trae la lista completa, un alta (Count=0xFE) o una baja (0xFF).
+  // Según la tabla de rutas se emite con uno u otro nombre; el cliente web
+  // engancha el mismo handler a los tres, así que hacemos lo mismo.
+  const onSkills = (raw: any) => {
+    const { added, removed, full } = readSkillsUpdate(raw);
+    if (full.length || (!added.length && !removed.length)) {
+      world.skills.clear();
+      for (const s of full) world.skills.set(s.number, s);
+    }
+    for (const s of added) world.skills.set(s.number, s);
+    for (const s of removed) world.skills.delete(s.number);
+    log(`Skills: ${[...world.skills.values()].map((s) => `${s.number}@${s.index}`).join(', ') || 'ninguno'}`);
+  };
+  for (const ev of ['SkillListUpdate', 'SkillAdded', 'SkillRemoved']) EventBus.on(ev, onSkills);
+
+  EventBus.on('CharacterInventory', (raw: any) => {
+    world.inventory.clear();
+    for (const it of parseInventory097(raw)) world.inventory.set(it.slot, it);
+    log(`Inventario: ${world.inventory.size} item(s).`);
+  });
+
+  EventBus.on('ItemAddedToInventory', (raw: any) => {
+    const it = parseItemAdded097(raw);
+    if (it) world.inventory.set(it.slot, it);
+  });
+
+  // Master skill tree: SOLO escucha, no manda nada (ver AGENTS.md, "Pendiente").
+  // Si el server no manda nunca estos tres eventos, confirma que el perfil
+  // V097D no tiene el sistema master activo para este personaje.
+  EventBus.on('MasterStatsUpdate', (raw: any) => {
+    const p = new MasterStatsUpdatePacket(raw);
+    world.masterSeen = true;
+    world.masterLevel = p.MasterLevel;
+    world.masterLevelUpPoints = p.MasterLevelUpPoints;
+    log(`Master stats: nivel ${p.MasterLevel}, ${p.MasterLevelUpPoints} punto(s) disponibles.`);
+  });
+  EventBus.on('MasterCharacterLevelUpdate', (raw: any) => {
+    const p = new MasterCharacterLevelUpdatePacket(raw);
+    world.masterSeen = true;
+    world.masterLevel = p.MasterLevel;
+    world.masterLevelUpPoints = p.CurrentMasterPoints;
+    log(`Master level up: nivel ${p.MasterLevel}, ${p.CurrentMasterPoints} punto(s) disponibles.`);
+  });
+  EventBus.on('MasterSkillLevelUpdate', (raw: any) => {
+    const p = new MasterSkillLevelUpdatePacket(raw);
+    world.masterSeen = true;
+    log(`MasterSkillLevelUpdate: success=${p.Success} índice=${p.MasterSkillIndex} nivel=${p.Level} puntos restantes=${p.MasterLevelUpPoints}`);
+  });
+
+  // El server re-sincroniza nuestra posición acá (rubber-band) cuando rechaza
+  // un movimiento. Sin esto el dead-reckoning queda desfasado para siempre.
+  //
+  // OJO con el nombre del evento: createSocket resuelve el packet por code y
+  // emite pDef.Name. El code 0x10 de 0.97d es ObjectWalked075; ObjectWalked es
+  // el 0xD4 de seasons modernas y NUNCA se emite contra este server. Escuchar
+  // 'ObjectWalked' dejaba al bot sin resync para siempre.
+  EventBus.on('ObjectWalked075', (raw: any) => {
+    const p = new ObjectWalked075Packet(raw);
+    const id = p.ObjectId & 0x7fff;
+    if (id === playerId) {
+      if (p.TargetX !== world.x || p.TargetY !== world.y) {
+        log(`Resync del server: creía (${world.x},${world.y}), real (${p.TargetX},${p.TargetY})`);
+      }
+      world.x = p.TargetX;
+      world.y = p.TargetY;
+      return;
+    }
+    // Bug real encontrado jugando (cuenta horaz, nivel 48): un monstruo
+    // detectado por AddNpcsToScope quedaba con su posición CONGELADA para
+    // siempre, porque este handler solo actualizaba la posición del jugador.
+    // El bot entonces perseguía la última posición conocida del monstruo,
+    // que ya se había movido — 0 kills a pesar de "ver" monstruos todo el
+    // tiempo. Se arregla actualizando también la posición de cualquier NPC
+    // ya trackeado en world.npcs.
+    const npc = world.npcs.get(id);
+    if (npc) {
+      npc.x = p.TargetX;
+      npc.y = p.TargetY;
+    }
+  });
+
+  // ObjectMoved (0x15): "un objeto se movió instantáneamente" (teleport/salto,
+  // no caminata) — mismo problema de posición congelada que ObjectWalked075 si
+  // no se trackea para NPCs ya vistos.
+  //
+  // OJO: a diferencia de ObjectWalked075 (verificado a fondo, es la única
+  // fuente de la posición del JUGADOR), este packet NO se usa para actualizar
+  // world.x/y del jugador — apareció 367 veces en una corrida de 130s (mucho
+  // más que los pasos propios) y una corrida terminó con "posición final
+  // (0,0)", probablemente por confiar en este packet para el jugador sin
+  // verificarlo. Conservador: solo actualiza NPCs ya trackeados, nunca al
+  // jugador, hasta confirmar el campo/formato con más cuidado.
+  EventBus.on('ObjectMoved', (raw: any) => {
+    const p = new ObjectMovedPacket(raw);
+    const id = p.ObjectId & 0x7fff;
+    if (id === playerId) return;
+    const npc = world.npcs.get(id);
+    if (npc) {
+      npc.x = p.PositionX;
+      npc.y = p.PositionY;
+    }
+  });
+
+  // Scope de NPCs: se registra al entrar al mundo, NO al arrancar el loop. El
+  // server manda el scope inicial (y el del mapa nuevo tras /move) antes de que
+  // el loop exista; enganchar tarde = bot ciego a los monstruos.
+  const npcs = world.npcs;
+  const onAdd = (raw: any) => {
+    for (const n of parseNpcs095(raw)) {
+      // DEBUG temporal: el filtro MONSTER_TYPE_NUMBERS (de monsters.json, set
+      // clásico) venía dando 0 matches en este server custom. Logueamos todo
+      // tipo que aparezca, pase o no el filtro, para confirmar qué IDs usa.
+      if (process.env.MUBOT_DEBUG_NPCS) {
+        log(`NPC en scope (debug): Id=${n.Id} tipo=${n.TypeNumber} match=${MONSTER_TYPE_NUMBERS.has(n.TypeNumber)} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+      }
+      if (!MONSTER_TYPE_NUMBERS.has(n.TypeNumber)) continue;
+      // Bug real (cuenta horaz, nivel 48, 22 monstruos detectados, 0 kills):
+      // n.Id viene CRUDO (con el bit alto de "vivo" puesto, ej. 33356), pero
+      // HitRequest.TargetId necesita el id real sin ese bit — el server hace
+      // `currentMap.GetObject(message.TargetId)` con el id exacto (confirmado
+      // en HitHandlerPlugInBase.cs de OpenMU) y no lo encuentra si mandamos el
+      // crudo, así que el golpe no hace nada (ni error ni log del lado
+      // server, falla en silencio). El resto del código SIEMPRE enmascara con
+      // `& 0x7fff` (onRemove, onKilled, ObjectWalked075) — acá faltaba, y
+      // además por eso `onRemove` nunca lograba borrar estos NPCs del mapa
+      // (comparaba contra una clave que nunca existía).
+      const id = n.Id & 0x7fff;
+      const isNew = !npcs.has(id);
+      npcs.set(id, { id, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
+      if (isNew) log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+    }
+  };
+  const onRemove = (raw: any) => {
+    const p = new MapObjectOutOfScopePacket(raw);
+    for (const o of p.getObjects()) npcs.delete(o.Id & 0x7fff);
+  };
+  EventBus.on('AddNpcsToScope', onAdd);
+  EventBus.on('MapObjectOutOfScope', onRemove);
+
+  // Cambiar de mapa: hay que confirmarlo con ClientReadyAfterMapChange (F3/12)
+  // o el server nos cuelga en el limbo. El evento que se emite es
+  // 'MapChanged075' (code 0x1C sin subcode), no 'MapChanged' (que espera 0x1C/0x15).
+  EventBus.on('MapChanged075', (raw: any) => {
+    const p = new MapChanged075Packet(raw);
+    world.map = p.MapNumber;
+    world.x = p.PositionX;
+    world.y = p.PositionY;
+    log(`Cambio de mapa → map=${world.map} pos=(${world.x},${world.y})`);
+    // Lo que había en scope era del mapa viejo: si no se limpia, el bot
+    // persigue NPCs y drops que ya no existen (el server no manda el remove).
+    world.npcs.clear();
+    drops.clear();
+    sendToGS(ClientReadyAfterMapChangePacket.createPacket().buffer);
+  });
+}
+
+async function loginAndSelectCharacter() {
+  login(USERNAME, PASSWORD);
+  const loginBytes = await waitFor('LoginResponse');
+  const loginResp = new LoginResponsePacket(loginBytes);
+  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) {
+    throw new Error(`Login falló: ${LoginResponseLoginResultEnum[loginResp.Success]}`);
+  }
+  log('Login OK');
+
+  const listWaiter = waitFor('CharacterList');
+  requestCharacterList();
+  return selectCharacter(await listWaiter);
+}
+
+function requestCharacterList() {
+  const p = RequestCharacterListPacket.createPacket();
+  p.Language = 0;
+  sendToGS(p.buffer);
+}
+
+async function selectCharacter(charListBytes: any) {
+  const characters = parseCharacterList097(charListBytes);
+  log(
+    `Personajes: ${characters.map((c: any) => `${c.Name}(lv.${c.Level})`).join(', ')}`,
+  );
+
+  const target = characters.find((c: any) => c.Name === CHAR_NAME) ?? characters[0];
+  if (!target) throw new Error('La cuenta no tiene personajes');
+
+  const selP = SelectCharacterPacket.createPacket();
+  selP.setName(target.Name);
+  sendToGS(selP.buffer);
+
+  const infoBytes = await waitFor('CharacterInformation');
+  const info = parseCharacterInformation097(infoBytes);
+  Object.assign(world, {
+    x: info.x,
+    y: info.y,
+    map: info.map,
+    hp: info.hp,
+    maxHp: info.maxHp,
+    mana: info.mana,
+    maxMana: info.maxMana,
+    level: target.Level ?? world.level,
+    levelUpPoints: info.levelUpPoints,
+    stats: { str: info.str, agi: info.agi, vit: info.vit, ene: info.ene },
+  });
+  log(
+    `Entré al mundo con ${target.Name}: pos=(${info.x},${info.y}) map=${info.map} exp=${info.exp} HP=${info.hp}/${info.maxHp}`,
+  );
+  return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
+}
+
+// ---------------------------------------------------------------------------
+// 3. Movimiento (mismo encoding que Store.sendWalkPath)
+// ---------------------------------------------------------------------------
+// Un server 0.95/0.97 no entiende el WalkRequest moderno (code 0xD4): espera el
+// WalkRequest075 (code 0x10), que además empuja TargetRotation en el nibble alto
+// del mismo byte que StepCount. Con 0xD4 el server ignora el paso en silencio.
+// Un packet armado byte a byte, listo para sendToGS.
+function rawPacket(bytes: number[]): DataView {
+  return new DataView(Uint8Array.from(bytes, (b) => b & 0xff).buffer);
+}
+
+// Mismo encoding que Store.sendWalkPath del cliente web: StepCount en el nibble
+// bajo del byte 5, rotación (= última dirección) en el alto, y las direcciones
+// empaquetadas de a dos por byte desde el 6. El cliente lo arma como 0xD4 y su
+// adaptador de salida lo reescribe a 0x10 para este server.
+function buildWalkPacket(x: number, y: number, dirs: number[]) {
+  const packed = new Array<number>(Math.ceil(dirs.length / 2)).fill(0);
+  dirs.forEach((d, i) => (packed[i >> 1] |= (d & 15) << (i % 2 === 0 ? 4 : 0)));
+  const rotation = dirs[dirs.length - 1] ?? 0;
+  return { buffer: rawPacket([0xc1, 6 + packed.length, 0x10, x, y, ((rotation & 15) << 4) | (dirs.length & 15), ...packed]) };
+}
+
+// ---------------------------------------------------------------------------
+// Packets con los códigos REALES de este server (ver AGENTS.md, "Protocolo
+// real, capturado del cliente web"). El cliente web arma packets season6 y su
+// adaptador de salida los reescribe antes de mandarlos; los parsers de
+// packets/ tienen el código season6, que acá no sirve:
+//   HitRequest 0x11 → 0x15          (por eso el bot nunca mataba nada)
+//   TargetedSkill/AreaSkill: el skill va como ÍNDICE de la lista, no número.
+// ---------------------------------------------------------------------------
+let hitAnimToggle = false;
+function sendHit(targetId: number, dir: number) {
+  // El cliente alterna Attack1/Attack2 (0x78/0x79) en cada golpe.
+  hitAnimToggle = !hitAnimToggle;
+  sendToGS(rawPacket([0xc1, 0x07, 0x15, targetId >> 8, targetId, hitAnimToggle ? 0x78 : 0x79, dir]));
+}
+
+function sendTargetedSkill(skillIndex: number, targetId: number) {
+  sendToGS(rawPacket([0xc3, 0x06, 0x19, skillIndex, targetId >> 8, targetId]));
+}
+
+function sendAreaSkill(skillIndex: number, x: number, y: number, dir: number, targetId: number) {
+  // Rotación en 0..255 (el cliente la saca del ángulo del modelo).
+  sendToGS(rawPacket([0xc3, 0x09, 0x1e, skillIndex, x, y, dir * 32, targetId >> 8, targetId]));
+}
+
+// Ping (C3 0E/00) cada 5s con el TickCount, como el cliente: el server lo usa
+// para su detector de speed hack. AttackSpeed en 0, igual que en la captura.
+const botStart = performance.now();
+function sendPing() {
+  const tick = Math.floor(performance.now() - botStart) >>> 0;
+  sendToGS(rawPacket([0xc3, 0x0c, 0x0e, 0x00, tick, tick >> 8, tick >> 16, tick >>> 24, 0, 0, 0, 0]));
+}
+
+// Eco propio de este server (C1 FB/02) cada 2s; el server contesta PingRelay.
+function sendEcho() {
+  sendToGS(rawPacket([0xc1, 0x04, 0xfb, 0x02]));
+}
+
+// Menú de warp (C1 8E/02): índice de la lista de movimiento del cliente
+// (Lorencia = 2). El server valida nivel y zen.
+function warpTo(warpIndex: number) {
+  sendToGS(rawPacket([0xc1, 0x0a, 0x8e, 0x02, 0, 0, 0, 0, warpIndex, warpIndex >> 8]));
+  log(`Warp → índice ${warpIndex}`);
+}
+
+// Chat público: C1 len 00 <nombre 10 bytes> <texto>. Los comandos del server
+// (/add, /reset) viajan por acá.
+function sayChat(name: string, text: string) {
+  const nameBytes = new Array<number>(10).fill(0);
+  [...Buffer.from(name, 'latin1').subarray(0, 10)].forEach((b, i) => (nameBytes[i] = b));
+  const textBytes = [...Buffer.from(text, 'latin1')];
+  sendToGS(rawPacket([0xc1, 3 + 10 + textBytes.length, 0x00, ...nameBytes, ...textBytes]));
+  log(`Chat: ${text}`);
+}
+
+// Deltas de las 8 direcciones del compass de MU, medidos empíricamente con --probe-dir.
+const DIR_DELTA: Record<number, [number, number]> = {
+  0: [-1, -1],
+  1: [0, -1],
+  2: [1, -1],
+  3: [1, 0],
+  4: [1, 1],
+  5: [0, 1],
+  6: [-1, 1],
+  7: [-1, 0],
+};
+
+// ---------------------------------------------------------------------------
+// 4. Modo "farm": el bot hace todo solo, a ritmo HUMANO (no flood), el tiempo
+//    que se le pida: explora, encuentra un monstruo, lo pelea, repite.
+//    Ritmos usados (ver config real leída de la DB con SpeedHackDetectPlugIn):
+//      - paso de caminata: ~380ms (coincide con la velocidad base medida antes)
+//      - golpe: ~500ms (por debajo de AttackSpeedBaseDelayMs=450 + margen del
+//        token bucket de 5, para quedar cómodo del lado legítimo)
+// ---------------------------------------------------------------------------
+type ScopedNpc = { id: number; type: number; x: number; y: number };
+
+function chebyshev(ax: number, ay: number, bx: number, by: number) {
+  return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+}
+
+function directionTowards(fromX: number, fromY: number, toX: number, toY: number): number {
+  const dx = Math.sign(toX - fromX);
+  const dy = Math.sign(toY - fromY);
+  for (const [dir, [ddx, ddy]] of Object.entries(DIR_DELTA)) {
+    if (ddx === dx && ddy === dy) return Number(dir);
+  }
+  // Si no hay una dirección exacta (ya llegamos en un eje), probamos la que achique más distancia.
+  return dx !== 0 ? (dx > 0 ? 3 : 7) : dy > 0 ? 5 : 1;
+}
+
+// AddNpcsToScope del XML es el layout Extended; el server 0.95/0.97 manda el
+// layout chico (NpcData de 12 bytes, Id BigEndian). Con el parser del XML el
+// TypeNumber cae en otro offset y nunca matchea un monstruo, así que el bot
+// exploraba sin ver objetivos.
+const NPC_DATA_095_LENGTH = 12;
+
+function parseNpcs095(raw: any): Array<{ Id: number; TypeNumber: number; CurrentPositionX: number; CurrentPositionY: number }> {
+  const bytes = toBytes(raw);
+  const count = bytes[4];
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const base = 5 + i * NPC_DATA_095_LENGTH;
+    if (base + NPC_DATA_095_LENGTH > bytes.length) break;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    out.push({
+      Id: view.getUint16(base, false), // BigEndian
+      TypeNumber: bytes[base + 2],
+      CurrentPositionX: bytes[base + 6],
+      CurrentPositionY: bytes[base + 7],
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Capa de decisión — el punto de control para una UI futura.
+//
+// El bot NO ejecuta nada sin pasar por acá. Cada acción de alto nivel se
+// propone como una Decision y espera el veredicto del handler. Hoy el handler
+// por defecto aprueba todo, pero cambiarlo es lo único que hay que hacer para
+// que una UI decida: `setDecisionHandler()`.
+//
+// Cada decisión también se escribe a un JSONL, así una UI puede tail-ear el
+// archivo y ver la actividad en vivo sin tocar el bot.
+// ---------------------------------------------------------------------------
+type DecisionKind =
+  | 'pickup'      // recoger un item del piso
+  | 'sell'        // vender un item a un merchant
+  | 'buy'         // comprar (pociones)
+  | 'reset'       // /reset al llegar al nivel (irreversible)
+  | 'stat'        // subir un punto de atributo
+  | 'skill'       // usar una skill
+  | 'travel'      // viajar a otro mapa
+  | 'engage';     // pelear a un objetivo
+
+type Decision = {
+  kind: DecisionKind;
+  what: string;                  // descripción legible
+  detail: Record<string, unknown>;// datos crudos para la UI
+  autoOk: boolean;               // si el bot puede seguir solo con esto
+};
+
+type Verdict = { allow: boolean; reason?: string };
+
+const decisionLogPath = args.get('--decision-log') ?? '';
+let decisionHandler: (d: Decision) => Verdict | Promise<Verdict> = () => ({ allow: true });
+let decisionSeq = 0;
+
+export function setDecisionHandler(h: (d: Decision) => Verdict | Promise<Verdict>) {
+  decisionHandler = h;
+}
+
+// Propone una decisión y devuelve si se puede actuar. Nunca lanza: si el
+// handler falla, la decisión se rechaza (fail-safe: no gastamos recursos sin
+// permiso).
+async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promise<boolean> {
+  const full: Decision = { autoOk: true, ...d };
+  const entry = { seq: ++decisionSeq, at: new Date().toISOString(), ...full };
+  if (decisionLogPath) {
+    // appendFile (no Bun.write: ese sobrescribe el archivo entero en cada llamada,
+    // así que en una corrida larga solo quedaba la última decisión). Si el archivo
+    // falla, no debe frenar el juego.
+    await appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
+  }
+  statusServer?.broadcastDecision(entry);
+  let verdict: Verdict;
+  try {
+    verdict = await decisionHandler(full);
+  } catch (e) {
+    log(`Handler de decisión falló, rechazo por seguridad: ${(e as Error).message}`);
+    return false;
+  }
+  if (!verdict.allow) log(`Acción rechazada (${full.kind}: ${full.what}): ${verdict.reason ?? 'sin motivo'}`);
+  return verdict.allow;
+}
+
+// ---------------------------------------------------------------------------
+// Módulos autónomos: cada uno mira `world` y decide qué packet mandar.
+//    Ritmos humanos, NO flood (ver SpeedHackDetectPlugIn: AttackSpeedBaseDelay
+//    450ms + token bucket de 5).
+// ---------------------------------------------------------------------------
+const WALK_PACE_MS = 380;
+const ATTACK_PACE_MS = 500;
+const SKILL_PACE_MS = 900;
+// El cliente web tiene cooldown de chat; 2.5s entre comandos queda cómodo.
+const CHAT_PACE_MS = 2500;
+// Pasos que camina el explorador en la misma dirección antes de recalcular
+// (ver autonomousLoop, "6) Sin nada que hacer"). Antes eran 4-9 pasos al azar
+// y en la práctica no se alejaba del punto de partida.
+const EXPLORE_RUN_STEPS = 25;
+// --explore-dir 0..7 (ver DIR_DELTA; 1 = norte): sesga la exploración hacia ahí.
+const EXPLORE_PREF = args.has('--explore-dir') ? parseInt(args.get('--explore-dir')!) % 8 : null;
+
+const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
+const MAX_STAT = parseInt(args.get('--max-stat') ?? '10000');
+// --build str:50,ene:33,vit:17 → reparto proporcional de los puntos libres.
+// Sin peso, cada stat pesa 1. Default: el reparto que usó el usuario en su
+// tercer reset con un Dark Knight que pelea con Twisting Slash (la energía
+// sube el daño de los skills del DK).
+const BUILD_WEIGHTS: Array<[StatName, number]> = (args.get('--build') ?? 'str:50,ene:33,vit:17')
+  .split(',')
+  .map((part) => part.trim().split(':'))
+  .filter(([name]) => STAT_ORDER.includes(name as StatName))
+  .map(([name, w]) => [name as StatName, w ? Number(w) : 1]);
+const BUILD = BUILD_WEIGHTS.map(([name]) => name);
+// Con menos puntos que esto no vale la pena un comando de chat por stat.
+const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '20');
+const RESET_LEVEL = parseInt(args.get('--reset-level') ?? '400');
+const ATTACK_SKILLS = (args.get('--skills') ?? '')
+  .split(',')
+  .map((s) => parseInt(s.trim(), 10))
+  .filter((n) => !Number.isNaN(n));
+const ATTACK_SKILL_POOL = ATTACK_SKILLS.length ? ATTACK_SKILLS : DEFAULT_ATTACK_SKILLS;
+
+// Manda un paso en una dirección y actualiza la posición estimada.
+function step(dir: number) {
+  sendToGS(buildWalkPacket(world.x, world.y, [dir]).buffer);
+  const [dx, dy] = DIR_DELTA[dir];
+  world.x += dx;
+  world.y += dy;
+}
+
+// --- Estadísticas -----------------------------------------------------------
+// Sube puntos de atributo siguiendo el orden de --build. El server responde con
+// CharacterLevelUpdate (que actualiza levelUpPoints), así que no contamos a ciegas.
+// Reparte TODOS los puntos libres con /add <stat> <n> (un comando por stat),
+// proporcional a BUILD_WEIGHTS. Es como lo hace el usuario: confirmado que el
+// server acepta str/ene/vit así (ver AGENTS.md, "Reset y stats").
+const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit', ene: 'ene' };
+async function investStatPoints(force = false): Promise<number> {
+  const points = world.levelUpPoints;
+  if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
+  const total = active.reduce((acc, [, w]) => acc + w, 0);
+  if (!total) return 0;
+  const plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
+  plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
+  const ok = await decide({
+    kind: 'stat',
+    what: plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '),
+    detail: { points, plan: Object.fromEntries(plan) },
+    autoOk: false,
+  });
+  if (!ok) return 0;
+  let spent = 0;
+  for (const [name, n] of plan) {
+    if (n <= 0) continue;
+    sayChat(CHAR_NAME, `/add ${STAT_CMD[name]} ${n}`);
+    world.stats[name] += n;
+    world.levelUpPoints -= n;
+    spent += n;
+    await sleep(CHAT_PACE_MS);
+  }
+  return spent;
+}
+
+// --- Pociones ---------------------------------------------------------------
+let lastPotionAt = 0;
+const POTION_COOLDOWN_MS = 1500;
+
+// Busca la mejor poción de curación que tengamos en el inventario (primero las
+// grandes: menos packets = menos tráfico) y la consume. Las pociones son
+// stackeables (X=1 Y=1), así que el slot NO se saca del inventario al beber:
+// el server manda ItemAddedToInventory/CharacterInventory cuando cambia.
+function useHealingPotion(): boolean {
+  if (Date.now() - lastPotionAt < POTION_COOLDOWN_MS) return false;
+  let best: ItemSlot | undefined;
+  for (const it of world.inventory.values()) {
+    if (it.group !== POTION_GROUP || !HEAL_POTION_NUMS.has(it.num)) continue;
+    if (!best || it.num > best.num) best = it;
+  }
+  if (!best) return false;
+  const p = ConsumeItemRequest075Packet.createPacket();
+  p.ItemSlot = best.slot;
+  p.TargetSlot = 0xff; // sin item objetivo (pociones)
+  sendToGS(p.buffer);
+  lastPotionAt = Date.now();
+  log(`Pocion consumida: slot=${best.slot} item=${best.group}/${best.num} (HP ${world.hp}/${world.maxHp})`);
+  return true;
+}
+
+// Devuelve true SOLO si tomó una poción. Si está bajo pero no tiene, devuelve
+// false para que el loop siga con el resto de la prioridades en vez de
+// quedarse girando en un busy-loop.
+let noPotionWarned = false;
+function checkSurvival(): boolean {
+  if (world.maxHp <= 0) return false;
+  const pct = (world.hp / world.maxHp) * 100;
+  if (pct > HEAL_AT_PCT) return false;
+  if (useHealingPotion()) {
+    noPotionWarned = false;
+    return true;
+  }
+  if (!noPotionWarned) {
+    log(`HP ${world.hp}/${world.maxHp} (${pct.toFixed(0)}%) bajo y NO hay pocion de curacion en el inventario.`);
+    noPotionWarned = true;
+  }
+  return false;
+}
+
+// --- Skills -----------------------------------------------------------------
+// TargetedSkill095 manda el NÚMERO de skill (no el índice de lista), confirmado
+// contra TargetedSkillHandlerPlugIn de OpenMU, que resuelve SkillId contra
+// player.Skills. Se usan solo las que el server nosdeed清单ó Y tenemos mana.
+// Skills de área (AreaSkill 0x1E). El resto se manda como TargetedSkill.
+// 41 (Twisting Slash) verificado en una captura del cliente real; 42 (Rageful
+// Blow) es área en OpenMU, sin verificar todavía.
+const AREA_SKILLS = new Set([41, 42]);
+
+function pickAttackSkill(): SkillInfo | undefined {
+  if (world.mana <= 0) return undefined;
+  // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
+  // así que no se filtra por nivel.
+  for (const num of ATTACK_SKILL_POOL) {
+    const known = world.skills.get(num);
+    if (known) return known;
+  }
+  return undefined;
+}
+
+function useSkill(targetId: number): boolean {
+  const skill = pickAttackSkill();
+  const t = world.npcs.get(targetId);
+  if (skill == null || !t) return false;
+  if (AREA_SKILLS.has(skill.number)) {
+    sendAreaSkill(skill.index, t.x, t.y, directionTowards(world.x, world.y, t.x, t.y), targetId);
+  } else {
+    sendTargetedSkill(skill.index, targetId);
+  }
+  return true;
+}
+
+// --- Loot -------------------------------------------------------------------
+type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number };
+const drops = new Map<number, ScopedDrop>();
+
+// Bug real encontrado jugando (cuenta melu): 'ItemsDropped' (C2/0x20) y
+// 'MoneyDropped075' (mismo código, confirmado en ClientToServerPackets.xml de
+// OpenMU) comparten exactamente el mismo code/header, igual que el caso ya
+// documentado de SkillAdded. createSocket resuelve por code sin SubCode, así
+// que SIEMPRE llega como 'ItemsDropped' (el único generado para 0x20 sin
+// SubCode), aunque el payload real sea un drop de dinero — de 14 bytes fijos,
+// no una lista de ítems de 16 bytes c/u. Intentar leer el ItemData de 12
+// bytes de un drop de dinero leía fuera de rango y tiraba abajo el proceso
+// entero. Se distingue por tamaño: si el buffer no matchea
+// 5 + ItemCount*16 (layout de ItemsDropped), se intenta como
+// MoneyDropped075 (14 bytes fijos, ver MoneyDropped075Packet).
+function parseDropsPacket(raw: any): ScopedDrop[] {
+  const bytes = toBytes(raw);
+  const itemCount = bytes[4];
+  const expectedItemsLen = 5 + itemCount * 16;
+  if (itemCount > 0 && bytes.length === expectedItemsLen) {
+    const p = new ItemsDroppedPacket(raw);
+    return p.getItems(itemCount).map((it) => {
+      // El group/num salen del ItemData de 12 bytes (mismo layout que
+      // ItemAddedToInventory): num = byte 0, group = nibble alto del byte 5.
+      const d = it.ItemData;
+      return { id: it.Id & 0x7fff, x: it.PositionX, y: it.PositionY, group: (d.getUint8(5) & 0xf0) >> 4, num: d.getUint8(0) };
+    });
+  }
+  if (bytes.length === 14) {
+    const p = new MoneyDropped075Packet(raw);
+    return [{ id: p.Id & 0x7fff, x: p.PositionX, y: p.PositionY, group: p.MoneyGroup, num: p.MoneyNumber, isMoney: true, amount: p.Amount }];
+  }
+  log(`AVISO: packet de drop con layout inesperado (${bytes.length} bytes, ItemCount=${itemCount}), lo ignoro.`);
+  return [];
+}
+
+// Devuelve el handler para desuscribir, así el loop no lo deja colgado.
+function watchDrops(): () => void {
+  const onDrop = (raw: any) => {
+    try {
+      for (const d of parseDropsPacket(raw)) drops.set(d.id, d);
+    } catch (e) {
+      log(`AVISO: no pude parsear un drop, lo ignoro: ${(e as Error).message}`);
+    }
+  };
+  EventBus.on('ItemsDropped', onDrop);
+  return () => EventBus.off('ItemsDropped', onDrop);
+}
+
+// Prioridad al elegir qué drop levantar primero: dinero (no ocupa slot de
+// inventario) > equipamiento/desconocido (lo "mejor", decisión del humano
+// qué hacer después) > basura confirmada (igual se levanta para vender, pero
+// de última, así no compite por espacio con algo que valga la pena). NO hay
+// "dropear en el piso" todavía: eso es un packet nuevo sin verificar contra
+// el server real (ver AGENTS.md, "Pendiente"), así que la basura se sigue
+// levantando y vendiendo, nunca se descarta sin más.
+function dropPriority(d: ScopedDrop): number {
+  if (d.isMoney) return 3;
+  if (EQUIP_GROUPS.has(d.group)) return 2;
+  if (!JUNK_GROUPS.has(d.group)) return 1; // grupo desconocido: no asumimos que es basura
+  return 0; // basura confirmada
+}
+
+async function pickupNearbyDrops(): Promise<boolean> {
+  if (!drops.size) return false;
+  // Mejor prioridad primero; a igual prioridad, el más cercano (el server
+  // igual valida el rango).
+  let best: ScopedDrop | undefined;
+  for (const d of drops.values()) {
+    if (!best) { best = d; continue; }
+    const pd = dropPriority(d), pb = dropPriority(best);
+    if (pd > pb || (pd === pb && chebyshev(world.x, world.y, d.x, d.y) < chebyshev(world.x, world.y, best.x, best.y))) {
+      best = d;
+    }
+  }
+  if (!best) return false;
+  const ok = await decide({
+    kind: 'pickup',
+    what: `recoger drop Id=${best.id} (${best.group}/${best.num}) en (${best.x},${best.y})`,
+    detail: { itemId: best.id, group: best.group, num: best.num, x: best.x, y: best.y },
+  });
+  if (!ok) return false;
+  drops.delete(best.id);
+  const p = PickupItemRequest075Packet.createPacket();
+  p.ItemId = best.id;
+  sendToGS(p.buffer);
+  log(`Recojo item Id=${best.id} en (${best.x},${best.y})`);
+  return true;
+}
+
+// --- Economía: qué es basura y qué vale la pena guardar -------------------
+// El bot no tiene ni el precio ni IsSellableToNpc del server, así que usa el
+// catálogo del repo (data/items.json) para decidir por grupo.
+//   12 = jewels/ribbons (comunes)  14 = pociones  15 = scrolls  0 = weapons
+//   13 = misc (bless, bows)  31 = event  41 = event
+// Lo que NO se vende: equipamiento de slot principal que el personaje pueda
+// usar (1..11 weapons/armor), porque ahí la decisión es tuya, no del bot.
+type ItemRow = { Group: number; Index: number; ItemName: string; X: number; Y: number; Width: number; Height: number };
+const ITEMS: ItemRow[] = itemsData as unknown as ItemRow[];
+
+// Grupos que el bot vende sin preguntar (basura estándar de farm).
+// El grupo 12 (Wings of Fairy / Wings of Angel, ver items.json) es EQUIPAMIENTO,
+// no basura — estaba mal clasificado acá y el bot vendía las alas del personaje.
+const JUNK_GROUPS = new Set([14, 15, 30, 31, 32, 41, 42, 43]);
+// Grupos de equipamiento: nunca se tocan sin que la UI/intervención lo pida.
+const EQUIP_GROUPS = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+
+function isJunk(it: ItemSlot): boolean {
+  if (EQUIP_GROUPS.has(it.group)) return false; // decisión del humano
+  if (!JUNK_GROUPS.has(it.group)) return false; // grupo desconocido: no tocar
+  // Las pociones curativas no se venden nunca: son las que nos mantienen vivo.
+  if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return false;
+  return true;
+}
+
+function junkSlots(): ItemSlot[] {
+  return [...world.inventory.values()].filter(isJunk);
+}
+
+function inventoryPressure(): number {
+  // El server manda CharacterInventory con lo que hay; si no loinskió no podemos saberlo.
+  const MAX_SLOTS = 40;
+  return world.inventory.size / MAX_SLOTS;
+}
+
+// --- Merchant ---------------------------------------------------------------
+// Flujo de venta (SellItemToNpcAction de OpenMU): el server exige que
+// player.OpenedNpc tenga MerchantStore, o sea que HAY que hablarle al NPC antes.
+// Si no, responde ItemSoldToNpc(false) y no pasa nada.
+const MERCHANT_IDS = new Set(
+  (args.get('--merchant') ?? '')
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => !Number.isNaN(n)),
+);
+
+let openedNpcId: number | null = null;
+let lastMoney = 0;
+
+function talkToNpc(npcId: number) {
+  const p = TalkToNpcRequestPacket.createPacket();
+  p.NpcId = npcId;
+  sendToGS(p.buffer);
+  openedNpcId = npcId;
+  log(`Hablo con NPC Id=${npcId}`);
+}
+
+function closeNpc() {
+  if (openedNpcId == null) return;
+  sendToGS(CloseNpcRequestPacket.createPacket().buffer);
+  openedNpcId = null;
+}
+
+function sellSlot(slot: number) {
+  const p = SellItemToNpcRequestPacket.createPacket();
+  p.ItemSlot = slot;
+  sendToGS(p.buffer);
+}
+
+// Compra por índice en la lista del merchant. El server valida el índice; si no
+// existe responde NpcItemBuyFailed (0x32/0xFF) y no cobra nada.
+function buyShopSlot(shopIndex: number) {
+  const p = BuyItemFromNpcRequestPacket.createPacket();
+  p.ItemSlot = shopIndex;
+  sendToGS(p.buffer);
+}
+
+// Vende un item concreto pasando por la capa de decisión.
+async function sellItem(it: ItemSlot): Promise<boolean> {
+  const ok = await decide({
+    kind: 'sell',
+    what: `vender item ${it.group}/${it.num} del slot ${it.slot}`,
+    detail: { slot: it.slot, group: it.group, num: it.num },
+  });
+  if (!ok) return false;
+  if (openedNpcId == null) {
+    log('No hay merchant abierto: no puedo vender.');
+    return false;
+  }
+  sellSlot(it.slot);
+  return true;
+}
+
+// El ID del slot en el inventario NO coincide con el índice del ItemData, así
+// que para saber si el server aceptó la venta comparamos el estado del slot
+// antes y después de la respuesta.
+async function sellJunkToMerchant(): Promise<boolean> {
+  const junk = junkSlots();
+  if (!junk.length) return false;
+
+  // Vender es la acción más pesada del bot: siempre pasa por decisión.
+  if (!(await decide({
+    kind: 'sell',
+    what: `vender ${junk.length} item(s) de basura por un merchant`,
+    detail: { items: junk.map((i) => ({ slot: i.slot, group: i.group, num: i.num })) },
+    autoOk: false,
+  }))) return false;
+
+  let merchant = openedNpcId;
+  if (merchant == null) {
+    if (knownMerchants.size === 0) {
+      log('Buscando un merchant en el mapa...');
+      merchant = await discoverMerchant();
+      if (merchant == null) {
+        log('No encontré merchant en esta zona. Pasá --merchant <id> si sabés cuál es.');
+        return false;
+      }
+    } else {
+      merchant = knownMerchants.values().next().value!;
+      talkToNpc(merchant);
+    }
+  }
+
+  let sold = 0;
+  for (const it of junk) {
+    const before = world.inventory.has(it.slot);
+    sellSlot(it.slot);
+    // Un respiro entre ventas: el server lleva contador por request y un burst
+    // de ventas iguales lo puede parsear como speedhack.
+    await sleep(SELL_INTERVAL_MS);
+    // El server borra el item del inventario al venderlo; si sigue, no se vendió.
+    if (before && !world.inventory.has(it.slot)) {
+      sold++;
+    }
+    if (openedNpcId == null) break; // el server cerró la ventana: no insistir
+  }
+  closeNpc();
+  log(`Vendí ${sold}/${junk.length} item(s).`);
+  return sold > 0;
+}
+
+// Catálogo real del merchant abierto (por StoreItemList). group/num salen del
+// mismo parser que el inventario, así que coinciden con items.json.
+const shopCatalog = new Map<number, ShopItem>();
+
+function findShopSlotFor(group: number, num: number): number | undefined {
+  for (const it of shopCatalog.values()) {
+    if (it.group === group && it.num === num) return it.shopSlot;
+  }
+  return undefined;
+}
+
+// Comprar pociones. El ItemSlot que espera BuyItemFromNpcRequest NO es el
+// índice de items.json sino la posición dentro de la lista del merchant, que el
+// server arma por su cuenta. Antes dependía ciegamente de --buy-slot; ahora,
+// si ya llegó StoreItemList del merchant abierto, usamos el catálogo real y
+// solo caemos a --buy-slot si todavía no tenemos esa info (compatibilidad).
+async function ensurePotions(): Promise<boolean> {
+  if (haveHealingPotions()) return false;
+  if (openedNpcId == null) {
+    const merchant = knownMerchants.values().next().value;
+    if (merchant == undefined) return false;
+    talkToNpc(merchant);
+    await sleep(600); // tiempo para que llegue NpcWindowResponse + StoreItemList
+  }
+
+  const fromCatalog = [...HEAL_POTION_NUMS]
+    .map((num) => findShopSlotFor(POTION_GROUP, num))
+    .filter((slot): slot is number => slot != null);
+  const candidates = fromCatalog.length ? fromCatalog : SHOP_POTION_SLOTS;
+  if (!candidates.length) return false;
+
+  for (const slot of candidates) {
+    const ok = await decide({
+      kind: 'buy',
+      what: `comprar poción del slot ${slot} del shop`,
+      detail: { shopSlot: slot, money: lastMoney, fromCatalog: fromCatalog.length > 0 },
+      autoOk: false, // gastar plata es siempre decisión del humano
+    });
+    if (!ok) continue;
+    buyShopSlot(slot);
+    await sleep(600);
+    if (haveHealingPotions()) return true;
+  }
+  return false;
+}
+
+function haveHealingPotions(): boolean {
+  for (const it of world.inventory.values()) {
+    if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return true;
+  }
+  return false;
+}
+
+// Índices de pociones dentro de la lista del merchant, en orden de preferencia.
+const SHOP_POTION_SLOTS = (args.get('--buy-slot') ?? '')
+  .split(',')
+  .map((s) => parseInt(s.trim(), 10))
+  .filter((n) => !Number.isNaN(n));
+
+function watchEconomy() {
+  EventBus.on('NpcItemSellResult', (raw: any) => {
+    const p = new NpcItemSellResultPacket(raw);
+    if (p.Success) {
+      lastMoney = p.Money;
+      log(`Venta OK. Dinero ahora: ${p.Money}`);
+    } else {
+      log('Venta rechazada por el server.');
+    }
+  });
+  EventBus.on('InventoryMoneyUpdate', (raw: any) => {
+    const p = new InventoryMoneyUpdatePacket(raw);
+    lastMoney = p.Money;
+    log(`Dinero actualizado: ${p.Money}`);
+  });
+  EventBus.on('NpcItemBuyFailed', () => log('Compra falló (índice de shop inválido).'));
+  EventBus.on('StoreItemList', (raw: any) => {
+    shopCatalog.clear();
+    for (const it of parseStoreItemList097(raw)) shopCatalog.set(it.shopSlot, it);
+    log(`Catálogo del merchant: ${shopCatalog.size} ítem(s) — ${[...shopCatalog.values()].map((i) => `slot${i.shopSlot}:${i.group}/${i.num}`).join(', ')}`);
+  });
+  EventBus.on('NpcWindowResponse', (raw: any) => {
+    const p = new NpcWindowResponsePacket(raw);
+    log(`Ventana de NPC: ${NpcWindowResponseNpcWindowEnum[p.Window] ?? p.Window}`);
+  });
+}
+// --- Descubrimiento de merchants -------------------------------------------
+// monsters.json NO contiene NPCs (solo monstruos), así que no hay forma de
+// saber de antemano qué Id es un merchant. La forma honesta es descubrirlo:
+// hablamos con los NPCs que hay en scope y leemos la ventana que conteste.
+// Merchant=0 / Merchant1=1 son las ventanas de venta.
+const isMerchantWindow = (w: number) => w === 0 || w === 1;
+
+const knownMerchants = new Set<number>(MERCHANT_IDS);
+
+async function discoverMerchant(): Promise<number | null> {
+  const candidates = [...world.npcs.values()].filter((n) => !isJunkType(n.type));
+  for (const c of candidates) {
+    const ok = await decide({
+      kind: 'travel',
+      what: `hablar con NPC Id=${c.id} para ver si es merchant`,
+      detail: { npcId: c.id, x: c.x, y: c.y },
+    });
+    if (!ok) continue;
+    const waiter = waitFor('NpcWindowResponse', 3000).catch(() => null);
+    talkToNpc(c.id);
+    const raw = await waiter;
+    if (!raw) {
+      closeNpc();
+      continue;
+    }
+    const w = new NpcWindowResponsePacket(raw).Window;
+    if (isMerchantWindow(w)) {
+      log(`¡Merchant encontrado! Id=${c.id} (ventana ${NpcWindowResponseNpcWindowEnum[w]})`);
+      knownMerchants.add(c.id);
+      return c.id;
+    }
+    closeNpc();
+  }
+  return null;
+}
+
+function isJunkType(_type: number): boolean {
+  // Los NPCs en scope no son monstruos (el filtro de MONSTER_TYPE_NUMBERS ya
+  // los dejó fuera), así que todos los candidatos valen para probar.
+  return false;
+}
+
+// /move <mapa> por chat público (MoveChatCommandPlugIn de OpenMU): el server
+// valida nivel y zen según su WarpList (Version075: Dungeon = nivel 30, 3000 zen)
+// y contesta con MapChanged075. Es lo mismo que tipear el comando en el cliente.
+// PublicChatMessage: C1, code 0x00, Character[10]@3, Message@13 (null-terminado).
+async function moveToMap(mapName: string): Promise<boolean> {
+  const ok = await decide({
+    kind: 'travel',
+    what: `/move ${mapName} (cuesta zen)`,
+    detail: { command: '/move', map: mapName, fromMap: world.map },
+    autoOk: false,
+  });
+  if (!ok) return false;
+  const waiter = waitFor('MapChanged075', 5000).catch(() => null);
+  sayChat(CHAR_NAME, `/move ${mapName}`);
+  if (!(await waiter)) {
+    log(`/move ${mapName}: el server no cambió de mapa (¿nivel, zen o nombre de mapa?).`);
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Mapas de farmeo: la lista de warp del cliente web (perfil v097d), con el
+// nivel mínimo y el costo. El bot va al de mayor nivel permitido; los que
+// tienen jefes/eventos (Arena) quedan afuera.
+// ---------------------------------------------------------------------------
+type Spot = { index: number; name: string; reqLevel: number; zen: number };
+const WARP_SPOTS: Spot[] = [
+  { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000 },
+  { index: 3, name: 'Noria', reqLevel: 10, zen: 1000 },
+  { index: 4, name: 'Devias', reqLevel: 20, zen: 1500 },
+  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
+  { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500 },
+  { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
+  { index: 8, name: 'Dungeon', reqLevel: 30, zen: 3000 },
+  { index: 9, name: 'Dungeon 2', reqLevel: 40, zen: 3000 },
+  { index: 10, name: 'Dungeon 3', reqLevel: 50, zen: 3500 },
+  { index: 14, name: 'Lost Tower', reqLevel: 50, zen: 5000 },
+  { index: 15, name: 'Lost Tower 2', reqLevel: 50, zen: 5000 },
+  { index: 16, name: 'Lost Tower 3', reqLevel: 50, zen: 5500 },
+  { index: 17, name: 'Lost Tower 4', reqLevel: 60, zen: 5500 },
+  { index: 18, name: 'Lost Tower 5', reqLevel: 60, zen: 5500 },
+  { index: 19, name: 'Lost Tower 6', reqLevel: 70, zen: 6000 },
+  { index: 20, name: 'Lost Tower 7', reqLevel: 70, zen: 6500 },
+  { index: 11, name: 'Atlans', reqLevel: 70, zen: 4000 },
+  { index: 12, name: 'Atlans 2', reqLevel: 80, zen: 4500 },
+  { index: 13, name: 'Atlans 3', reqLevel: 90, zen: 5000 },
+  { index: 21, name: 'Tarkan', reqLevel: 140, zen: 8000 },
+  { index: 22, name: 'Tarkan 2', reqLevel: 140, zen: 8500 },
+  { index: 23, name: 'Icarus', reqLevel: 170, zen: 9000 },
+];
+const LORENCIA_WARP = 2;
+// --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
+const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
+let currentSpot: Spot | null = null;
+
+function pickSpot(level: number): Spot | undefined {
+  return WARP_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index))).sort(
+    (a, b) => b.reqLevel - a.reqLevel,
+  )[0];
+}
+
+async function warpAndWait(spot: Spot): Promise<boolean> {
+  const waiter = waitFor('MapChanged075', 6000).catch(() => null);
+  warpTo(spot.index);
+  const ok = !!(await waiter);
+  if (ok) currentSpot = spot;
+  else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
+  return ok;
+}
+
+async function maybeChangeSpot(): Promise<boolean> {
+  const best = pickSpot(world.level);
+  if (!best || best.index === currentSpot?.index) return false;
+  const ok = await decide({
+    kind: 'travel',
+    what: `warp a ${best.name} (nivel ${world.level}, cuesta ${best.zen} zen)`,
+    detail: { warp: best.index, from: currentSpot?.name ?? null, level: world.level },
+    autoOk: true,
+  });
+  if (!ok) return false;
+  log(`Cambio de spot: ${currentSpot?.name ?? '?'} → ${best.name} (nivel ${world.level})`);
+  return warpAndWait(best);
+}
+
+// ---------------------------------------------------------------------------
+// Reset (capturado del usuario): reparte lo que quede, va a Lorencia, manda
+// /reset por chat y el server lo devuelve a la selección de personaje. Hay que
+// volver a elegir el personaje, repartir los puntos nuevos y salir a farmear.
+// ---------------------------------------------------------------------------
+async function doReset(): Promise<boolean> {
+  const ok = await decide({
+    kind: 'reset',
+    what: `/reset en nivel ${world.level}`,
+    detail: { level: world.level, stats: { ...world.stats } },
+    autoOk: false,
+  });
+  if (!ok) return false;
+  await investStatPoints(true);
+  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
+  await sleep(2000);
+  let listWaiter = waitFor('CharacterList', 8000).catch(() => null);
+  sayChat(CHAR_NAME, '/reset');
+  let list = await listWaiter;
+  if (!list) {
+    // Por si el server nos dejó en la selección sin mandar la lista.
+    listWaiter = waitFor('CharacterList', 5000).catch(() => null);
+    requestCharacterList();
+    list = await listWaiter;
+  }
+  if (!list) {
+    log('Reset: el server no nos mandó a la selección de personaje. ¿Requisitos (nivel, zen)?');
+    return false;
+  }
+  log('Reset hecho. Vuelvo a entrar con el personaje.');
+  world.npcs.clear();
+  currentSpot = null;
+  await selectCharacter(list);
+  await sleep(2500);
+  await investStatPoints(true);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 7. Loop autónomo: prioriza sobrevivir > subir stats > pelear > loot > explorar
+// ---------------------------------------------------------------------------
+async function autonomousLoop(seconds: number) {
+  log(`\n--- Modo autónomo: ${seconds}s ---`);
+  log(`Build=${BUILD.join('>')} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}]`);
+
+  const npcs = world.npcs;
+  let totalExpGained = 0;
+  let kills = 0;
+  let potionsDrunk = 0;
+  let statPointsSpent = 0;
+  let skillsUsed = 0;
+  let resets = 0;
+  let nextResetTry = 0;
+
+  const onKilled = (raw: any) => {
+    const p = new ObjectGotKilledPacket(raw);
+    const wasOurTarget = (p.KilledId & 0x7fff) === target;
+    npcs.delete(p.KilledId & 0x7fff);
+    if ((p.KillerId & 0x7fff) === playerId) {
+      kills++;
+      log(`Kill #${kills} (Id=${p.KilledId})`);
+    } else if (wasOurTarget && process.env.MUBOT_DEBUG_COMBAT) {
+      // Zona concurrida: puede que otro jugador/NPC mate a nuestro objetivo
+      // antes que nosotros — no es un bug, pero conviene verlo para no
+      // confundirlo con "nunca llega a pegar".
+      log(`DEBUG combate: nuestro objetivo Id=${p.KilledId} lo mató otro (KillerId=${p.KillerId})`);
+    }
+  };
+  const onExp = (raw: any) => {
+    const p = new ExperienceGainedPacket(raw);
+    totalExpGained += p.AddedExperience;
+    log(`+${p.AddedExperience} exp (total ${totalExpGained})`);
+  };
+  EventBus.on('ObjectGotKilled', onKilled);
+  EventBus.on('ExperienceGained', onExp);
+  const stopWatchingDrops = watchDrops();
+  watchEconomy();
+
+  const unreachable = new Set<number>();
+  let target: number | null = null;
+  let stuckCount = 0;
+  let lastX = world.x;
+  let lastY = world.y;
+  let exploreDir = Math.floor(Math.random() * 8);
+  let exploreStepsLeft = 0;
+  const start = Date.now();
+  let ticks = 0;
+
+  while (Date.now() - start < seconds * 1000 && !kicked) {
+    ticks++;
+    // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
+    //    compras son caras de confirmar y no queremos spamearlas.
+    if (ticks % 25 === 0 && !haveHealingPotions()) {
+      await ensurePotions();
+    }
+    // 1) Sobrevivir tiene prioridad absoluta.
+    if (checkSurvival()) {
+      potionsDrunk++;
+      await sleep(200);
+      continue;
+    }
+
+    // 2) Reset al llegar al nivel: lo más importante para progresar.
+    if (world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+      if (await doReset()) {
+        resets++;
+        target = null;
+      } else {
+        nextResetTry = Date.now() + 10 * 60_000;
+      }
+      continue;
+    }
+
+    // 3) Invertir puntos de atributo cuando junte un lote.
+    const spent = await investStatPoints();
+    if (spent) {
+      statPointsSpent += spent;
+      continue;
+    }
+
+    // 4) ¿Hay un mapa mejor para mi nivel? (warp; ver pickSpot)
+    if (ticks % 50 === 0) await maybeChangeSpot();
+
+    // 3) Desviar inventario antes de llenarse: la basura no sirve si no se
+    //    vende, y un inventario lleno impide recoger loot bueno.
+    if (inventoryPressure() > SELL_AT_PRESSURE) {
+      await sellJunkToMerchant();
+      continue;
+    }
+
+
+    // 4) Recoger loot en el piso antes de pelear, PERO no si ya hay un
+    //    objetivo a distancia de golpe: bug real encontrado jugando (cuenta
+    //    melu) — en una zona con mucho drop acumulado (loot de otros
+    //    jugadores), el bot se quedaba recogiendo para siempre y nunca
+    //    llegaba a elegir/atacar un monstruo, aunque hubiera uno al lado.
+    const targetInMeleeRange =
+      target != null && npcs.has(target) && chebyshev(world.x, world.y, npcs.get(target)!.x, npcs.get(target)!.y) <= 1;
+    if (!targetInMeleeRange && (await pickupNearbyDrops())) {
+      await sleep(150);
+      continue;
+    }
+
+    // 5) Elegir / mantener objetivo.
+    if (target != null && !npcs.has(target)) target = null;
+    if (target == null) {
+      const candidate = [...npcs.values()].find((n) => !unreachable.has(n.id));
+      if (candidate) {
+        target = candidate.id;
+        stuckCount = 0;
+      }
+    }
+
+    if (target != null) {
+      const t = npcs.get(target)!;
+      const dist = chebyshev(world.x, world.y, t.x, t.y);
+      if (process.env.MUBOT_DEBUG_COMBAT && ticks % 5 === 0) {
+        log(`DEBUG combate: target=${target} yo=(${world.x},${world.y}) target_pos=(${t.x},${t.y}) dist=${dist} stuck=${stuckCount}`);
+      }
+      if (dist <= 1) {
+        // A distancia de golpe: skill si hay, si no el hit normal.
+        if (useSkill(target)) {
+          skillsUsed++;
+          await sleep(SKILL_PACE_MS);
+        } else {
+          sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
+          await sleep(ATTACK_PACE_MS);
+        }
+        continue;
+      }
+      if (stuckCount >= 8) {
+        log(`Objetivo ${target} inalcanzable, lo abandono.`);
+        unreachable.add(target);
+        target = null;
+        stuckCount = 0;
+        continue;
+      }
+      const straight = directionTowards(world.x, world.y, t.x, t.y);
+      const dir = stuckCount >= 3 ? (straight + 2 + (stuckCount % 4)) % 8 : straight;
+      step(dir);
+      await sleep(WALK_PACE_MS);
+      if (world.x === lastX && world.y === lastY) stuckCount++;
+      else stuckCount = 0;
+      lastX = world.x;
+      lastY = world.y;
+      continue;
+    }
+
+    // 6) Sin nada que hacer: explorar. Antes recalculaba dirección cada 4-9
+    // pasos (al azar, sin memoria), así que en la práctica daba vueltas cerca
+    // del punto de partida en vez de alejarse (confirmado jugando: ~160s de
+    // exploración solo desplazaron al personaje ~24 tiles en línea recta).
+    // Ahora compromete una dirección mucho más tiempo (EXPLORE_RUN_STEPS), y
+    // si choca contra algo (se queda en la misma posición), rota 90° en vez
+    // de recalcular al azar: evita el rebote de ida y vuelta contra un muro.
+    const exploreBlocked = world.x === lastX && world.y === lastY && exploreStepsLeft < EXPLORE_RUN_STEPS;
+    if (exploreStepsLeft <= 0) {
+      exploreDir = EXPLORE_PREF ?? Math.floor(Math.random() * 8);
+      exploreStepsLeft = EXPLORE_RUN_STEPS;
+    } else if (exploreBlocked) {
+      // Con dirección preferida (--explore-dir) rodea el muro por ±45° y vuelve
+      // a ella; sin preferencia, gira 90° (no 180°: sigue alejándose).
+      exploreDir = EXPLORE_PREF != null
+        ? (EXPLORE_PREF + (ticks % 2 ? 1 : 7)) % 8
+        : (exploreDir + 2) % 8;
+    }
+    step(exploreDir);
+    exploreStepsLeft--;
+    await sleep(WALK_PACE_MS);
+    lastX = world.x;
+    lastY = world.y;
+  }
+
+  EventBus.off('ObjectGotKilled', onKilled);
+  EventBus.off('ExperienceGained', onExp);
+  stopWatchingDrops();
+  drops.clear();
+
+  log(`\nFin autónomo: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${skillsUsed} skill(s), ${resets} reset(s).`);
+  log(`Posición final (${world.x},${world.y}) map=${world.map}. Desconectado: ${kicked}`);
+  return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed, resets };
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+async function main() {
+  console.log(`\nBot headless contra proxy=${PROXY} connectServer=${CS_HOST}:${CS_PORT}`);
+  console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
+
+  const wsPortArg = args.get('--ws-port');
+  let stateInterval: ReturnType<typeof setInterval> | undefined;
+  if (wsPortArg) {
+    const wsPort = parseInt(wsPortArg);
+    statusServer = startStatusServer({ port: wsPort });
+    log(`Telemetría (solo lectura) en ws://127.0.0.1:${wsPort}`);
+    stateInterval = setInterval(() => statusServer?.broadcastState(snapshotWorld()), 1000);
+  }
+
+  await connectToConnectServer();
+  const { ip, port } = await getGameServerAddress();
+  await connectToGameServer(ip, port);
+  // A partir de acá el server empieza a mandar el estado del mundo, así que
+  // enganchamos el tracker ANTES de seleccionar personaje para no perder
+  // SkillListUpdate / CharacterInventory, que llegan justo después del login.
+  trackWorld();
+  const { startX, startY } = await loginAndSelectCharacter();
+
+  if (args.has('--probe-dir')) {
+    const dir = parseInt(args.get('--probe-dir')!);
+    log(`\n--- Modo prueba: UN solo WalkRequest, dirección ${dir}, desde (${startX},${startY}) ---`);
+    sendToGS(buildWalkPacket(startX, startY, [dir]).buffer);
+    await sleep(800);
+    console.log(`\n=== Resumen (modo prueba) ===`);
+    console.log(`Se mandó 1 paquete válido, dirección ${dir}. Revisá la DB para ver si la posición cambió.`);
+    gsSocket?.close();
+    process.exit(0);
+  }
+
+  // Keepalives como el cliente web (ver sendPing/sendEcho).
+  setInterval(() => !kicked && sendPing(), 5000);
+  setInterval(() => !kicked && sendEcho(), 2000);
+
+  const autoSeconds = parseInt(args.get('--auto-seconds') ?? '600');
+  const warp = args.get('--warp') ? parseInt(args.get('--warp')!) : null;
+  if (warp != null) {
+    const spot = WARP_SPOTS.find((sp) => sp.index === warp) ?? { index: warp, name: `warp ${warp}`, reqLevel: 0, zen: 0 };
+    await warpAndWait(spot);
+  }
+  const moveTo = args.get('--move');
+  if (moveTo) await moveToMap(moveTo);
+  // Damos un par de segundos a que lleguen skill list, inventario y NPCs
+  // en scope antes de que el loop empiece a decidir.
+  await sleep(2000);
+  const r = await autonomousLoop(autoSeconds);
+  console.log(`\n=== Resumen ===`);
+  console.log(`Duración: ${autoSeconds}s, sin GUI, ritmo humano.`);
+  console.log(`Kills: ${r.kills}  Exp: ${r.totalExpGained}  Pociones: ${r.potionsDrunk}`);
+  console.log(`Puntos repartidos: ${r.statPointsSpent}  Skills usadas: ${r.skillsUsed}  Resets: ${r.resets}`);
+  console.log(`Stats finales: ${STAT_ORDER.map((s) => `${s}=${world.stats[s]}`).join(' ')}`);
+  console.log(`Skills conocidos: ${[...world.skills.values()].map((s) => `${s.number}(lv${s.level})`).join(', ') || 'ninguno'}`);
+  console.log(`Desconectado por el server: ${kicked ? 'SÍ' : 'NO'}`);
+  gsSocket?.close();
+  process.exit(0);
+}
+
+main().catch((e) => {
+  console.error('Error:', e);
+  process.exit(1);
+});

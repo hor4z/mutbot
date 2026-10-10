@@ -1,0 +1,16 @@
+{
+  "name": "mubot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bot": "bun run headless-bot.ts",
+    "proxy": "bun run proxy.ts",
+    "test": "bun run packet-tests.ts",
+    "tsc": "tsc --noEmit",
+    "extract": "bun run extract-packets.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.8.3"
+  }
+}
