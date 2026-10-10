@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -38,13 +38,15 @@ bun run proxy
 # El bot: login + loop autónomo que progresa el personaje.
 bun run bot --user <u> --pass <p> --char <c> \
   --auto-seconds 600 \
-  --build str:50,ene:33,vit:17 \
   --decision-log /tmp/decisiones.jsonl \
   --ws-port 8787
 ```
 
-`--auto-seconds 0` = sin límite: farmea y encadena resets indefinidamente (ver
-"Reset encadenado").
+`--auto-seconds 0` = sin límite: farmea, encadena resets indefinidamente y
+reconecta con backoff si se corta (ver "Reset encadenado" y "Port del agente web").
+Otros flags: `--build str:50,ene:33,vit:17` (reparto fijo; sin él, `planStats`),
+`--stat-batch 200` (puntos mínimos para frenar a repartir), `--free-route` (la
+regla vieja de spots por exp/min en vez de la ruta fija), `--spots`, `--warp`.
 
 Flag inexistente = el bot arranca con defaults y se cuelga esperando `LoginResponse`.
 Los reales son `--user`, `--pass`, `--char` (no `--account`/`--character`). Esto ya
@@ -63,7 +65,10 @@ pasó una vez y costó tres intentos de debugging.
 | `explore-tests.ts` | Tests offline de `explore.ts` (reloj simulado, sin red). |
 | `farming.ts` | Farmeo por exp/segundo (lógica pura): valor y elección de objetivo, exp/segundos por tipo de monstruo, exp partida, autoevaluación. |
 | `farming-tests.ts` | Tests offline de `farming.ts` (reloj simulado, sin red). |
-| `browser-agent.js` | El agente que juega DENTRO del cliente web (pegado en la consola). Es la referencia: sube rápido, y sus comentarios explican cada decisión aprendida jugando. `farming.ts` y la ruta de spots son su port. |
+| `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, curiosidad, memoria, hambre, skill de área. |
+| `camp-tests.ts` | Tests offline de `camp.ts`. |
+| `protocol097.ts` | Helpers de bytes sin estado (party, ItemDropRemoved, excelentes) y el backoff de reconexión; testeados en `packet-tests.ts`. |
+| `browser-agent.js` | El agente que juega DENTRO del cliente web (pegado en la consola). Es la referencia: sube rápido, y sus comentarios explican cada decisión aprendida jugando. `farming.ts`, `camp.ts` y la ruta fija son su port (ver "Port del agente web"). |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS, en loopback por defecto). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |
@@ -147,7 +152,8 @@ bien dentro del cliente web):**
   el evento ya salió del scope). Un spot vale por lo que **rinde**, no por
   cuántos bichos tiene (antes contaba objetivos elegidos). Sin monstruos en
   scope, el bot vuelve a la celda con más exp que no haya estado vacía en los
-  últimos **90 s** y **acampa ahí esperando el respawn hasta 30 s** antes de
+  últimos **90 s** (y a **≤ 30 tiles**, `HOT_MAX_DIST`; con correa, dentro de
+  ella) y **acampa ahí esperando el respawn hasta 30 s** antes de
   marcarla vacía y pasar a la siguiente (con 8 s abandonaba spots buenos justo
   antes del respawn). La grilla se conserva entre resets (depende del mapa,
   no del nivel) y se guarda en `learning.json`.
@@ -163,7 +169,7 @@ bien dentro del cliente web):**
   `(128,128)` (heurística, sin verificar). Una salida se **abandona a los 20 s
   de llegar sin ver monstruos**; un objetivo al que no se llega en 60 s
   (muros) también se abandona. Pelear en el camino no consume esos plazos.
-- **Mapa seco:** si en **2 min** no apareció ningún monstruo en todo el mapa,
+- **Mapa seco:** si en **90 s** (`DRY_MAP_MS`, el `giveUpMapMs` del agente web) no apareció ningún monstruo en todo el mapa,
   el spot actual se marca seco (`dryAt`), se corta el tramo (queda como
   muestra con 0 exp = mala para el bandit) y `maybeChangeSpot()` pasa al
   siguiente spot elegible; el spot seco queda excluido 15 min
@@ -178,11 +184,10 @@ bien dentro del cliente web):**
   monstruo aunque hubiera uno al lado — "recoger loot" tenía prioridad
   absoluta sobre pelear. Arreglado: no se interrumpe un combate ya en rango
   de golpe para ir a recoger.
-- **Prioridad al elegir qué drop levantar** (`dropPriority()`): dinero (no
-  ocupa slot) > equipamiento/grupo desconocido > basura confirmada. Todavía
-  no hay forma de "dropear" basura al piso (packet nuevo sin verificar), así
-  que la basura se sigue levantando para vender, solo que de última
-  prioridad.
+- **Qué drop levantar** (`lootStep()` + `isValuableDrop`): solo lo valioso
+  (cajas, joyas, excelentes, guantes 10/1), caminando hasta él. Antes
+  (`dropPriority()`) levantaba todo, dinero primero; se cambió al port del
+  agente web (ver "Port del agente web", punto 12).
 - `MUBOT_DEBUG_NPCS=1` (variable de entorno): loguea TODOS los NPCs en scope,
   pasen o no `isMonsterType`, con su `TypeNumber`. Así se confirmó que los
   `247`/`249` son los guardias y se vieron los custom `690`/`692`.
@@ -219,7 +224,11 @@ personaje (quedan las últimas). `resets` es un **contador local** (se suma
 cuando `doReset()` termina bien): no hay un packet de resets que sepamos
 parsear todavía.
 
-**Cómo decide hoy (`chooseRouteSpot`, la regla del agente web).** Spot =
+**Cómo decide hoy: ruta FIJA por tramo (`chooseFixedRoute`).** Ver "Port del
+agente web" abajo. Lo que sigue (`chooseRouteSpot`) quedó detrás de
+`--free-route`.
+
+**(Con `--free-route`) `chooseRouteSpot`, la regla vieja del agente web.** Spot =
 exp/min. Los spots son la **ruta del usuario** (`WARP_SPOTS`): Lorencia (warp
 2, nivel 10) → Devias 2/3/4 (5, 6, 7; nivel 20) → Arena (1, nivel 50) → Arena 2
 (24, 100) → Arena 3 (25, 200) → Arena 4 (26, 300). **Devias 1 (warp 4) no va:
@@ -306,9 +315,11 @@ mucho más rápido que el bot headless. Su lógica de decisión está portada a
 `farming.ts` (pura, testeada en `farming-tests.ts`) y enganchada en
 `autonomousLoop`:
 
-- **Objetivo por EXP POR SEGUNDO, no por cercanía** (`pickTarget`):
+- **Objetivo por EXP POR SEGUNDO, no por cercanía** (`targetRate`; el bot lo
+  usa a través de los campamentos de `camp.ts`, `pickTarget` queda para tests):
   `valor = (exp(tipo) + densidad) / (seg_kill(tipo) + distancia × 0.4)
-  × 0.4^(jugadores a ≤ 5 tiles del objetivo)`. Densidad: cada otro monstruo a
+  × 0.7^(jugadores a ≤ 5 tiles del objetivo)` (penalización 0.3 por jugador,
+  `competitionPenalty` del agente web). Densidad: cada otro monstruo a
   ≤ 3 tiles suma la mitad de su valor (Twisting Slash es de área). Los que se
   estiman en > 8 s se descartan si hay alguno más rápido. Solo se miran
   monstruos a < 28 tiles. El objetivo se mantiene hasta que muere o sale del
@@ -337,8 +348,8 @@ mucho más rápido que el bot headless. Su lógica de decisión está portada a
   @2/@3; el stride se deduce del largo y si no cierra se ignora el packet. Se
   actualizan con `ObjectWalked075`/`ObjectMoved` y se borran con
   `MapObjectOutOfScope` y al cambiar de mapa. **Sin verificar en vivo.**
-- **Autoevaluación** (`SelfReport`) cada 5 min en consola: nivel, resets, kills,
-  exp/min en 5 y 30 min, % del tiempo peleando/caminando/esperando/otro, y
+- **Autoevaluación** (`SelfReport`, sobre el `ExpLog` por segundo) cada 5 min en consola: nivel, resets, kills,
+  exp/min en 5 y 30 min (ventana real: con 2 min de registro divide por 2), % del tiempo peleando/caminando/esperando/otro, y
   duración de cada ciclo de reset. También al terminar cada reset y al final.
   El tiempo de cada iteración del loop se le atribuye a su fase (pelear =
   hay objetivo, caminar/esperar = explorador, otro = pociones, stats, venta,
@@ -348,8 +359,8 @@ mucho más rápido que el bot headless. Su lógica de decisión está portada a
 
 ### Reset encadenado
 
-A `--reset-level` (400): reparte los puntos con `/add` (build por defecto
-`str:50,ene:33,vit:17`), warp a Lorencia, `/reset`, vuelve a elegir el
+A `--reset-level` (400): reparte los puntos con `/add` (`planStats` por
+defecto, ver "Port del agente web"), warp a Lorencia, `/reset`, vuelve a elegir el
 personaje, reparte los puntos nuevos y sigue. Los spots calientes y lo
 aprendido por tipo de monstruo se conservan; el rendimiento por mapa
 (`routeScores`) y el tier visto se vuelven a medir desde Lorencia. Con
@@ -359,6 +370,111 @@ aprendido por tipo de monstruo se conservan; el rendimiento por mapa
 exp/s, exp partida, jugadores en scope, ruta de spots con Arena 1-4, reset
 encadenado). La lógica viene del agente web, que sí juega con el usuario, y
 está testeada offline.
+
+## Port del agente web
+
+Lo que el agente web aprendió jugando con el usuario, portado al headless con
+tests offline. **Nada de esto se corrió todavía contra el server desde el
+headless** (la cuenta estaba jugando en el navegador); ver "Qué falta verificar
+en vivo" al final de la sección.
+
+1. **Registro de exp por segundo** (`ExpLog`, `farming.ts`). Los kills grandes
+   llegan partidos en tramos de 65535 (~60 `ExperienceGained` por kill). Un
+   registro por evento con tope fijo cubría ~30 s y toda medición de 1-3 min
+   salía truncada. Ahora hay un bucket por segundo (6 h de tope) y todas las
+   mediciones por ventana salen de ahí y dividen por la ventana REAL cubierta:
+   informe (`SelfReport`), campamentos (exp/min desde que llegó), memoria de
+   campamentos y hambre. `SpotMeter`/`routeScores` (`learning.ts`) y la estadía
+   en el spot (`stayExp`) ya eran sumas acumuladas con su duración real: no
+   truncaban.
+2. **Ruta fija por tramo** (`chooseFixedRoute`, `learning.ts`): Lorencia (warp
+   2) solo < 20; Devias 3/4/2 (6, 7, 5) de 20 a 99; Arena 2 (24) ≥ 100; Arena 3
+   (25) ≥ 200; Arena 4 (26) ≥ 300. Devias 1 (4) nunca; Arena 1 (1) solo como
+   plan B si todas las Devias están llenas de gente (nivel 50-99; una entrada
+   llena no se vuelve a probar en 5 min). Cambia de mapa solo al cruzar un
+   tramo, con el mapa vacío 90 s o por competencia que bajó la exp (campamentos
+   abandonados por gente, o hambre). Si el bot entra al mundo ya parado en el
+   mapa del tramo, lo **adopta sin warpear** (`adopt`); tras morir vuelve a
+   warpear a la misma entrada (`prefer`). `--free-route` vuelve a la regla vieja.
+3. **Correa en Devias** (`CampManager.leashFor`): los 4 Devias son el mismo mapa
+   (2). Tras cada `MapChanged075` (y al entrar al mundo) se registra la
+   llegada; en el mapa 2, campamentos, objetivos, spots calientes, memoria y
+   exploración solo a ≤ 25 tiles de ella (las salidas del explorador se ponen
+   alrededor de la llegada, empezando "arriba"). Spot inicial: 12 tiles
+   "arriba" de la llegada (−x, +y). Recién llegado (3 s) no elige campamento,
+   solo pelea a ≤ 6; el loop está bloqueado durante el warp, así que no puede
+   elegir campamento con monstruos del mapa anterior.
+4. **Arenas (83/84/85)**: al llegar va a la "zona de abajo". El headless **no
+   tiene grilla de caminables**: los `.att` de estos mapas custom no están en
+   `~/self/mu/public/game-assets` (solo World1-11, 34, 52), y bajarlos del host
+   es red. Queda `downZone()` portado y testeado (recibe un `isWalkable`) y, como
+   default por mapa (`DOWN_ZONE_DEFAULT`), lo que dio el agente web en vivo:
+   **(91,13)** en Arena 3 y 4; Arena 2 asume lo mismo (SIN VERIFICAR). Para
+   tener la grilla: bajar `EncTerrain83.att`/`84`/`85` del host (game-assets
+   v097d) y parsearlo como `src/common/terrain/parseTerrainAttribute.ts` del
+   cliente (XOR de mapa + BUX, 256×256); con eso `downZone` reemplaza al default.
+5. **Campamentos** (`camp.ts`): elegir un centro (más exp/s a ≤ 10, penalizado
+   0.3 por jugador y por distancia), pelear solo a ≤ 10, quedarse mientras
+   rinda. La vara del mapa es el **promedio móvil** (0.7/0.3) de lo que
+   rindieron sus campamentos, no el máximo. Mudarse si tras 90 s rinde < 50% de
+   la vara, si está vacío 12 s (el reloj corre solo desde que llegó), o por
+   competencia (≥ 3 jugadores 20 s **y** exp < 70% de la vara). Un campamento
+   al que no llega en 60 s (sin contar lo peleado en el camino) se abandona.
+6. **En el camino**: pelea con lo que esté a ≤ 8; si hay ≥ 3 monstruos juntos a
+   ≤ 8, acampa ahí. **Skill de área con cualquier monstruo a ≤ 3**, también
+   caminando (`castCandidate`): respeta `SKILL_PACE_MS` entre casts y no frena
+   la caminata (el paso sale en la misma iteración). Con < 15% de maná no.
+7. **Memoria de campamentos** (`CampMemory`, en `learning.json` → `camps`):
+   posición + exp/min real desde que llegó + nivel + n (EMA 0.6/0.4 si es el
+   mismo a ≤ 4 tiles; estadías < 45 s no cuentan). Al llegar a un mapa va
+   primero al mejor aprendido a ±60 niveles; sin campamento, al mejor conocido
+   a ≤ 40 tiles. Las reglas fijas (cripta (132,200), "arriba", zona de abajo)
+   solo si no conoce nada.
+8. **Curiosidad**: tipos con < 3 kills medidos a ≤ 8 se atacan primero.
+9. **Skill**: Twisting Slash (41) primero en `DEFAULT_ATTACK_SKILLS`; Rageful
+   Blow (42) fuera del pool (el usuario lo descartó: lento).
+10. **Stats** (`planStats`): energía hasta fuerza − 2000, después mitad/mitad;
+    5% vitalidad. Usa fuerza/energía reales de `CharacterInformation`. Se
+    reparte de a 200 puntos (`--stat-batch`). `--build` sigue como override.
+11. **Party**: `PartyRequest` (C1 05 40, id BE en el byte 3) se rechaza siempre
+    con `C1 06 41 00 <id BE>` tras 0.6-1.5 s.
+12. **Loot valioso** (`isValuableDrop`): cajas 14/11, joyas 14/13,14,16,22,31 y
+    12/15, excelentes (6 bits bajos del byte 3 del ItemData) y guantes 10/1. El
+    zen y el equipo común ya **no** se levantan. Camina hasta el drop (≤ 12
+    tiles, 8 s de plazo) y lo levanta a ≤ 1. `ItemDropRemoved` (C2 21) saca del
+    registro lo que levantó otro o expiró.
+13. **Registro de tramos por ciclo** (`CycleLog`, en `learning.json` →
+    `cycles`, con el ciclo en curso para retomarlo): minuto al llegar a
+    20/50/100/200/300/350/400. El informe muestra los últimos ciclos y la
+    **proyección resets/día** (1440 / promedio de los últimos 5). Solo cierran
+    los ciclos que llegaron al 400.
+14. **Reconexión** (`main`/`session`, `Backoff` en `protocol097.ts`): si se corta
+    la conexión (kick, red, timeout) vuelve a conectar con backoff 5 s → 5 min
+    (vuelve a 5 s tras una sesión > 5 min; ≥ 60 s si la cuenta figura
+    conectada). Nunca dos sesiones: reconecta con la anterior cerrada. Login con
+    contraseña/cuenta/versión inválida = no reintenta. Retoma desde el estado
+    real: elegir personaje → nivel/mapa/puntos de `CharacterInformation` → la
+    ruta adopta el mapa o warpea, y a 400 resetea. Los handlers del EventBus se
+    registran una sola vez y `sendToGS` no manda nada con el socket cerrado.
+15. **Hambre** (`Hunger`, `camp.ts`): si en los últimos 45 s la exp/min es < 25%
+    de la referencia del tramo (promedio móvil 0.95/0.05 por tier, a lo sumo una
+    actualización por segundo, sin contar el primer minuto tras un warp; se
+    persiste como `tierRef`) —o < 5M/min sin referencia— y hay ≥ 1 jugador a
+    ≤ 12 tiles, cambia YA de entrada (Devias 3/4/2) o de mapa, sin esperar a las
+    reglas del campamento. Si no hay a dónde (Arenas), al menos cambia de
+    campamento. Pasó en vivo: 2M exp/min con un jugador a 1 tile y el agente no
+    se movía.
+
+**Qué falta verificar en vivo:** que `MapChanged075` llegue tras cada warp con la
+posición de llegada (la correa depende de eso) y qué pasa al respawnear tras
+morir; que `AddCharactersToScope` (layout 0.95d) traiga bien a los jugadores
+(sin eso no hay competencia ni hambre); que el skill de área a 2-3 tiles pegue
+de verdad y que castear y caminar en la misma iteración no dispare el
+anti-cheat; que (91,13) sirva en Arena 2; que levantar a ≤ 1 tile alcance para
+el server; los layouts de `PartyRequest`/`ItemDropRemoved` y el byte de
+excelentes en drops; la reconexión con la sesión vieja todavía abierta del
+lado server; y que el bot no se trabe caminando contra muros hacia un
+campamento sin grilla de caminables (lo corta el plazo de 60 s).
 
 ## Combate: historia de tres bugs
 
@@ -612,7 +728,8 @@ Estas están **verificadas como problemas**, no como sospechas:
 - **`--gate` no tiene gate table.** Manda un número arbitrario sin caminar al
   tile. Debería quedar deshabilitado hasta capturar el flujo real
   (`src/Persistence/Initialization/Version075/Gates.cs` en el repo de OpenMU).
-- **No hay reconexión ni backoff.**
+- **Reconexión con backoff: escrita y testeada offline, sin probar en vivo**
+  (ver "Port del agente web", punto 14).
 - **Las stats locales se pueden desincronizar.** `CharacterLevelUpdate` no trae
   los valores de stat; los valores reales nunca llegan, así que el tracker cuenta
   por su cuenta.
