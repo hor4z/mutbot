@@ -32,6 +32,9 @@
     anchor: { min: 0, max: 1, step: 1 },
     // radio del ancla: cuánto limpia alrededor del centro sin dejar el spot
     anchorRadius: { min: 4, max: 10, step: 2 },
+    // cuánto espera vacío antes de salir de excursión, y hasta dónde
+    excursionMs: { min: 1000, max: 8000, step: 1500 },
+    excursionMax: { min: 14, max: 30, step: 4 },
   };
   // 90 s: con ventanas de 3 min un experimento (12 min) no entraba en el tramo alto de un
   // ciclo (~7 min) y el reset lo cancelaba siempre: en 8 ciclos no terminó ninguno.

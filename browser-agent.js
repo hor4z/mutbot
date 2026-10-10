@@ -56,6 +56,7 @@
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
+      excursionMs: 2500, excursionScan: 20, excursionMax: 22,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
       campUpgrade: 1.25, crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
@@ -99,9 +100,9 @@
       // en warps y cargas de lo que ganaba (el usuario lo vio en pantalla).
       fixedRoute: true,
       // Plan B si todas las Devias están llenas de gente (nivel 50-99): Arena 1.
-      // Noria (warp 3, nivel 10): plan B del arranque cuando la cripta de Lorencia está llena
-      // (6 jugadores, 0 exp a nivel 13). No entra en la ruta: solo por competencia.
-      crowdFallback: [[1, 'Arena', 50], [3, 'Noria', 10]],
+      // Noria NO como plan B del arranque: a la salida del pueblo casi no hay monstruos para nivel
+      // 10-20 (usuario, 2026-10-10). Con la cripta llena se cambia de campamento dentro de Lorencia.
+      crowdFallback: [[1, 'Arena', 50]],
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -277,6 +278,13 @@
     let t = null;
     if (c.anchor) { t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.anchorRadius + 1 }); if (!t && now - cp.lastSeen < c.anchorWaitMs) return null; }
     if (!t) t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
+    // Excursión mientras reaparecen (35 % del tiempo se iba esperando quieto en el campamento):
+    // si lleva excursionMs sin nada adentro, pelear lo mejor que haya a <= excursionMax del
+    // campamento y volver. El campamento se conserva; "rinde poco" lo sigue evaluando.
+    if (!t && now - cp.lastSeen > c.excursionMs) {
+      const ex = ai.freePick(w, P, { ...c, scan: c.excursionScan });
+      if (ex && dist(ex.transform.pos, cp) <= c.excursionMax) { ai.excursions = (ai.excursions ?? 0) + 1; cp.lastSeen = now; return ex; }
+    }
     if (t) cp.lastSeen = now;
     return t;
   };
@@ -473,10 +481,10 @@
       if (now - ai.lastWarp > 60000 && recentRate > 0) ai.tierRef[tierKey] = ai.tierRef[tierKey] == null ? recentRate : ai.tierRef[tierKey] * 0.95 + recentRate * 0.05;
       const ref = ai.tierRef[tierKey];
       const rivalsNear = rivalsPos(w).filter((q) => dist(q, P) <= 12).length;
-      // Desde nivel 10 (en Lorencia el plan B es Noria) y con al menos 45 s en el lugar.
+      // Desde nivel 20 (antes solo hay Lorencia) y con al menos 45 s en el lugar.
       // Con todo lleno, saltar cada 50 s entre Devias 3/4/2 empeoró el ciclo 6: como mucho un
       // salto por hambre cada 2 min, ≥2 jugadores y ≥60 s en el lugar.
-      const starving = pd.level >= 10 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && (rivalsNear >= 2 ? recentRate < (ref ? ref * 0.25 : 5e6) : !!ref && recentRate < ref * 0.35);
+      const starving = pd.level >= 20 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && (rivalsNear >= 2 ? recentRate < (ref ? ref * 0.25 : 5e6) : !!ref && recentRate < ref * 0.35);
       // Sin competencia también: Devias 3 daba ~3M/min (lo normal del tramo ~10M) con un solo
       // jugador cerca y deambulaba; Devias 4 al lado rendía el doble (usuario: "probá en otro Devias").
       const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
