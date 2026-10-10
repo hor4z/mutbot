@@ -52,7 +52,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 5, roam: 0, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 5, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -211,7 +211,7 @@
       // con conglomerados de monstruos"): la memoria de spots mide si rinde.
       let n = 0; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= c.maxKillSec && dist(e.transform.pos, P) <= 8) n++;
       if (n >= c.clusterStop) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
-      else { const near = ai.freePick(w, P, { ...c, scan: 6 }); if (near) return near; }
+      else { const near = ai.freePick(w, P, { ...c, scan: c.enRouteScan }); if (near) return near; }
     }
     const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
     if (t) cp.lastSeen = now;
@@ -502,11 +502,18 @@
   // Skill sin pausa: el cliente omite el golpe normal mientras haya un castRequest,
   // así que recargarlo cada 50 ms deja todo el ataque en Twisting Slash (área).
   // Medido: de 74 skills + 26 golpes por minuto (cada 200 ms) a 0 golpes.
+  // Girar con CUALQUIER monstruo a <= castRange, tenga objetivo o no y aunque esté
+  // caminando: el giro es de área y en el camino quedaban monstruos sin tocar (usuario:
+  // "aprovechá todo y andá tirando golpes de giro").
   ai.caster = setInterval(() => {
-    const w = W(), t = ai.target, pe = w?.playerEntity, pd = S.playerData;
-    if (!ai.on || ai.busy || !t || !pe || w.castRequest || S.sceneLoading || pd.currentMP / pd.maxMP < ai.cfg.skillMinMp) return;
-    const P = pe.transform.pos, tp = t.transform.pos;
-    if (dist(P, tp) <= ai.cfg.castRange) w.castRequest = { target: t, point: { x: tp.x, y: tp.z }, forced: false };
+    const w = W(), pe = w?.playerEntity, pd = S.playerData;
+    if (!ai.on || ai.busy || !pe || w.castRequest || S.sceneLoading || S.uiState !== 5 || pd.currentMP / pd.maxMP < ai.cfg.skillMinMp) return;
+    const P = pe.transform.pos; let best = null, bd = 1e9;
+    const t = ai.target; if (alive(t) && dist(P, t.transform.pos) <= ai.cfg.castRange) best = t;
+    if (!best) for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || !alive(e)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.castRange && d < bd) { bd = d; best = e; } }
+    if (!best) return;
+    if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
+    const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false };
   }, 50);
   ai.deaths = old?.deaths ?? 0;
   let wasDead = false;
