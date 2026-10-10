@@ -15,6 +15,10 @@ Leé ese archivo antes de tocar `headless-bot.ts`. Contiene:
 - el flujo de economía con merchants y la capa de decisión
 - el estado del combate (bloqueante para jugar solo) y lo pendiente
 
+Para "correlo", "arrancalo", "ponelo a jugar": skill **`correr-agente`**
+(`.claude/skills/correr-agente/SKILL.md`). Arranca `bun run agent` y carga `bg-timers.js` →
+`browser-agent.js` → `tuner.js` en la pestaña del juego. Los pasos para el usuario están en `README.md`.
+
 Reglas rápidas:
 
 - `packets/` es generado: no se edita a mano, se regenera con
