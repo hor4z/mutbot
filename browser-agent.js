@@ -607,7 +607,7 @@
     if (!di || di.isMoney) return false;
     if (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) return true;
     if (di.group === 12 && di.num === 15) return true;
-    return [7, 8, 9, 10, 11].includes(di.group) && di.num === 1;
+    return [7, 8, 9, 10, 11].includes(di.group) && di.num === 1 && !!di.item?.isExcellent; // comunes no: juntó 9 pares de guantes +2/+3
   };
   ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {
