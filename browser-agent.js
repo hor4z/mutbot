@@ -319,7 +319,16 @@
     const gap = Math.max(0, str - 2000 - ene);
     const toEne1 = Math.min(left, gap); left -= toEne1;
     const half = Math.floor(left / 2);
-    return [['ene', toEne1 + half], ['str', left - half], ['vit', vit]];
+    const plan = [['ene', toEne1 + half], ['str', left - half], ['vit', vit]];
+    // Tope del server: 65535 por stat ("Se ha alcanzado el máximo de 65535 Base Energy").
+    // Con fuerza y energía al tope, /add las rechaza, los puntos no bajan y repetía los
+    // comandos cada 3 s sin fin. Lo que no entra va a agilidad (velocidad de ataque del DK)
+    // y, si también está al tope, a vitalidad.
+    const CAP = 65535, cur = { str: pd.str ?? 0, ene: pd.eng ?? 0, agi: pd.agi ?? 0, vit: pd.sta ?? 0 };
+    const out = { str: 0, ene: 0, agi: 0, vit: 0 }; let spill = 0;
+    for (const [k, n] of plan) { const room = Math.max(0, CAP - cur[k]); out[k] += Math.min(n, room); spill += n - Math.min(n, room); }
+    for (const k of ['agi', 'vit']) { const room = Math.max(0, CAP - cur[k] - out[k]); const n = Math.min(spill, room); out[k] += n; spill -= n; }
+    return Object.entries(out).filter(([, n]) => n > 0);
   };
   ai.distribute = async () => {
     const pts = S.playerData.points; if (!pts) return;

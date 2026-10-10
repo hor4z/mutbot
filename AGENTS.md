@@ -588,7 +588,10 @@ El reset completo (comando → selección → volver al mundo) tarda ~7 s.
 
 Todo por **chat** (`C1 len 00 <nombre 10 bytes> <texto>`):
 - `/add <stat> <n>` reparte n puntos de una vez. Confirmados `str`, `ene` y `vit`
-  (3000 puntos post-reset repartidos con 3 comandos); `agi` sin probar todavía. El server contesta con un
+  (3000 puntos post-reset repartidos con 3 comandos); `agi` confirmado el 2026-10-10.
+  **Tope por stat: 65535** ("Se ha alcanzado el máximo de 65535 Base Energy"). Con 15 resets Horaz
+  tiene fuerza y energía al tope: `planStats` manda lo que no entra a agilidad y después a vitalidad.
+  Antes repetía `/add str`/`/add ene` rechazados cada 3 s sin fin. El server contesta con un
   `CharacterInformation` completo (F3/03) y `CharacterResets` (`C1 06 FE 00 ..`).
 - `/reset` (el usuario lo hizo en nivel 400, en Lorencia, después de repartir puntos).
   El server descuenta zen y **devuelve al cliente a la selección de personaje**
