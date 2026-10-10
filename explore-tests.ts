@@ -104,18 +104,19 @@ const MIN = 60 * S;
 
   // Spot caliente tiene prioridad sobre salidas.
   const e3 = new Explorer();
-  e3.onExp(0, 60, 60, 500, 0); e3.onExp(0, 61, 62, 500, 0); e3.onExp(0, 150, 150, 300, 0);
-  a = e3.tick(0, 135, 128, 1 * S);
+  e3.onExp(0, 60, 60, 500, 0); e3.onExp(0, 61, 62, 500, 0); e3.onExp(0, 85, 85, 300, 0);
+  e3.onExp(0, 200, 200, 9000, 0); // el que más rinde, pero a > HOT_MAX_DIST
+  a = e3.tick(0, 75, 75, 1 * S);
   ok('con spots calientes: va al de más exp', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 66 && a.y === 66, a);
   a = e3.tick(0, 66, 66, 10 * S);
   ok('en el spot caliente espera', a.action === 'wait' && a.goal.kind === 'hot');
   a = e3.tick(0, 66, 66, 39 * S);
   ok('espera el respawn hasta 30 s', a.action === 'wait' && a.goal.kind === 'hot', a);
   a = e3.tick(0, 66, 66, 40 * S);
-  ok('a los 30 s vacío: lo marca y va al siguiente caliente', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 150 && e3.events[0]?.kind === 'hot-empty', { a, ev: e3.events });
+  ok('a los 30 s vacío: lo marca y va al siguiente caliente', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 90 && e3.events[0]?.kind === 'hot-empty', { a, ev: e3.events });
   ok('la celda quedó marcada vacía', e3.hot.get(0, 5, 5)!.emptyAt === 40 * S);
-  a = e3.tick(0, 150, 150, 42 * S);
-  a = e3.tick(0, 150, 150, 72 * S);
+  a = e3.tick(0, 90, 90, 42 * S);
+  a = e3.tick(0, 90, 90, 72 * S);
   ok('sin calientes disponibles: vuelve a las salidas', a.action === 'walk' && a.goal.kind === 'exit', a);
 
   // Timeout de caminata: objetivo inalcanzable se abandona.
@@ -137,12 +138,30 @@ const MIN = 60 * S;
   ok('cambio de mapa: salidas del mapa nuevo (hacia el medio)', a.goal.kind === 'exit' && a.goal.x < 210 && a.goal.y > 40, a);
 }
 
+// --- Correa (Devias) -------------------------------------------------------------------
+{
+  const e = new Explorer();
+  e.onExp(2, 100, 100, 5000, 0);   // celda caliente dentro de 30 tiles pero fuera de la correa
+  e.onExp(2, 125, 125, 100, 0);    // dentro de la correa
+  e.setLeash({ x: 130, y: 130, r: 25 });
+  let a = e.tick(2, 120, 120, 1 * S);
+  ok('con correa: el spot caliente fuera de ella no se elige', a.goal.kind === 'hot' && a.goal.x === 126 && a.goal.y === 126, a);
+  const e2 = new Explorer();
+  e2.setLeash({ x: 130, y: 130, r: 25 });
+  a = e2.tick(2, 130, 130, 0);
+  const exits = e2.exitList;
+  ok('con correa: las salidas quedan alrededor de la llegada', exits.length > 0 && exits.every((p) => Math.max(Math.abs(p.x - 130), Math.abs(p.y - 130)) <= 25), exits);
+  ok('con correa: la primera salida es "arriba" (-x, +y)', exits[0].x < 130 && exits[0].y > 130, exits[0]);
+  e2.setLeash(null);
+  ok('sin correa: salidas normales (hacia el medio/afuera)', e2.exitList.some((p) => Math.max(Math.abs(p.x - 130), Math.abs(p.y - 130)) > 25), e2.exitList);
+}
+
 // --- Mapa seco ---------------------------------------------------------------------
 {
   const e = new Explorer();
   e.tick(0, 135, 128, 0);
   ok('recién llegado: no seco', !e.isDry(MIN));
-  ok('2 min sin monstruos: seco', e.isDry(EXPLORE.DRY_MAP_MS));
+  ok('90 s sin monstruos: seco', e.isDry(EXPLORE.DRY_MAP_MS));
   e.sawMonster(EXPLORE.DRY_MAP_MS);
   ok('ver un monstruo reinicia el reloj', !e.isDry(EXPLORE.DRY_MAP_MS + MIN));
   e.tick(2, 50, 50, 3 * MIN);
