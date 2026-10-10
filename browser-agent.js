@@ -58,7 +58,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -220,7 +220,10 @@
       // Si en el camino hay un montón de monstruos juntos, quedarse ahí (usuario: "lugares
       // con conglomerados de monstruos"): la memoria de spots mide si rinde.
       let n = 0; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= c.maxKillSec && dist(e.transform.pos, P) <= 8) n++;
-      if (n >= c.clusterStop) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
+      // En Arenas, yendo a la zona de abajo, solo cortar el viaje por un grupo grande: con 3
+      // se quedaba siempre en la entrada (~60M/min en Arena 3) y la zona de abajo nunca se medía.
+      const stopAt = c.preferDownMaps.includes(map) && cp.toDownZone ? c.clusterStopDown : c.clusterStop;
+      if (n >= stopAt) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
       else { const near = ai.freePick(w, P, { ...c, scan: c.enRouteScan }); if (near) return near; }
     }
     const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
@@ -349,7 +352,7 @@
           for (const R of [12, 15, 9, 18]) { for (let j = 0; j < 12 && !g; j++) { const x = Math.round(p0.x + dir[0] * R + (Math.random() - 0.5) * 6), z = Math.round(p0.z + dir[1] * R + (Math.random() - 0.5) * 6); if (walkable(w, x, z)) g = { x, z }; } if (g) break; }
           if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`spot de llegada (arriba) en (${g.x},${g.z})`); }
         }
-        if (!known && ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
+        if (!known && ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now(), toDownZone: true }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
       }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
