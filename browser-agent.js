@@ -527,16 +527,12 @@
   // Rechazar no alcanza: el cartel de la invitación queda abierto y frena los controles
   // unos segundos (usuario: "se queda como colgado cuando le dan party"). Se cierra con su
   // botón Cancel apenas aparece.
+  // El cartel es `.v097d-party-request` y su botón no tiene texto: `[aria-label="Cancel"]`.
   window.__closePartyDialog = () => {
-    const msg = [...document.querySelectorAll('body *')].find((el) => el.childElementCount === 0 && /offer to join their party|invita.*grupo/i.test(el.textContent || '') && el.offsetParent !== null);
-    if (!msg) return false;
-    let box = msg;
-    for (let i = 0; i < 6 && box; i++) {
-      const c = [...box.querySelectorAll('*')].find((b) => /^\s*cancel(ar)?\s*$/i.test(b.textContent || '') && b.offsetParent !== null);
-      if (c) { for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) c.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true })); return true; }
-      box = box.parentElement;
-    }
-    return false;
+    const c = document.querySelector('.v097d-party-request [aria-label="Cancel"]');
+    if (!c) return false;
+    for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) c.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true }));
+    return true;
   };
   if (!window.__partyCloseHooked) {
     __eventBus.on('PartyRequest', () => { let tries = 0; const t = window.setInterval(() => { if (window.__closePartyDialog() || ++tries > 20) window.clearInterval(t); }, 150); });
