@@ -54,7 +54,8 @@
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
-      leashDist: 25,
+      // Solo en Devias (mapa 2). En Arena los buenos están ADENTRO, lejos de la llegada.
+      leashDist: 25, leashMaps: [2],
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -127,7 +128,7 @@
     const easy = ms.filter((e) => ai.killSecOf(e) <= c.maxKillSec);
     const pool = easy.length ? easy : ms;
     let best = null, bestRate = 0;
-    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || dist(p, ai.arrival) <= c.leashDist;
+    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(p, ai.arrival) <= c.leashDist;
     for (const e of pool) {
       const p = e.transform.pos, d = dist(P, p); if (d >= c.scan || !leashed(p)) continue;
       let crowd = 0; for (const o of pool) if (o !== e && dist(o.transform.pos, p) <= 3) crowd += ai.valueOf(o) * 0.5;
@@ -143,7 +144,7 @@
     const ms = []; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= ai.cfg.maxKillSec) ms.push(e);
     const players = rivalsPos(w);
     let best = null, bv = 0;
-    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || dist(p, ai.arrival) <= ai.cfg.leashDist;
+    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(p, ai.arrival) <= ai.cfg.leashDist;
     for (const e of ms) {
       const p = e.transform.pos; if (!leashed(p)) continue; let v = 0;
       for (const o of ms) if (dist(o.transform.pos, p) <= ai.cfg.campRadius) v += ai.valueOf(o) / ai.killSecOf(o);
@@ -194,7 +195,7 @@
     for (let k = 0; k < 80; k++) {
       const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * 22;
       const x = Math.round(P.x + Math.cos(a) * r), z = Math.round(P.z + Math.sin(a) * r);
-      if (!walkable(w, x, z) || (ai.arrival && ai.arrival.map === w.mapIndex && dist({ x, z }, ai.arrival) > ai.cfg.leashDist)) continue;
+      if (!walkable(w, x, z) || (ai.arrival && ai.arrival.map === w.mapIndex && ai.cfg.leashMaps.includes(w.mapIndex) && dist({ x, z }, ai.arrival) > ai.cfg.leashDist)) continue;
       const sc = -(vis[cell({ x, z })] ?? 0) * 10 + Math.random() * 5;
       if (sc > bs) { bs = sc; best = { x, z, kind: 'explore' }; }
     }
@@ -444,7 +445,7 @@
     lastCamp = cur;
     if (!cur && !ai.target && ai.on && !ai.busy) {
       const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
-      const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => (!ai.arrival || dist(c, ai.arrival) <= ai.cfg.leashDist) && dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
+      const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => (!ai.arrival || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(c, ai.arrival) <= ai.cfg.leashDist) && dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
       cands.sort((a, b) => b.rate / (1 + dist(b, P) / 12) - a.rate / (1 + dist(a, P) / 12));
       if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
     }
