@@ -177,3 +177,17 @@ Horaz tiene **4 slots vacíos**: mascota, collar y los dos anillos (además de l
 | 8 | Frutas | puntos de stat extra | Creation + Life |
 
 Recetas en `MANUAL-CHAOS.md`. Comprar o arriesgar ítems: siempre con confirmación del usuario.
+
+## 12. Después del farmeo pulido: cazar dorados y todo lo que tire cajas
+
+Pedido del usuario (2026-10-10). **Se activa recién cuando el farmeo esté pulido**:
+ciclos estables en o por encima del objetivo y una cantidad importante de resets
+acumulados. Hasta entonces, nada que saque tiempo del ciclo.
+
+1. Identificar por TypeNumber a los monstruos dorados y a todo lo que tire cajas
+   (Box of Kundun y similares), aprendiendo de los drops reales que levanta el loot.
+2. Detectar cuándo aparecen: aviso del server en el chat ("Invasión Dorada", "lluvia
+   de kundun"), temporizador de la invasión que muestra el juego, o tipos dorados en scope.
+3. Decidir con números si conviene desviarse: valor esperado de la caja + exp del dorado
+   frente a los minutos de ciclo que se pierden.
+4. Levantar las cajas (ya activo) y, más adelante, abrirlas y aprovechar lo que salga.
