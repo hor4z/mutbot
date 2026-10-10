@@ -50,7 +50,8 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
-      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
+      crowdRivals: 3, crowdMs: 20000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
