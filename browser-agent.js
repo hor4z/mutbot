@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -577,6 +577,22 @@
   }, 1000);
   // Ranking de spots aprendidos, para que el usuario vea qué aprendió.
   ai.spots = () => Object.fromEntries(Object.entries(ai.campHist).map(([m, l]) => [m, l.slice(0, 5).map((k) => `(${k.x},${k.z}) ${Math.round(k.rate / 1e6)}M/min lvl${k.level} n=${k.n}`)]));
+  // Registro de tramos por ciclo: minuto en que llega a cada nivel hito. Persiste en
+  // localStorage (`mubot-cycles:<pj>`) para comparar ciclos y proyectar resets/día.
+  const CYC_KEY = `mubot-cycles:${S.playerData?.name ?? 'pj'}`;
+  try { ai.cycleLog = old?.cycleLog ?? JSON.parse(localStorage.getItem(CYC_KEY) || '[]'); } catch { ai.cycleLog = []; }
+  ai.cur = old?.cur ?? { start: ai.cycleStart ?? Date.now(), marks: {} };
+  const MARKS = [20, 50, 100, 200, 300, 350, 400];
+  ai.segTimer = setInterval(() => {
+    const lvl = S.playerData?.level ?? 0;
+    if (ai.cycleStart && ai.cur.start !== ai.cycleStart) {
+      // Nuevo ciclo: cerrar el anterior.
+      if (ai.cur.marks[400]) { ai.cycleLog.push({ ...ai.cur, end: ai.cycleStart, min: +((ai.cycleStart - ai.cur.start) / 60000).toFixed(1) }); try { localStorage.setItem(CYC_KEY, JSON.stringify(ai.cycleLog.slice(-200))); } catch {} }
+      ai.cur = { start: ai.cycleStart, marks: {} };
+    }
+    for (const m of MARKS) if (lvl >= m && ai.cur.marks[m] == null && S.uiState === 5) { ai.cur.marks[m] = +((Date.now() - ai.cur.start) / 60000).toFixed(1); if (m >= 100) L(`tramo: nivel ${m} al minuto ${ai.cur.marks[m]}`); }
+  }, 2000);
+  ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks }));
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
