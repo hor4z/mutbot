@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -542,6 +542,20 @@
       if (cr !== seen) { seen = cr; since = Date.now(); return; }
       if (Date.now() - since > 1500) { W().castRequest = null; seen = null; ai.castStuck++; if (ai.castStuck % 10 === 1) L(`skill trabado descartado (${ai.castStuck})`); }
     }, 250); }
+  // Vigilante general: 30 s sin exp con monstruos vivos a <= 3 tiles = algo trabado.
+  // Reinicia objetivo, skill, ataque y campamento, sea cual sea la causa.
+  ai.unstuck = old?.unstuck ?? 0;
+  ai.idleWatch = setInterval(() => {
+    const w = W(), pe = w?.playerEntity; if (!pe || !ai.on || ai.busy || S.uiState !== 5 || S.sceneLoading) return;
+    const now = Date.now(), last = ai.expLog[ai.expLog.length - 1]?.t ?? 0;
+    if (now - last < 30000 || now - ai.lastWarp < 30000) return;
+    const P = pe.transform.pos; let close = 0;
+    for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && dist(P, e.transform.pos) <= 3) close++;
+    if (!close) return;
+    ai.unstuck++; L(`vigilante: 30 s sin exp con ${close} monstruo(s) al lado → reinicio objetivo/skill/campamento (${ai.unstuck})`);
+    w.castRequest = null; w.attackTarget = null; ai.target = null; ai.camp = null; ai.explore = null;
+    ai.expLog.push({ t: now, added: 0 }); // no volver a disparar en el próximo segundo
+  }, 3000);
   ai.deaths = old?.deaths ?? 0;
   let wasDead = false;
   ai.deathTimer = setInterval(() => { const dead = S.uiState === 5 && S.playerData.currentHP <= 0; if (dead && !wasDead) { ai.deaths++; L(`MUERTE #${ai.deaths} en mapa ${W().mapIndex}`); } wasDead = dead; }, 300);
