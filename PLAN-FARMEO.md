@@ -228,3 +228,11 @@ Tramo que decide: 300→400 (7,1 min, ~48% del ciclo).
 misma red/equipo (regla anti-multicliente). Sin cambiar esa regla del server (decisión
 del admin, afecta a todos), no hay party propio ni bot paralelo con otra cuenta desde
 esta máquina. No se intenta esquivar con VPN/proxys.
+
+## Prueba dúo vs solo (2026-10-10)
+
+Pregunta del usuario: ¿se gana más en dúo? Horaz espera a Melu para resetear
+(`partyWith` sostiene `resetLevel` en 999 hasta que el compañero llega a 400) y Melu
+resetea al mismo tiempo (`follower`). Desde ahí se mide el ciclo completo del dúo con
+`__ai.cycles` en las dos pestañas, contra los ciclos solo de Horaz (11–12 min).
+Melu atrae monstruos con Evil Spirit (`__pullSkill = 9`) y Horaz los toma con el giro.

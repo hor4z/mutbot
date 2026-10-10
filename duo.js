@@ -75,6 +75,10 @@
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.85 && now - lastPot > 400) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
       w.attackTarget = null;
       const h = read(leaderName); if (!h) return;
+      // Reset en dúo: el líder espera a que el seguidor llegue a 400 (partyWith); el seguidor
+      // resetea apenas los dos están en 400 o el líder ya reseteó, para arrancar el ciclo juntos
+      // y medir si el dúo rinde más que Horaz solo (ai.cycles en las dos pestañas).
+      if (pd.level >= (ai.cfg.resetLevel ?? 400) && !ai.busy && now > (ai.nextResetTry ?? 0) && (h.level >= 400 || h.level < 50)) { ai.doReset(); return; }
       // Atraer (usuario, 2026-10-10): con window.__pullSkill (Evil Spirit = 9) el seguidor lanza
       // el área cuando hay >= 2 monstruos a <= 6 tiles y está con el líder: se le vienen encima y,
       // como está en el mismo tile, el giro del líder los toma a todos juntos. Sin golpe normal.
@@ -108,6 +112,10 @@
     // tiles de él; la ruta y el estilo de farmeo del líder no cambian.
     const ai = window.__ai;
     if (ai && !ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(name); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
+    // Llegar los dos a 400 (usuario, 2026-10-10): el líder no resetea hasta que el compañero
+    // llegue a su nivel de reset; mientras tanto sigue farmeando en party para subirlo.
+    // Último nivel conocido si el compañero deja de publicar (no resetear por un relay viejo).
+    if (ai && !ai.cfg.__resetHeld) { const base = ai.cfg.resetLevel; let lastLvl = 0; Object.defineProperty(ai.cfg, 'resetLevel', { configurable: true, enumerable: true, get() { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); if (v?.level) lastLvl = v.level; } catch {} return lastLvl >= base ? base : 999; }, set(v) {} }); ai.cfg.__resetHeld = true; }
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
