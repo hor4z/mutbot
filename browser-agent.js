@@ -66,7 +66,9 @@
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
       // Solo en Devias (mapa 2). En Arena los buenos están ADENTRO, lejos de la llegada.
-      leashDist: 25, leashMaps: [2],
+      // Noria (3) también con correa: el pueblo es grande y salir a buscar monstruos lejos de la
+      // llegada es caminar mucho (usuario). Se pelea cerca de donde aparece.
+      leashDist: 25, leashMaps: [2, 3],
       // Campamento de arranque por mapa: en Lorencia los esqueletos de la cripta (salida
       // de arriba). Sin esto, el tope de hotMaxDist la descartaba (queda a ~100 tiles del
       // punto de aparición) y daba vueltas cerca del pueblo sin monstruos.
