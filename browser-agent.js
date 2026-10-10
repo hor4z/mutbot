@@ -214,7 +214,11 @@
       // máximo): un campamento con suerte subía la vara y hacía abandonar spots estables.
       // El usuario: "a veces conviene quedarse en un spot"; lo que importa es lo rentable sostenido.
       if (now - cp.since > c.campEvalMs && !cp.counted) { cp.counted = true; const prev = ai.campBest[map]; ai.campBest[map] = prev == null ? rate : prev * 0.7 + rate * 0.3; }
-      const poor = now - cp.since > c.campEvalMs && rate < (ai.campBest[map] ?? 0) * c.campMinFrac;
+      // Sin campamentos medidos en el mapa (campBest se borra en cada reset y al reinstalar), la
+      // vara es lo normal del tramo de nivel (tierRef): en Arena 3 quedó en un campamento vacío
+      // a ~60M/min (lo normal ~200M) porque "rinde poco" nunca daba verdadero.
+      const ref = ai.campBest[map] ?? ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0;
+      const poor = now - cp.since > c.campEvalMs && rate < ref * c.campMinFrac;
       const empty = now - cp.lastSeen > c.campEmptyMs;
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
       if (rivalsHere >= c.crowdRivals) cp.crowdSince ??= now; else cp.crowdSince = null;
