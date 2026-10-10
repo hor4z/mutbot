@@ -185,6 +185,7 @@
       const crowded = cp.crowdSince && now - cp.crowdSince > c.crowdMs;
       if (poor || empty || crowded) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
     }
+    if (!ai.camp && ai.arrivalPending) return ai.freePick(w, P, { ...c, scan: 6 });
     if (!ai.camp) {
       const found = ai.findCamp(w, P);
       const recentlyLeft = (p) => ai.leftCamps.some((l) => l.map === map && now - l.at < 120000 && dist(l, p) <= c.campRadius);
@@ -297,7 +298,9 @@
       // Punto de llegada del último warp (correa): se fija al terminar de cargar.
       if (ai.arrivalPending && Date.now() - ai.arrivalPending > 3000) {
         const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`);
-        if (c.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
+        // Un campamento elegido durante el warp (con monstruos del mapa anterior) fuera de la correa se descarta.
+        if (ai.camp && (ai.camp.map !== w.mapIndex || (ai.cfg.leashMaps.includes(w.mapIndex) && dist(ai.camp, ai.arrival) > ai.cfg.leashDist))) { L(`descarto campamento (${ai.camp.x},${ai.camp.z}): lejos de la llegada`); ai.camp = null; ai.explore = null; }
+        if (ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
       }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
