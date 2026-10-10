@@ -77,3 +77,11 @@ repite. Lo aprendido queda en el `localStorage` del navegador. La terminal se pu
 cargado. Si recargás la pestaña (F5), hay que volver a pegar la línea, con la terminal abierta.
 Para pararlo: `__ai.on = false` (y `__ai.on = true` para seguir). El log: `__ai.log.slice(-20)`.
 `bg-timers.js` evita que Chrome lo frene cuando la pestaña no está a la vista.
+
+### Que se cargue solo después de un deploy o un F5
+
+Instalá `mubot-loader.user.js` en Tampermonkey o Violentmonkey (abrir el archivo → instalar) y dejá
+corriendo `bun run agent`. Cada vez que la página del juego carga y el personaje entra al mundo, el
+script inyecta el agente solo. Si un deploy te manda al login, entrás vos y el bot sigue. Para jugar
+sin nadie durante horas, el camino es el bot sin navegador, que se reconecta solo con las
+credenciales del `.env`.
