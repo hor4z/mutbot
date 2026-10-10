@@ -201,6 +201,9 @@
       else return ai.freePick(w, P, c);
     }
     const cp = ai.camp;
+    // En camino al campamento: pelear con lo que esté a <= 6 tiles. Antes ignoraba todo lo
+    // que no estuviera dentro del campamento y cruzaba lugares buenos sin pegar (usuario).
+    if (dist(P, cp) > c.campRadius) { const near = ai.freePick(w, P, { ...c, scan: 6 }); if (near) return near; }
     const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
     if (t) cp.lastSeen = now;
     return t;
