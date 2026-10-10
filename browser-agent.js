@@ -44,18 +44,18 @@
     camp: null, campBest: old?.campBest ?? {}, leftCamps: [], visited: old?.visited ?? {},
     cfg: {
       // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
-      hpPot: 0.55, mpPot: 0.2, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      hpPot: 0.55, mpPot: 0.3, castRange: 6, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
-      campRadius: 10, campEvalMs: 90000, campEmptyMs: 25000, campMinFrac: 0.5,
+      campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
-      resetLevel: 400, statBatch: 200, build: [['str', 50], ['ene', 33], ['vit', 17]],
+      resetLevel: 400, statBatch: 200,
       // Ruta del usuario: Lorencia → Devias 2/3/4 (Devias 1 no sirve) → Arena 1-4.
       spots: [[2, 'Lorencia', 10], [5, 'Devias 2', 20], [6, 'Devias 3', 20], [7, 'Devias 4', 20], [1, 'Arena', 50], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]],
       // Spot = exp/min. Tras evalMs, si rinde menos que minFracOfBest del mejor conocido, se cambia.
-      evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 10000,
+      evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 8000,
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -186,12 +186,25 @@
     return null;
   };
   const say = (text) => { const name = new Uint8Array(10); name.set(new TextEncoder().encode(S.playerData.name).slice(0, 10)); const tb = new TextEncoder().encode(text); const b = new Uint8Array(13 + tb.length); b.set([0xc1, b.length, 0x00]); b.set(name, 3); b.set(tb, 13); S.sendToGS(new DataView(b.buffer)); L(`chat: ${text}`); };
+  // Reparto de puntos para el Dark Knight con Twisting Slash:
+  //   daño del skill ≈ daño base (fuerza/4) × (2 + energía/1000).
+  //   +1 fuerza → +0.25 × (2 + ene/1000);  +1 energía → (fuerza/4) × 0.001.
+  //   Rinden igual cuando energía ≈ fuerza − 2000. Debajo de eso, todo a energía;
+  //   arriba, mitad y mitad para mantener la relación. La vitalidad casi no aporta
+  //   (casi no se usan pociones); un 5% por las dudas.
+  // La energía no viene en playerData: se estima del maná (~1 de maná por punto,
+  // + medio por nivel; verificado al repartir 1000 de energía en el reset 3).
+  ai.planStats = (pts) => {
+    const pd = S.playerData, str = pd.str ?? 0, ene = Math.max(0, (pd.maxMP ?? 0) - 0.5 * (pd.level ?? 0));
+    const vit = Math.floor(pts * 0.05); let left = pts - vit;
+    const gap = Math.max(0, str - 2000 - ene);
+    const toEne1 = Math.min(left, gap); left -= toEne1;
+    const half = Math.floor(left / 2);
+    return [['ene', toEne1 + half], ['str', left - half], ['vit', vit]];
+  };
   ai.distribute = async () => {
     const pts = S.playerData.points; if (!pts) return;
-    const tot = ai.cfg.build.reduce((a, [, w]) => a + w, 0);
-    const plan = ai.cfg.build.map(([s, w]) => [s, Math.floor((pts * w) / tot)]);
-    plan[0][1] += pts - plan.reduce((a, [, n]) => a + n, 0);
-    for (const [s, n] of plan) if (n > 0) { say(`/add ${s} ${n}`); await sleep(2600); }
+    for (const [s, n] of ai.planStats(pts)) if (n > 0) { say(`/add ${s} ${n}`); await sleep(2600); }
   };
   ai.doReset = async () => {
     ai.busy = true; W().attackTarget = null;
@@ -211,7 +224,8 @@
       const cycleMin = ai.cycleStart ? (Date.now() - ai.cycleStart) / 60000 : null;
       ai.cycles = ai.cycles ?? []; if (cycleMin) ai.cycles.push(Math.round(cycleMin));
       ai.cycleStart = Date.now();
-      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.spotScore = {}; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
+      // Lo que rinde cada mapa se conserva: Arena 1 no sirve en ningún ciclo.
+      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }
@@ -267,7 +281,7 @@
         ai.lastMonster = ai.mapNoMonsterSince = now;
         if (w.attackTarget !== ai.target) w.attackTarget = ai.target;
         const tp = ai.target.transform.pos;
-        if (!w.castRequest && pd.currentMP / pd.maxMP >= c.skillMinMp && dist(P, tp) <= 4) w.castRequest = { target: ai.target, point: { x: tp.x, y: tp.z }, forced: false };
+        if (!w.castRequest && pd.currentMP / pd.maxMP >= c.skillMinMp && dist(P, tp) <= c.castRange) w.castRequest = { target: ai.target, point: { x: tp.x, y: tp.z }, forced: false };
         return;
       }
       const arrived = ai.explore && dist(P, ai.explore) < 4;
