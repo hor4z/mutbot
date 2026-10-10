@@ -39,6 +39,7 @@
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
   if (window.__hunt?.pollTimer) window.clearInterval(window.__hunt.pollTimer);
+  if (window.__hunt?.lingerTimer) window.clearInterval(window.__hunt.lingerTimer);
   const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
@@ -138,6 +139,13 @@
 
   // Cada 2 s: leer avisos; si hay uno nuevo y no estamos peleando un dorado, ir ya (no esperar a
   // terminar de caminar hacia la celda actual).
+  // Al llegar a una zona del barrido sin dorados, seguir YA: el agente espera 20 s en cada destino
+  // (sirve en un campamento para el respawn; cazando, Horaz "se movía y paraba").
+  h.lingerTimer = window.setInterval(() => {
+    const pe = W()?.playerEntity; if (!h.on || !pe || !ai.explore?.kind?.startsWith('hunter') || ai.target) return;
+    if (dist(pe.transform.pos, ai.explore) < 4) { ai.explore = null; ai.arrivedAt = 0; }
+  }, 500);
+  (window.__mubotTimers ??= []).push(h.lingerTimer);
   h.pollTimer = window.setInterval(() => {
     if (!h.on) return; pollGold();
     const w = W(), pe = w?.playerEntity; if (!pe || (ai.target && isGold(ai.target))) return;
