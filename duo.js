@@ -11,6 +11,7 @@
  *   Líder:     __duo.leader('Melu')      // farmea normal, solo en mapas que el seguidor
  *                                        // puede entrar, a <= 10 tiles de él; lo invita a party
  *   Seguidor:  __duo.follower('Horaz')   // NO ataca: sigue al líder a <= 4 tiles, mismo
+ *   window.__pullSkill = 9                // opcional: el seguidor tira Evil Spirit para atraer monstruos al líder
  *                                        // warp, pociones y reparto de puntos; acepta su party
  */
 (() => {
@@ -67,13 +68,22 @@
     if (!window.__duoSendWrapped) { const orig = S.sendToGS.bind(S); S.sendToGS = (dv) => { try { const b = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength); if (window.__acceptPartyFrom && b[0] === 0xc1 && b[2] === 0x41 && b[3] === 0x00) return; } catch {} return orig(dv); }; window.__duoSendWrapped = true; }
     if (!window.__duoAcceptHooked) { __eventBus.on('PartyRequest', (raw) => { try { const dv = raw instanceof DataView ? raw : new DataView(raw.buffer ?? raw); const id = dv.getUint16(3, false) & 0x7fff; setTimeout(() => S.sendToGS(new DataView(Uint8Array.from([0xc1, 0x06, 0x41, 0x01, id >> 8, id & 0xff]).buffer)), 500); } catch {} }); window.__duoAcceptHooked = true; }
     const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
-    let lastWarp = 0, lastPot = 0;
+    let lastWarp = 0, lastPot = 0, lastPull = 0;
     every(() => {
       const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe || S.uiState !== 5 || S.sceneLoading) return;
       const now = Date.now();
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.85 && now - lastPot > 400) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
-      w.attackTarget = null; w.castRequest = null;
+      w.attackTarget = null;
       const h = read(leaderName); if (!h) return;
+      // Atraer (usuario, 2026-10-10): con window.__pullSkill (Evil Spirit = 9) el seguidor lanza
+      // el área cuando hay >= 2 monstruos a <= 6 tiles y está con el líder: se le vienen encima y,
+      // como está en el mismo tile, el giro del líder los toma a todos juntos. Sin golpe normal.
+      const pull = window.__pullSkill;
+      if (pull && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 2 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 1500) {
+        const P = pe.transform.pos; let n = 0, near = null;
+        for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; if (dist(P, e.transform.pos) <= 6) { n++; near ??= e; } }
+        if (n >= 2 && !w.castRequest) { if (S.currentSkill !== pull) S.selectSkill(pull); const tp = near.transform.pos; w.castRequest = { target: near, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
+      } else if (!pull) w.castRequest = null;
       // Si el líder está en un mapa que el seguidor no puede entrar (nivel), esperar en
       // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
       // window.__followMaxReq: tope de mapa por seguridad (Melu murió 5 veces en Arena 3 sin
