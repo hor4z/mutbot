@@ -13,8 +13,8 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
 - **Nunca tipear contraseñas en el navegador.** Si la pestaña no está logueada o está en la pantalla
   de login, pedirle al usuario que entre él con el personaje y avisar cuando esté.
 - **Una sola sesión por cuenta:** no correr `bun run bot` con la misma cuenta que está abierta en el navegador.
-- **No cargar `duo.js` ni `hunter.js`:** están en pausa por pedido del usuario ("que no afecten el farmeo").
-  Solo si los pide explícitamente.
+- **`hunter.js` sí** (desde 2026-10-10, pedido del usuario): caza la invasión dorada sola al principio
+  del ciclo y vuelve a farmear. **`duo.js` no**: en pausa; solo si lo pide.
 - **Ritmo humano:** no tocar animaciones, cooldowns ni velocidad de packets.
 
 ## Pasos
@@ -31,10 +31,10 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
      personaje si ya está cargado; si no, cargarlo igual: lo hace él).
    - Sin `__store` o en login: pedirle al usuario que entre (no tipear credenciales).
 
-3. **Cargar el agente** (orden: bg-timers → agente → autoajuste). En la pestaña:
+3. **Cargar el agente** (orden: bg-timers → agente → autoajuste → cazador). En la pestaña:
    ```js
    window.__mubotOut = 'pending';
-   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
+   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
    ```
    `javascript_tool` no espera promesas: leer `window.__mubotOut` en la llamada siguiente.
    - Si `__ai.busy` es true (reseteando/repartiendo), esperar a que termine antes de recargar.
