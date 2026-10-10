@@ -103,7 +103,9 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const hpOf = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
   const alive = (e) => e && !e.dying && !e.objOutOfScope && W().getByNetId(e.netId) === e && hpOf(e) > 0;
-  ai.isMonster = (e) => e.npcType !== undefined && !e.localPlayer && !(e.npcType >= 200 && e.npcType < 300);
+  // Invocaciones de otros jugadores ("Elite Yeti of AltoElfo", elfo): no se les puede pegar.
+  // Horaz quedó 2 min en Lorencia golpeando una y reiniciando el vigilante.
+  ai.isMonster = (e) => e.npcType !== undefined && !e.localPlayer && !(e.npcType >= 200 && e.npcType < 300) && !/ of \S+$/.test(String(e.objectNameInWorld ?? ''));
   const dist = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.z - b.z));
   const potionSlot = (lo, hi) => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= lo && x.num <= hi && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const walkable = (w, x, z) => x > 3 && z > 3 && x < 252 && z < 252 && w.isWalkable(x, z);
