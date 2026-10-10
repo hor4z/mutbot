@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -533,6 +533,15 @@
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false };
   }, 50);
+  // Vigilante de skills trabados: a veces el cliente no consume un castRequest y, como no
+  // pega golpes normales mientras hay uno pendiente, el personaje queda quieto entre los
+  // monstruos (pasó en Arena 2: 3 min sin exp). Si dura > 1,5 s sin consumirse, se descarta.
+  { let seen = null, since = 0; ai.castStuck = old?.castStuck ?? 0;
+    ai.castWatch = setInterval(() => {
+      const cr = W()?.castRequest; if (!cr) { seen = null; return; }
+      if (cr !== seen) { seen = cr; since = Date.now(); return; }
+      if (Date.now() - since > 1500) { W().castRequest = null; seen = null; ai.castStuck++; if (ai.castStuck % 10 === 1) L(`skill trabado descartado (${ai.castStuck})`); }
+    }, 250); }
   ai.deaths = old?.deaths ?? 0;
   let wasDead = false;
   ai.deathTimer = setInterval(() => { const dead = S.uiState === 5 && S.playerData.currentHP <= 0; if (dead && !wasDead) { ai.deaths++; L(`MUERTE #${ai.deaths} en mapa ${W().mapIndex}`); } wasDead = dead; }, 300);
