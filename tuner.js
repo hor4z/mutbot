@@ -31,13 +31,15 @@
     // 0 = perseguir objetivos en todo el campamento, 1 = ancla (esperar que se acerquen)
     anchor: { min: 0, max: 1, step: 1 },
   };
-  const WINDOW_MS = 180000, PAIRS = 2, MIN_GAIN = 0.05;
+  // 90 s: con ventanas de 3 min un experimento (12 min) no entraba en el tramo alto de un
+  // ciclo (~7 min) y el reset lo cancelaba siempre: en 8 ciclos no terminó ninguno.
+  const WINDOW_MS = 90000, PAIRS = 2, MIN_GAIN = 0.05;
   // Aplicar lo aprendido en sesiones anteriores.
   if (saved.best) Object.assign(ai.cfg, saved.best);
-  const t = (ai.tuner = { history: saved.history ?? [], exp: null, timer: null });
+  const t = (ai.tuner = { history: saved.history ?? [], exp: saved.exp ?? null, timer: null });
   const expSince = (a, b) => ai.expLog.filter((x) => x.t >= a && x.t < b).reduce((s, x) => s + x.added, 0);
   const pick = (o) => Object.fromEntries(Object.keys(SPACE).map((k) => [k, o[k]]));
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ best: pick(ai.cfg), history: t.history.slice(-200) })); } catch {} };
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ best: pick(ai.cfg), history: t.history.slice(-200), exp: t.exp })); } catch {} };
   const propose = () => {
     // La primera prueba: acampar vs recorrer (la duda del usuario).
     // Primero las dos dudas grandes de dinámica: ancla vs perseguir, y acampar vs recorrer.
@@ -63,13 +65,15 @@
     // Un experimento a la vez: esperar a que termine el de skills (skill-ab.js).
     if (ai.skillAB && !ai.skillAB.done) { if (t.exp) { ai.cfg[t.exp.key] = t.exp.from; t.exp = null; } return; }
     // Solo en la fase larga (>=200): ahí se juega el ciclo; antes los mapas cambian demasiado.
-    if ((S.playerData.level ?? 0) < 200) { if (t.exp) { ai.cfg[t.exp.key] = t.exp.from; t.exp = null; } return; }
+    // Debajo de 200 se PAUSA (no se cancela): sigue en el tramo alto del ciclo siguiente.
+    if ((S.playerData.level ?? 0) < 200) { if (t.exp) { ai.cfg[t.exp.key] = t.exp.from; t.exp.paused = true; } return; }
+    if (t.exp?.paused) { t.exp.paused = false; t.exp.winStart = Date.now(); ai.cfg[t.exp.key] = t.exp.arm === 'A' ? t.exp.from : t.exp.to; }
     if (!t.exp) return start();
     const e = t.exp, now = Date.now();
     if (now - e.winStart < WINDOW_MS) return;
     // Cerrar ventana: exp/min del brazo activo (si hubo warp/muerte, igual cuenta: es parte del costo).
     e.windows.push({ arm: e.arm, rate: (expSince(e.winStart, now) / (now - e.winStart)) * 60000 });
-    e.arm = e.arm === 'A' ? 'B' : 'A';
+    e.arm = e.arm === 'A' ? 'B' : 'A'; save();
     ai.cfg[e.key] = e.arm === 'A' ? e.from : e.to;
     e.winStart = now;
     const A = e.windows.filter((w) => w.arm === 'A'), B = e.windows.filter((w) => w.arm === 'B');
