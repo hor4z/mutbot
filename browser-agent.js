@@ -236,10 +236,12 @@
   };
   ai.nextGoal = (P, w) => {
     const now = Date.now();
+    // Modo recorrida: sin campamento (si no, la memoria y el campamento se pisaban).
+    if (ai.cfg.roam) ai.camp = null;
     // En el campamento: quedarse esperando el respawn, nunca salir a cruzar el mapa.
     if (ai.camp && ai.camp.map === w.mapIndex) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
     const sc = ai.cfg.startCamp[w.mapIndex];
-    if (sc && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
+    if (sc && !ai.cfg.roam && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
     // Spots conocidos solo si están cerca (hotMaxDist): Devias 1-4 son el MISMO mapa con
     // entradas en puntas opuestas; sin este tope cruzaba todo el mapa sin pelear.
     const inLeash = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(p, ai.arrival) <= ai.cfg.leashDist;
@@ -576,7 +578,7 @@
       }
     }
     lastCamp = cur;
-    if (!cur && !ai.target && ai.on && !ai.busy) {
+    if (!cur && !ai.target && ai.on && !ai.busy && !ai.cfg.roam) {
       const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
       const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => (!ai.arrival || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(c, ai.arrival) <= ai.cfg.leashDist) && dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
       cands.sort((a, b) => b.rate / (1 + dist(b, P) / 12) - a.rate / (1 + dist(a, P) / 12));
