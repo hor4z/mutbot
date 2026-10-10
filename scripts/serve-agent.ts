@@ -7,7 +7,7 @@
  * Solo escucha en loopback.
  */
 const ROOT = new URL('..', import.meta.url).pathname;
-const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js']);
+const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js']);
 const CORS = {
   'Access-Control-Allow-Origin': 'https://mu.mormon.garden',
   'Access-Control-Allow-Private-Network': 'true',
