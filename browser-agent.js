@@ -63,6 +63,10 @@
       spots: [[2, 'Lorencia', 10], [6, 'Devias 3', 20], [7, 'Devias 4', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]],
       // Spot = exp/min. Tras evalMs, si rinde menos que minFracOfBest del mejor conocido, se cambia.
       evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 8000,
+      // Ruta fija: cambiar de mapa solo al cruzar el nivel de un tramo nuevo o si el
+      // mapa se queda sin monstruos. Probar mapas "a ver si rinden más" costaba más
+      // en warps y cargas de lo que ganaba (el usuario lo vio en pantalla).
+      fixedRoute: true,
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -277,15 +281,18 @@
       const tier = Math.max(...eligible.map((s) => s[2]));
       const newTier = tier > ai.tierSeen;
       const mapDead = now - ai.mapNoMonsterSince > c.giveUpMapMs;
-      const poor = run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
+      const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (now - ai.lastWarp > 15000 && eligible.length && (!run || newTier || mapDead || poor)) {
         ai.tierSeen = tier;
         const others = eligible.filter((s) => s[0] !== ai.spot);
         const untried = others.filter((s) => ai.spotScore[s[0]] === undefined).sort((a, b) => b[2] - a[2]);
         const tried = others.filter((s) => ai.spotScore[s[0]] !== undefined).sort((a, b) => ai.spotScore[b[0]] - ai.spotScore[a[0]]);
         const curScore = run ? kpm : -1;
-        const to = newTier ? eligible.filter((s) => s[2] === tier && s[0] !== ai.spot)[0] ?? untried[0] : untried[0] ?? (tried[0] && ai.spotScore[tried[0][0]] > curScore ? tried[0] : null);
-        if (to) {
+        const to = c.fixedRoute
+          ? (newTier || !run ? eligible.filter((s) => s[2] === tier)[0] : others.filter((s) => s[2] === tier)[0] ?? null)
+          : newTier ? eligible.filter((s) => s[2] === tier && s[0] !== ai.spot)[0] ?? untried[0] : untried[0] ?? (tried[0] && ai.spotScore[tried[0][0]] > curScore ? tried[0] : null);
+        if (to && to[0] === ai.spot && !mapDead) { ai.tierSeen = tier; }
+        else if (to) {
           const why = !run ? 'inicio' : newTier ? `nuevo nivel de mapa (${tier})` : mapDead ? 'mapa sin monstruos' : `rinde poco (${Math.round(kpm)} exp/min vs mejor ${Math.round(bestKnown)})`;
           ai.lastWarp = now; ai.spot = to[0]; ai.target = null; w.attackTarget = null; ai.explore = null; ai.mapNoMonsterSince = ai.lastMonster = now; ai.scoutIdx = 0;
           ai.spotRun = { spot: to[0], start: now + 8000, kills0: ai.kills };
