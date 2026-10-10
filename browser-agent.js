@@ -459,6 +459,8 @@
   ai.isValuable = (di) => {
     if (!di || di.isMoney) return false;
     if (di.item?.isExcellent) return true;
+    // Guantes del set de Horaz (10/1): le faltan y completan el set (casco 7/1, armadura 8/1, pantalón 9/1, botas 11/1).
+    if (di.group === 10 && di.num === 1) return true;
     return (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) || (di.group === 12 && di.num === 15);
   };
   ai.lootCount = old?.lootCount ?? 0;
