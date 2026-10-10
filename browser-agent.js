@@ -57,6 +57,12 @@
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
       // Solo en Devias (mapa 2). En Arena los buenos están ADENTRO, lejos de la llegada.
       leashDist: 25, leashMaps: [2],
+      // Arenas (83/84/85 = Arena 2/3/4): la zona de abajo y por fuera en pantalla (+x, -z)
+      // está llena de monstruos de mucha exp (125/126/127 dan ~1.6M en <2 s a nivel 240).
+      // El usuario la señaló; al llegar se va directo ahí.
+      preferDownMaps: [83, 84, 85],
+      // Curiosidad: atacar primero tipos con < curiosityKills kills medidos a <= curiosityRadius.
+      curiosityRadius: 8, curiosityKills: 3,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -182,6 +188,18 @@
     if (t) cp.lastSeen = now;
     return t;
   };
+  // Centro de los puntos caminables más "abajo" en pantalla (máxima proyección x − z).
+  ai.downZoneCache = {};
+  ai.downZone = (w) => {
+    if (ai.downZoneCache[w.mapIndex]) return ai.downZoneCache[w.mapIndex];
+    const pts = [];
+    for (let x = 4; x < 252; x += 3) for (let z = 4; z < 252; z += 3) if (w.isWalkable(x, z)) pts.push({ x, z, s: x - z });
+    if (!pts.length) return null;
+    pts.sort((a, b) => b.s - a.s); const top = pts.slice(0, 40);
+    const cx = top.reduce((a, p) => a + p.x, 0) / top.length, cz = top.reduce((a, p) => a + p.z, 0) / top.length;
+    const g = top.reduce((b, p) => (Math.abs(p.x - cx) + Math.abs(p.z - cz) < Math.abs(b.x - cx) + Math.abs(b.z - cz) ? p : b));
+    return (ai.downZoneCache[w.mapIndex] = { x: g.x, z: g.z });
+  };
   ai.nextGoal = (P, w) => {
     const now = Date.now();
     // En el campamento: quedarse esperando el respawn, nunca salir a cruzar el mapa.
@@ -267,7 +285,10 @@
       if (S.sceneLoading) { ai.lastMonster = ai.mapNoMonsterSince = Date.now(); return; }
       const w = W(), pe = w?.playerEntity; if (!pe) return;
       // Punto de llegada del último warp (correa): se fija al terminar de cargar.
-      if (ai.arrivalPending && Date.now() - ai.arrivalPending > 3000) { const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`); }
+      if (ai.arrivalPending && Date.now() - ai.arrivalPending > 3000) {
+        const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`);
+        if (c.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
+      }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
@@ -384,6 +405,20 @@
       if (sc > bs) { bs = sc; best = { x, z, kind: 'ronda' }; }
     }
     return best ?? campGoal(P, w);
+  };
+  // Curiosidad (pedido del usuario: "golpeá a cada monstruo que te cruces para probar
+  // sus características"): tipos con pocos kills medidos van primero si están cerca.
+  ai.typeKills = old?.typeKills ?? {};
+  { let lastId = null; __eventBus.on('experienceGained', (p) => { const a = window.__ai; if (a !== ai || !p?.killedNetId || p.killedNetId === lastId) return; lastId = p.killedNetId; const info = a.netInfo.get(p.killedNetId); if (info) a.typeKills[info.type] = (a.typeKills[info.type] ?? 0) + 1; }); }
+  const plannedPick = ai.pickTarget;
+  ai.pickTarget = (w, P, c) => {
+    let best = null, bd = 1e9;
+    for (const e of w.byNetId.values()) {
+      if (!ai.isMonster(e) || !alive(e) || (ai.typeKills[e.npcType] ?? 0) >= c.curiosityKills) continue;
+      const d = dist(P, e.transform.pos); if (d <= c.curiosityRadius && d < bd) { bd = d; best = e; }
+    }
+    if (best) { ai.netInfo.set(best.netId, { type: best.npcType, x: best.transform.pos.x, z: best.transform.pos.z }); return best; }
+    return plannedPick(w, P, c);
   };
   ai.densityTimer = setInterval(() => {
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
