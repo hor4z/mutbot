@@ -139,3 +139,24 @@ La exp de un ciclo está ~90% arriba del 255. El presupuesto sale de eso:
 
 Criterio para pasar a "otras dinámicas" (party, eventos, equipo): **3 ciclos
 seguidos con fight ≥ 90%, 0 muertes y tramo 300→400 estable** (variación < 10%).
+
+## 10. Roadmap: otras dinámicas (después de pulir farmeo y reset)
+
+Pedidas por el usuario el 2026-10-10. Van después del criterio de §9.
+
+1. **Eventos.** Devil Square (Horaz tiene 4 invitaciones, 14/19 nivel 1 a 4), Blood
+   Castle y Chaos Castle: el juego muestra los temporizadores. Ir cuando abren si el
+   evento da más exp/min que el farmeo del momento. Medir exp por evento.
+2. **Invasión dorada (cada hora) y "lluvia de Kundun".** Leer el aviso del server
+   en el chat e ir. Monstruos dorados: mucha exp y Box of Kundun.
+3. **Cazar dragones y criaturas especiales** (jefes, dorados, Kundun): detectar por
+   TypeNumber cuando aparecen en scope y priorizarlos si su exp/s lo justifica.
+4. **Mejorar armas y equipo en la Máquina de Chaos.** Hoy: arma +15 exc (tope),
+   alas 12/5 +9, armadura exc +11, resto +13. Mayor impacto: alas +10..+13 (riesgo
+   de destruirlas si falla; ver Talisman of Luck). Juntar joyas con el loot.
+5. **Skill según la situación.** Grupo → el AoE ganador del A/B (41/42/alternado);
+   monstruo duro solo → Death Stab (43). Siempre al ritmo del cliente.
+6. **Anillo de transformación (Elite Skeleton)** y otros bonus: A/B con y sin.
+7. **Reset antes del 400** si el server lo permite: averiguar reglas (nivel, puntos,
+   zen, grand reset). Del 350 al 400 se va casi la mitad de la exp del ciclo.
+8. **Benchmark** con el ranking público (`/api/ranking`): techo realista de resets/día.
