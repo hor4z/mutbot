@@ -5,7 +5,7 @@
   "scripts": {
     "bot": "bun run headless-bot.ts",
     "proxy": "bun run proxy.ts",
-    "test": "bun run packet-tests.ts && bun run learning-tests.ts && bun run explore-tests.ts",
+    "test": "bun run packet-tests.ts && bun run learning-tests.ts && bun run explore-tests.ts && bun run farming-tests.ts",
     "tsc": "tsc --noEmit",
     "extract": "bun run extract-packets.ts"
   },

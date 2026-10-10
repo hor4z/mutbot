@@ -16,10 +16,13 @@
 export const EXPLORE = {
   // Lado de la celda de la grilla de spots calientes, en tiles.
   CELL: 12,
-  // Una celda que se encontró vacía no se vuelve a probar hasta pasado esto.
-  EMPTY_COOLDOWN_MS: 2 * 60_000,
-  // Al llegar a una celda caliente se espera esto a que aparezca algo.
-  HOT_WAIT_MS: 8_000,
+  // Una celda que se encontró vacía no se vuelve a probar hasta pasado esto
+  // (90 s, como el agente web).
+  EMPTY_COOLDOWN_MS: 90_000,
+  // Al llegar a una celda caliente se espera esto a que respawneen (30 s, como
+  // el agente web: acampar en el spot rinde más que salir a explorar; con 8 s
+  // el bot abandonaba spots buenos justo antes del respawn).
+  HOT_WAIT_MS: 30_000,
   // Al llegar a una "salida" se espera esto antes de abandonar la dirección.
   EXIT_WAIT_MS: 20_000,
   // Distancia (Chebyshev) para considerar que se llegó a un objetivo.
@@ -62,11 +65,13 @@ export function isMonsterType(type: number, knownMonsters: ReadonlySet<number>):
 }
 
 // ---------------------------------------------------------------------------
-// Grilla de spots calientes: cada vez que se elige un objetivo se anota su
-// celda (por mapa). Cuando no hay nada en scope, se va primero a la celda con
-// más conteo que no haya estado vacía en los últimos EMPTY_COOLDOWN_MS.
+// Grilla de spots calientes: cada exp ganada por un kill se suma a la celda
+// (por mapa) donde estaba el monstruo. Un spot vale por lo que RINDE, no por
+// cuántos bichos tiene (así lo hace el agente web). Cuando no hay nada en
+// scope, se va primero a la celda con más exp acumulada que no haya estado
+// vacía en los últimos EMPTY_COOLDOWN_MS.
 // ---------------------------------------------------------------------------
-export type HotCell = { map: number; cx: number; cy: number; count: number; emptyAt: number };
+export type HotCell = { map: number; cx: number; cy: number; exp: number; emptyAt: number };
 
 const chebyshev = (ax: number, ay: number, bx: number, by: number) => Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 
@@ -89,12 +94,27 @@ export class HotSpotGrid {
     return { x: c.cx * this.p.CELL + half, y: c.cy * this.p.CELL + half };
   }
 
-  record(map: number, x: number, y: number) {
+  // Suma `exp` a la celda de (x, y). Un registro nuevo también la "despierta"
+  // (rindió recién: deja de contar como vacía).
+  record(map: number, x: number, y: number, exp = 1) {
     const [cx, cy] = this.cellOf(x, y);
     const k = this.key(map, cx, cy);
-    const c = this.cells.get(k) ?? { map, cx, cy, count: 0, emptyAt: -Infinity };
-    c.count++;
+    const c = this.cells.get(k) ?? { map, cx, cy, exp: 0, emptyAt: -Infinity };
+    c.exp += exp;
+    c.emptyAt = -Infinity;
     this.cells.set(k, c);
+  }
+
+  // Para persistir/restaurar (sobrevive a resets y reinicios del bot).
+  dump(): HotCell[] {
+    return [...this.cells.values()].map((c) => ({ ...c, emptyAt: -Infinity }));
+  }
+
+  load(cells: ReadonlyArray<Omit<HotCell, 'emptyAt'>>) {
+    for (const c of cells) {
+      if (![c.map, c.cx, c.cy, c.exp].every(Number.isFinite)) continue;
+      this.cells.set(this.key(c.map, c.cx, c.cy), { map: c.map, cx: c.cx, cy: c.cy, exp: c.exp, emptyAt: -Infinity });
+    }
   }
 
   markEmpty(map: number, cx: number, cy: number, now: number) {
@@ -106,7 +126,7 @@ export class HotSpotGrid {
     return this.cells.get(this.key(map, cx, cy));
   }
 
-  // La celda con más conteo del mapa que no esté "vacía" recientemente.
+  // La celda con más exp del mapa que no esté "vacía" recientemente.
   // Desempate: la más cercana a (fromX, fromY).
   pick(map: number, now: number, fromX = 0, fromY = 0): HotCell | null {
     let best: HotCell | null = null;
@@ -115,7 +135,7 @@ export class HotSpotGrid {
       if (c.map !== map || now - c.emptyAt < this.p.EMPTY_COOLDOWN_MS) continue;
       const ctr = this.center(c);
       const d = chebyshev(fromX, fromY, ctr.x, ctr.y);
-      if (!best || c.count > best.count || (c.count === best.count && d < bestDist)) {
+      if (!best || c.exp > best.exp || (c.exp === best.exp && d < bestDist)) {
         best = c;
         bestDist = d;
       }
@@ -249,9 +269,9 @@ export class Explorer {
     this.lastMonsterAt = now;
   }
 
-  // Se eligió un objetivo: anota el spot caliente y "hay monstruos".
-  onTarget(map: number, x: number, y: number, now: number) {
-    this.hot.record(map, x, y);
+  // Un kill dio `exp` con el monstruo en (x, y): suma a su celda caliente.
+  onExp(map: number, x: number, y: number, exp: number, now: number) {
+    this.hot.record(map, x, y, exp);
     this.sawMonster(now);
   }
 

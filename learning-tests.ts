@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  LEARN, SpotMeter, aggregate, chooseSpot, eligibleSpots, formatSpotTable, activeDryExclusions,
+  LEARN, ROUTE, SpotMeter, aggregate, chooseSpot, chooseRouteSpot, routeScores, eligibleSpots, formatSpotTable, activeDryExclusions,
   loadLearning, saveLearningChar, parseLearning, sampleWeight,
   type Spot, type SpotSample,
 } from './learning';
@@ -171,6 +171,16 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
     try { parseLearning('[]'); } catch { threw = true; }
     ok('parse: forma inválida lanza (load la trata como corrupta)', threw);
 
+    await saveLearningChar(path, 'Farm', {
+      resets: 1, samples: [],
+      hot: [{ map: 2, cx: 5, cy: 6, exp: 12345 }],
+      types: { expByType: { 14: 900 }, killSecByType: { 14: 2.5 } },
+    });
+    await writeFile(path, (await readFile(path, 'utf8')).replace('"exp": 12345', '"exp": 12345}, {"map": "x"'));
+    const farm = (await loadLearning(path)).data.chars.Farm;
+    ok('save/load: spots calientes y exp/segundos por tipo (descarta celdas mal formadas)',
+       farm.hot?.length === 1 && farm.hot[0].exp === 12345 && farm.types?.expByType[14] === 900 && farm.types.killSecByType[14] === 2.5, farm);
+
     const many = Array.from({ length: LEARN.MAX_SAMPLES + 10 }, (_, i) => sample(13, 1, i));
     await saveLearningChar(path, 'Big', { resets: 0, samples: many });
     const big = (await loadLearning(path)).data.chars.Big.samples;
@@ -178,6 +188,59 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+// --- Ruta de spots del usuario (chooseRouteSpot) ------------------------------
+{
+  const ROUTE_SPOTS: Spot[] = [
+    { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000 },
+    { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
+    { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500 },
+    { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
+    { index: 1, name: 'Arena', reqLevel: 50, zen: 0 },
+    { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0 },
+  ];
+  const sp = (i: number) => ROUTE_SPOTS.find((s) => s.index === i)!;
+  const rb = { spots: ROUTE_SPOTS, allowed: null, stayMs: 0, stayExp: 0, scores: new Map<number, number>(), tierSeen: 0 };
+
+  let c = chooseRouteSpot({ ...rb, level: 15, current: null });
+  ok('ruta: inicio en nivel 15 → Lorencia', c.spot?.index === 2 && c.reason === 'start' && c.tier === 10, c);
+  c = chooseRouteSpot({ ...rb, level: 5, current: null });
+  ok('ruta: nivel 5, nada elegible', c.spot === null && c.reason === 'none', c);
+  c = chooseRouteSpot({ ...rb, level: 20, current: sp(2), stayMs: 10 * MIN, stayExp: 1000, tierSeen: 10 });
+  ok('ruta: tier nuevo (20) → prueba Devias 2 aunque Lorencia rinda', c.spot?.index === 5 && c.reason === 'new-tier' && c.tier === 20, c);
+  c = chooseRouteSpot({ ...rb, level: 25, current: sp(5), stayMs: 1 * MIN, stayExp: 0, tierSeen: 20, scores: new Map([[2, 500]]) });
+  ok('ruta: < 2 min en el spot, se queda midiendo', c.spot?.index === 5 && c.reason === 'stay', c);
+  c = chooseRouteSpot({ ...rb, level: 25, current: sp(5), stayMs: ROUTE.EVAL_MS, stayExp: 800, tierSeen: 20, scores: new Map([[2, 500]]) });
+  ok('ruta: rinde >= 50% del mejor, se queda', c.spot?.index === 5 && c.reason === 'stay' && c.curRate === 400, c);
+  c = chooseRouteSpot({ ...rb, level: 25, current: sp(5), stayMs: ROUTE.EVAL_MS, stayExp: 200, tierSeen: 20, scores: new Map([[2, 500], [5, 100]]) });
+  ok('ruta: rinde < 50% del mejor tras 2 min → prueba uno sin medir (Devias 3)', c.spot?.index === 6 && c.reason === 'poor', c);
+  c = chooseRouteSpot({ ...rb, level: 25, current: sp(5), stayMs: ROUTE.EVAL_MS, stayExp: 200, tierSeen: 20,
+    scores: new Map([[2, 500], [5, 100], [6, 50], [7, 80]]) });
+  ok('ruta: todos medidos → el mejor medido si supera al actual', c.spot?.index === 2 && c.reason === 'poor', c);
+  c = chooseRouteSpot({ ...rb, level: 25, current: sp(5), stayMs: ROUTE.EVAL_MS, stayExp: 0, tierSeen: 20,
+    scores: new Map([[2, 0], [6, 0], [7, 0]]) });
+  ok('ruta: rinde 0 y nada mejor → se queda y vuelve a medir', c.spot?.index === 5 && c.reason === 'stay' && c.restartEval, c);
+  c = chooseRouteSpot({ ...rb, level: 60, current: sp(7), stayMs: 30 * MIN, stayExp: 30000, tierSeen: 20 });
+  ok('ruta: nivel 50+ → Arena', c.spot?.index === 1 && c.reason === 'new-tier', c);
+  c = chooseRouteSpot({ ...rb, level: 60, current: sp(1), stayMs: 0, stayExp: 0, tierSeen: 0 });
+  ok('ruta: ya en el spot del tier nuevo (--warp) → se queda', c.spot?.index === 1 && c.reason === 'stay' && c.tier === 50, c);
+  c = chooseRouteSpot({ ...rb, level: 60, current: null, tierSeen: 50, scores: new Map([[1, 900], [7, 300]]) });
+  ok('ruta: sin spot (murió) y sin tier nuevo → el mejor medido', c.spot?.index === 1 && c.reason === 'start', c);
+  c = chooseRouteSpot({ ...rb, level: 60, current: sp(1), stayMs: 1 * MIN, stayExp: 0, tierSeen: 50, exclude: new Set([1]) });
+  ok('ruta: mapa seco → cambia aunque no hayan pasado 2 min', c.spot != null && c.spot.index !== 1 && c.reason === 'dry', c);
+  c = chooseRouteSpot({ ...rb, level: 60, current: sp(1), allowed: new Set([1]), stayMs: 1 * MIN, stayExp: 0, tierSeen: 50, exclude: new Set([1]) });
+  ok('ruta: seco y sin alternativa → none', c.reason === 'none', c);
+
+  // Puntajes: solo el ciclo de reset actual, y solo con >= EVAL_MS medidos.
+  const sc = routeScores([
+    sample(5, 3, 3000, { level: 30, reset: 1 }),
+    sample(6, 1, 9000, { level: 30, reset: 1 }),
+    sample(7, 10, 99999, { level: 30, reset: 0 }),
+  ], 30, 1);
+  ok('routeScores: exp/min del reset actual, ignora tramos < 2 min y otros resets', sc.get(5) === 1000 && !sc.has(6) && !sc.has(7), [...sc]);
+  const sc2 = routeScores([sample(5, 1, 1000, { level: 30, reset: 1 }), sample(5, 1, 1000, { level: 38, reset: 1 })], 38, 1);
+  ok('routeScores: el umbral de 2 min es tiempo real, no ponderado por nivel', sc2.has(5), [...sc2]);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE APRENDIZAJE PASARON' : `\n${fails} TEST(S) DE APRENDIZAJE FALLARON`);
