@@ -424,7 +424,8 @@
         // se quedaba con un campamento flojo de la entrada (34M/min en Arena 2) sin comparar.
         const dz = ai.cfg.preferDownMaps.includes(w.mapIndex) ? ai.downZone(w) : null;
         const dzMeasured = !dz || (ai.campHist[w.mapIndex] ?? []).some((k) => dist(k, dz) <= 15 && !k.seed);
-        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate - a.rate)[0];
+        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && k.rate >= (ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0) * 0.3 && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate - a.rate)[0];
+        // (un "mejor spot" que rindió < 30% de lo normal del tramo no cuenta: en Devias 4 iba a uno de ~0M/min)
         const dir = known ? null : ai.cfg.arrivalSpotDir[w.mapIndex];
         if (known) { ai.camp = { x: known.x, z: known.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now(), known: true }; L(`voy al mejor spot aprendido (${known.x},${known.z}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`); }
         // 2) Si no conoce nada: la regla del usuario para ese mapa como primera apuesta.
