@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -56,6 +56,8 @@ pasó una vez y costó tres intentos de debugging.
 | `packet-tests.ts` | Tests offline de parsers y builders. Sin red. |
 | `learning.ts` | Capa de aprendizaje (lógica pura): medición por spot, bandit UCB1, persistencia. |
 | `learning-tests.ts` | Tests offline de `learning.ts` (usa un dir temporal, sin red). |
+| `explore.ts` | Explorador (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
+| `explore-tests.ts` | Tests offline de `explore.ts` (reloj simulado, sin red). |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS, en loopback por defecto). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |
@@ -116,14 +118,50 @@ vez que `decide()` corre). Probado contra el server local: `hello`/`history`/
 defecto, sin cambios. Conectar un control real (que una UI apruebe/rechace
 `autoOk:false` en vivo) queda pendiente, ver la sección de abajo.
 
-**Loop autónomo — explorador y prioridad de loot (ajustado jugando en vivo):**
-- El "explorar cuando no hay nada que hacer" caminaba al azar recalculando
-  dirección cada 4-9 pasos — en la práctica no se alejaba del punto de
-  partida (confirmado: ~160s de exploración solo desplazaron al personaje
-  ~24 tiles en línea recta). Ahora compromete una dirección mucho más tiempo
-  (`EXPLORE_RUN_STEPS=25`) y gira 90° (no recalcula al azar) si choca contra
-  algo. Ayuda, pero **no resuelve** el caso de un personaje encerrado por los
-  muros del pueblo — ver "Viaje entre mapas (gates)" abajo.
+**Loop autónomo — exploración (`explore.ts`, portado de un agente que juega
+bien dentro del cliente web):**
+
+- **Qué es un monstruo** (`isMonsterType`): TypeNumber **fuera de 200-299** Y
+  (está en `monsters.json` como atacable **o** TypeNumber >= 300).
+  - 200-299 son los NPC de pueblo/servicio del 0.97: vendedores, guardias
+    (`247` Crossbow / `249` Berdysh, nivel 90), cofre `240`, Thompson `231`,
+    Lumen, etc. `monsters.json` trae a varios con atributos de combate (los
+    guardias "pegan"), así que su set solo no alcanzaba para excluirlos.
+  - >= 300: este server tiene TypeNumbers custom (vistos en vivo: `690`,
+    `692`) que `monsters.json` no conoce. Con el filtro viejo (solo
+    `monsters.json`) el bot quedaba ciego a ellos.
+  - Efecto lateral aceptado: también se excluyen Kalima (260-275) y 290-295;
+    ninguno está en `WARP_SPOTS`.
+  - Los 200-299 se guardan aparte en `world.townNpcs`: son los candidatos de
+    `discoverMerchant()`. **Bug arreglado de paso:** antes el descubrimiento
+    sondeaba `world.npcs`, que solo tiene monstruos.
+- **Spots calientes** (`HotSpotGrid`): cada vez que se elige un objetivo se
+  anota su posición en una grilla de celdas de **12x12 por mapa** (contador +
+  "vacía desde"). Sin monstruos en scope, el bot va primero a la celda con más
+  conteo que no haya estado vacía en los últimos **2 min**; al llegar espera
+  **~8 s** y si no aparece nada la marca vacía y pasa a la siguiente.
+- **Salidas** (`exitTargets`): sin spots calientes, camina "hacia afuera" del
+  pueblo. Centro del pueblo por mapa en `TOWN_CENTERS` (solo Lorencia
+  confirmado: `(135,128)`; en otros mapas se usa la posición de llegada). Las
+  salidas son las 8 direcciones a ~55 tiles del centro, barridas en abanico
+  desde la primera. En **Lorencia la primera es la cripta, `(110,180)`**: el
+  usuario confirmó que los monstruos están por la salida que en pantalla se
+  ve "arriba", que en coordenadas del mundo es (-x, +y) del centro (zona
+  ~(90-130, 170-190)). En mapas sin salida conocida, la primera dirección es
+  `--explore-dir` o, si el pueblo está lejos del medio del mapa, hacia
+  `(128,128)` (heurística, sin verificar). Una salida se **abandona a los 20 s
+  de llegar sin ver monstruos**; un objetivo al que no se llega en 60 s
+  (muros) también se abandona. Pelear en el camino no consume esos plazos.
+- **Mapa seco:** si en **2 min** no apareció ningún monstruo en todo el mapa,
+  el spot actual se marca seco (`dryAt`), se corta el tramo (queda como
+  muestra con 0 exp = mala para el bandit) y `maybeChangeSpot()` pasa al
+  siguiente spot elegible; el spot seco queda excluido 15 min
+  (`LEARN.DRY_EXCLUDE_MS`). Ver "Aprendizaje".
+- Reemplaza al explorador viejo (`EXPLORE_RUN_STEPS=25`, caminata recta con
+  giros de 90° al chocar), que tardaba minutos en salir de una zona vacía
+  (~160 s de exploración desplazaban ~24 tiles). **Sin verificar en vivo
+  desde `headless-bot.ts`:** la lógica viene del agente del cliente web y
+  está testeada offline, pero el bot headless todavía no la corrió.
 - **Bug real:** en una zona con mucho loot acumulado (de otros jugadores), el
   bot se quedaba recogiendo para siempre y nunca llegaba a elegir/atacar un
   monstruo aunque hubiera uno al lado — "recoger loot" tenía prioridad
@@ -135,12 +173,10 @@ defecto, sin cambios. Conectar un control real (que una UI apruebe/rechace
   que la basura se sigue levantando para vender, solo que de última
   prioridad.
 - `MUBOT_DEBUG_NPCS=1` (variable de entorno): loguea TODOS los NPCs en scope,
-  pasen o no el filtro `MONSTER_TYPE_NUMBERS`, con su `TypeNumber`. Se usó
-  para confirmar que los tipos `247`/`249` que veía `melu` son los guardias
-  del pueblo (`Crossbow Guard`/`Berdysh Guard`, nivel 90, filtrados a
-  propósito), no un bug del filtro.
+  pasen o no `isMonsterType`, con su `TypeNumber`. Así se confirmó que los
+  `247`/`249` son los guardias y se vieron los custom `690`/`692`.
 - `MUBOT_DEBUG_COMBAT=1`: loguea distancia al objetivo cada 5 ticks y cada
-  intento de golpe. Se usó para diagnosticar el problema de combate de abajo.
+  intento de golpe.
 
 ## Aprendizaje
 
@@ -177,7 +213,15 @@ parsear todavía.
    farmeo.
 3. Permanencia mínima de **5 min** en el spot antes de evaluar cambio (cada
    warp cuesta zen). Excepción: si el spot actual dejó de ser elegible (reset,
-   `--spots`) o no hay spot actual (arranque, muerte, reset), decide ya.
+   `--spots`, **mapa seco**) o no hay spot actual (arranque, muerte, reset),
+   decide ya.
+   - **Mapa seco** (`explore.ts`, 2 min sin ningún monstruo en el mapa): el
+     spot entra en `exclude` (`ChooseInput.exclude`, vigente
+     `LEARN.DRY_EXCLUDE_MS` = 15 min, ver `activeDryExclusions`), no es
+     candidato y si es el actual se cambia con `reason: 'dry'`. El tramo seco
+     se guarda como muestra con 0 exp, así que además baja su tasa a futuro.
+     Si no queda otro spot elegible, se queda (`reason: 'none'`) y sigue
+     explorando.
 4. Sin datos para este nivel: **regla vieja** (mayor `reqLevel`).
 5. Exploración acotada: un spot sin datos se prueba solo si está entre los 4 de
    mayor `reqLevel` elegibles.
@@ -193,7 +237,7 @@ decisión se explica con números. Los parámetros están en `LEARN` (`learning.
 Cada cambio pasa por `decide()` (`kind: 'travel'`) con un `what` que explica el
 porqué, ej. `Atlans 3: 412 exp/min vs Tarkan 345 exp/min (n=6) → warp a
 Atlans 3 (cuesta 5000 zen)`, y en `detail` van `reason`
-(`no-data`/`explore`/`exploit`/`ineligible`), la tabla y los puntajes UCB.
+(`no-data`/`explore`/`exploit`/`ineligible`/`dry`), la tabla y los puntajes UCB.
 Cada ~2 min se loguea la tabla aprendida:
 
 ```
@@ -212,7 +256,12 @@ Al morir se corta la muestra y se olvida `currentSpot`, así el próximo
 re-warp tras morir es lo que haría un humano. El reparto de stats
 (`BUILD_WEIGHTS`) **no** aprende todavía: sigue fijo.
 
-## Combate: dos bugs reales arreglados, uno sin resolver
+## Combate: historia de tres bugs
+
+> **Estado actual:** el tercero ("el golpe no hace nada") quedó resuelto por la
+> captura de "Protocolo real" de abajo: el golpe sale como `C1 07 15`, no
+> `0x11`, y `sendHit()` ya lo manda así. Lo que sigue se conserva como
+> historia del diagnóstico.
 
 Todo esto se encontró jugando de verdad con la cuenta `horaz` (nivel 48,
 personaje con stats altos — no es un problema de nivel/daño insuficiente).
@@ -378,7 +427,9 @@ distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
 
 - Items: 12 bytes. `num = ItemData[0]`, `group = (ItemData[5] & 0xf0) >> 4`.
 - Pociones curativas: group `14`, nums `1/2/3`.
-- `TargetedSkill095` (0x19) manda el **número** de skill, no el índice.
+- ~~`TargetedSkill095` (0x19) manda el **número** de skill~~: corregido por la
+  captura real, sale por el cable con el **índice** en la lista (ver
+  "Protocolo real, capturado del cliente web").
 - Stats: `str=0`, `agi=1`, `vit=2`, `ene=3`.
 - Cifrado: el cliente 0.97d tiene **su propio xor32 key**. Con el default de
   season6 el server no descifra el login y lo descarta **en silencio**.
@@ -401,12 +452,13 @@ Responses: `NpcItemSellResult` (0x33), `InventoryMoneyUpdate` (0x22/FE),
 
 ### Descubrimiento de merchants
 
-`data/monsters.json` **solo tiene monstruos, ningún NPC**. No hay forma de
-saber de antemano qué Id es un merchant. Los TypeNumbers que "matchean" con un
-monstruo son coincidencia.
+`data/monsters.json` mezcla monstruos y NPCs (los NPC de servicio del 0.97
+son los TypeNumber 200-299). No hay forma de saber de antemano qué Id es un
+merchant.
 
-Por eso el bot descubre: habla con los NPCs que ve en scope y lee qué ventana
-conteste. `NpcWindowResponse.Window` `Merchant=0` / `Merchant1=1` son las de venta.
+Por eso el bot descubre: habla con los NPCs de pueblo que ve en scope
+(`world.townNpcs`, TypeNumber 200-299 salvo los guardias 247/249) y lee qué
+ventana conteste. `NpcWindowResponse.Window` `Merchant=0` / `Merchant1=1` son las de venta.
 Con `--merchant <ids>` se saltea el sondeo.
 
 **Limitación real:** el `ItemSlot` de `BuyItemFromNpcRequest` NO es el índice de
@@ -509,8 +561,9 @@ contra el server real. No tocar esto sin seguir esa metodología.
   matcheen la config de este server — hay que confirmarlo mapa por mapa.
   **Se volvió urgente, no solo "nice to have":** probado en vivo con una
   cuenta de personaje nivel 1 (`melu`), el explorador se queda **encerrado**
-  en una caja de ~20x20 tiles cerca del spawn (confirmado: `EXPLORE_RUN_STEPS`
-  más largo y giro de 90° al chocar no alcanzan, sigue sin poder salir). Sin
+  en una caja de ~20x20 tiles cerca del spawn (con el explorador viejo,
+  `EXPLORE_RUN_STEPS`; el nuevo de `explore.ts` camina a salidas fijas y
+  abandona las inalcanzables, pero no se probó en ese caso). Sin
   gates reales, un personaje que arranca adentro de esa zona no puede
   progresar solo. Mitigación de corto plazo: usar una cuenta cuyo personaje
   ya esté afuera del spawn (confirmado con `horaz`, nivel 48, `map=3`, ya en

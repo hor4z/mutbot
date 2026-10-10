@@ -32,7 +32,8 @@
  *                       NpcItemBuyFailed y no cobra nada.
  *   --warp 26           antes de arrancar, viaja con el menú de warp (índice de
  *                       la lista de movimiento del cliente; valida nivel y cobra zen)
- *   --explore-dir 1     sesga la exploración hacia una dirección (0..7, 1=norte)
+ *   --explore-dir 1     en mapas sin salida conocida, primera dirección a
+ *                       explorar desde el pueblo (0..7, 1=norte; ver explore.ts)
  *   --move dungeon      antes de arrancar, manda "/move <mapa>" por chat
  *                       (warp del server: valida nivel y cobra zen)
  *   --spots 2,8,21      limita a qué warps puede ir el bot (default: todos)
@@ -53,9 +54,10 @@ import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  SpotMeter, chooseSpot, aggregate, formatSpotTable, loadLearning, saveLearningChar,
+  SpotMeter, chooseSpot, aggregate, formatSpotTable, loadLearning, saveLearningChar, activeDryExclusions,
   type Spot, type SpotSample, type CharLearning,
 } from './learning';
+import { EXPLORE, Explorer, isMonsterType, isTownNpcType } from './explore';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type StatusServer } from './ws-server';
@@ -131,6 +133,11 @@ type MonsterRow = {
 // Move es el rango de patrulla, no la velocidad: monstruos reales llegan a ~22
 // (Skeleton), los guardias del pueblo (no atacables) tienen 100. Con tope 12 el
 // bot descartaba Skeletons y quedaba ciego en Dungeon.
+//
+// Esto es solo "lo que monsters.json conoce como atacable". La regla final la
+// aplica isMonsterType() (explore.ts): fuera de 200-299 (NPC de pueblo/servicio
+// del 0.97) Y (en este set O TypeNumber >= 300, los custom de este server, ej.
+// 690/692, que monsters.json no tiene).
 const MONSTER_TYPE_NUMBERS = new Set(
   (monstersData as MonsterRow[])
     .filter((m) => m.AttType !== 0 && m.Move > 0 && m.Move <= 50 && m.HP > 0)
@@ -241,7 +248,11 @@ const world = {
   stats: { str: 0, agi: 0, vit: 0, ene: 0 } as Record<StatName, number>,
   skills: new Map<number, SkillInfo>(), // por número de skill
   inventory: new Map<number, ItemSlot>(), // por slot de inventario
-  npcs: new Map<number, ScopedNpc>(),
+  npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
+  // NPC de pueblo/servicio (TypeNumber 200-299) en scope: candidatos para
+  // descubrir merchants. Antes no se guardaban en ningún lado y
+  // discoverMerchant() sondeaba monstruos.
+  townNpcs: new Map<number, ScopedNpc>(),
   // Master skill tree: solo tracking pasivo por ahora (ver AGENTS.md,
   // "Pendiente"). El perfil del server es V097D (pre-season); no sabemos si
   // manda estos packets hasta verlo en un login real.
@@ -686,13 +697,19 @@ function trackWorld() {
   const npcs = world.npcs;
   const onAdd = (raw: any) => {
     for (const n of parseNpcs095(raw)) {
-      // DEBUG temporal: el filtro MONSTER_TYPE_NUMBERS (de monsters.json, set
-      // clásico) venía dando 0 matches en este server custom. Logueamos todo
-      // tipo que aparezca, pase o no el filtro, para confirmar qué IDs usa.
+      // MUBOT_DEBUG_NPCS=1: loguea todo tipo que aparezca, pase o no el filtro
+      // (así se vieron los custom 690/692 que monsters.json no conoce).
+      const isMonster = isMonsterType(n.TypeNumber, MONSTER_TYPE_NUMBERS);
       if (process.env.MUBOT_DEBUG_NPCS) {
-        log(`NPC en scope (debug): Id=${n.Id} tipo=${n.TypeNumber} match=${MONSTER_TYPE_NUMBERS.has(n.TypeNumber)} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+        log(`NPC en scope (debug): Id=${n.Id} tipo=${n.TypeNumber} monstruo=${isMonster} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
       }
-      if (!MONSTER_TYPE_NUMBERS.has(n.TypeNumber)) continue;
+      if (!isMonster) {
+        if (isTownNpcType(n.TypeNumber)) {
+          const tid = n.Id & 0x7fff;
+          world.townNpcs.set(tid, { id: tid, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
+        }
+        continue;
+      }
       // Bug real (cuenta horaz, nivel 48, 22 monstruos detectados, 0 kills):
       // n.Id viene CRUDO (con el bit alto de "vivo" puesto, ej. 33356), pero
       // HitRequest.TargetId necesita el id real sin ese bit — el server hace
@@ -711,7 +728,10 @@ function trackWorld() {
   };
   const onRemove = (raw: any) => {
     const p = new MapObjectOutOfScopePacket(raw);
-    for (const o of p.getObjects()) npcs.delete(o.Id & 0x7fff);
+    for (const o of p.getObjects()) {
+      npcs.delete(o.Id & 0x7fff);
+      world.townNpcs.delete(o.Id & 0x7fff);
+    }
   };
   EventBus.on('AddNpcsToScope', onAdd);
   EventBus.on('MapObjectOutOfScope', onRemove);
@@ -728,6 +748,7 @@ function trackWorld() {
     // Lo que había en scope era del mapa viejo: si no se limpia, el bot
     // persigue NPCs y drops que ya no existen (el server no manda el remove).
     world.npcs.clear();
+    world.townNpcs.clear();
     drops.clear();
     sendToGS(ClientReadyAfterMapChangePacket.createPacket().buffer);
   });
@@ -994,11 +1015,8 @@ const ATTACK_PACE_MS = 500;
 const SKILL_PACE_MS = 900;
 // El cliente web tiene cooldown de chat; 2.5s entre comandos queda cómodo.
 const CHAT_PACE_MS = 2500;
-// Pasos que camina el explorador en la misma dirección antes de recalcular
-// (ver autonomousLoop, "6) Sin nada que hacer"). Antes eran 4-9 pasos al azar
-// y en la práctica no se alejaba del punto de partida.
-const EXPLORE_RUN_STEPS = 25;
-// --explore-dir 0..7 (ver DIR_DELTA; 1 = norte): sesga la exploración hacia ahí.
+// --explore-dir 0..7 (ver DIR_DELTA; 1 = norte): en mapas sin salida conocida
+// (FIRST_EXITS de explore.ts) es la primera dirección que se prueba.
 const EXPLORE_PREF = args.has('--explore-dir') ? parseInt(args.get('--explore-dir')!) % 8 : null;
 
 const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
@@ -1466,7 +1484,7 @@ const isMerchantWindow = (w: number) => w === 0 || w === 1;
 const knownMerchants = new Set<number>(MERCHANT_IDS);
 
 async function discoverMerchant(): Promise<number | null> {
-  const candidates = [...world.npcs.values()].filter((n) => !isJunkType(n.type));
+  const candidates = [...world.townNpcs.values()].filter((n) => !isJunkType(n.type));
   for (const c of candidates) {
     const ok = await decide({
       kind: 'travel',
@@ -1492,10 +1510,10 @@ async function discoverMerchant(): Promise<number | null> {
   return null;
 }
 
-function isJunkType(_type: number): boolean {
-  // Los NPCs en scope no son monstruos (el filtro de MONSTER_TYPE_NUMBERS ya
-  // los dejó fuera), así que todos los candidatos valen para probar.
-  return false;
+// Los candidatos salen de world.townNpcs (TypeNumber 200-299). Los guardias
+// (247 Crossbow, 249 Berdysh) no abren ventana: no vale la pena hablarles.
+function isJunkType(type: number): boolean {
+  return type === 247 || type === 249;
 }
 
 // /move <mapa> por chat público (MoveChatCommandPlugIn de OpenMU): el server
@@ -1552,13 +1570,16 @@ const LORENCIA_WARP = 2;
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
 const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
 let currentSpot: Spot | null = null;
+// Spot → cuándo se lo encontró "seco" (mapa entero sin monstruos DRY_MAP_MS).
+// No se vuelve a elegir durante LEARN.DRY_EXCLUDE_MS (ver explore.ts).
+const dryAt = new Map<number, number>();
 // Desde cuándo está en currentSpot (para la permanencia mínima del bandit).
 let spotSince = 0;
 
 // Regla fija (la de antes del aprendizaje): el de mayor reqLevel permitido.
 // Se usa con --no-learn; con aprendizaje y sin datos, chooseSpot da lo mismo.
-function pickSpot(level: number): Spot | undefined {
-  return WARP_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index))).sort(
+function pickSpot(level: number, exclude: ReadonlySet<number> = new Set()): Spot | undefined {
+  return WARP_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index)) && !exclude.has(sp.index)).sort(
     (a, b) => b.reqLevel - a.reqLevel,
   )[0];
 }
@@ -1633,8 +1654,10 @@ async function maybeChangeSpot(): Promise<boolean> {
   let best: Spot | undefined | null;
   let what: string;
   let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
+  const exclude = activeDryExclusions(dryAt, Date.now());
+  if (exclude.size) detail.dry = [...exclude];
   if (!LEARN_ENABLED) {
-    best = pickSpot(world.level);
+    best = pickSpot(world.level, exclude);
     what = `warp a ${best?.name} (nivel ${world.level}, cuesta ${best?.zen} zen)`;
   } else {
     const now = Date.now();
@@ -1647,6 +1670,7 @@ async function maybeChangeSpot(): Promise<boolean> {
       current: currentSpot,
       dwellMs: currentSpot ? now - spotSince : Infinity,
       samples: live ? [...learning.samples, live] : learning.samples,
+      exclude,
     });
     best = choice.spot;
     what = `${choice.what} → warp a ${best?.name} (cuesta ${best?.zen} zen)`;
@@ -1700,6 +1724,7 @@ async function doReset(): Promise<boolean> {
   }
   log('Reset hecho. Vuelvo a entrar con el personaje.');
   world.npcs.clear();
+  world.townNpcs.clear();
   currentSpot = null;
   meter.stop();
   // Contador local de resets: el server no manda uno que sepamos parsear.
@@ -1787,8 +1812,10 @@ async function autonomousLoop(seconds: number) {
   let stuckCount = 0;
   let lastX = world.x;
   let lastY = world.y;
-  let exploreDir = Math.floor(Math.random() * 8);
-  let exploreStepsLeft = 0;
+  // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
+  const explorer = new Explorer(EXPLORE_PREF);
+  let exploreStuck = 0;
+  let lastExploreGoal: unknown = null;
   const start = Date.now();
   let ticks = 0;
 
@@ -1861,8 +1888,11 @@ async function autonomousLoop(seconds: number) {
       if (candidate) {
         target = candidate.id;
         stuckCount = 0;
+        // Spot caliente: dónde estaba el objetivo al elegirlo.
+        explorer.onTarget(world.map, candidate.x, candidate.y, Date.now());
       }
     }
+    if (target != null) explorer.sawMonster(Date.now());
 
     if (target != null) {
       const t = npcs.get(target)!;
@@ -1899,27 +1929,67 @@ async function autonomousLoop(seconds: number) {
       continue;
     }
 
-    // 6) Sin nada que hacer: explorar. Antes recalculaba dirección cada 4-9
-    // pasos (al azar, sin memoria), así que en la práctica daba vueltas cerca
-    // del punto de partida en vez de alejarse (confirmado jugando: ~160s de
-    // exploración solo desplazaron al personaje ~24 tiles en línea recta).
-    // Ahora compromete una dirección mucho más tiempo (EXPLORE_RUN_STEPS), y
-    // si choca contra algo (se queda en la misma posición), rota 90° en vez
-    // de recalcular al azar: evita el rebote de ida y vuelta contra un muro.
-    const exploreBlocked = world.x === lastX && world.y === lastY && exploreStepsLeft < EXPLORE_RUN_STEPS;
-    if (exploreStepsLeft <= 0) {
-      exploreDir = EXPLORE_PREF ?? Math.floor(Math.random() * 8);
-      exploreStepsLeft = EXPLORE_RUN_STEPS;
-    } else if (exploreBlocked) {
-      // Con dirección preferida (--explore-dir) rodea el muro por ±45° y vuelve
-      // a ella; sin preferencia, gira 90° (no 180°: sigue alejándose).
-      exploreDir = EXPLORE_PREF != null
-        ? (EXPLORE_PREF + (ticks % 2 ? 1 : 7)) % 8
-        : (exploreDir + 2) % 8;
+    // 6) Sin nada que hacer: explorar (explore.ts, ver AGENTS.md "Loop
+    // autónomo — exploración").
+    //  a) Mapa seco: DRY_MAP_MS sin ningún monstruo en todo el mapa → el spot
+    //     queda excluido un rato (el tramo con 0 exp ya es una muestra mala
+    //     para el bandit) y se pasa al siguiente spot elegible.
+    //  b) Si no, ir a la celda caliente con más kills-objetivo que no haya
+    //     estado vacía en los últimos 2 min; al llegar esperar ~8 s.
+    //  c) Sin celdas calientes: caminar a las "salidas" del pueblo, en orden,
+    //     abandonando cada una a los 20 s de llegar sin ver monstruos.
+    // Reemplaza al explorador viejo (caminata recta de 25 pasos con giros),
+    // que tardaba minutos en salir de una zona vacía.
+    const now = Date.now();
+    if (explorer.isDry(now)) {
+      const where = currentSpot?.name ?? `map ${world.map}`;
+      log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 60_000} min en ${where}: busco otro spot.`);
+      if (currentSpot) {
+        dryAt.set(currentSpot.index, now);
+        // Corta el tramo ya: queda como muestra (0 exp) aunque después no se warpee.
+        recordSample(meter.flush(now, world.level));
+      }
+      const moved = await maybeChangeSpot();
+      if (!moved) {
+        log('No hay otro spot elegible (o se rechazó el warp): sigo explorando acá.');
+        explorer.resetDry(Date.now());
+      }
+      continue;
     }
-    step(exploreDir);
-    exploreStepsLeft--;
+    const act = explorer.tick(world.map, world.x, world.y, now);
+    for (const e of explorer.events) {
+      const g = e.goal;
+      const txt = {
+        'hot-empty': `spot caliente (${g.x},${g.y}) vacío, lo marco y sigo`,
+        'hot-timeout': `no llego al spot caliente (${g.x},${g.y}), lo marco vacío`,
+        'exit-abandoned': `salida (${g.x},${g.y}) sin monstruos tras esperar, pruebo la siguiente`,
+        'exit-timeout': `no llego a la salida (${g.x},${g.y}), pruebo la siguiente`,
+      }[e.kind];
+      log(`Explorar: ${txt}.`);
+    }
+    if (act.goal !== lastExploreGoal) {
+      lastExploreGoal = act.goal;
+      const g = act.goal;
+      log(`Explorar: voy a ${g.kind === 'hot' ? `spot caliente (${g.x},${g.y}), ${explorer.hot.get(world.map, g.cx, g.cy)?.count ?? 0} objetivo(s) elegidos ahí` : `salida #${g.index + 1}/${explorer.exitList.length} (${g.x},${g.y})`} desde (${world.x},${world.y}) map=${world.map}.`);
+    }
+    if (act.action === 'wait') {
+      // Parado mirando: sin packets, solo deja correr el tick (si aparece un
+      // monstruo, el paso 5 lo toma).
+      await sleep(500);
+      continue;
+    }
+    // Caminar hacia el objetivo de exploración; si no avanza, rodea el
+    // obstáculo abriendo de a 45° (alternando lados) y vuelve a la recta.
+    const straight = directionTowards(world.x, world.y, act.x, act.y);
+    const k = Math.ceil(exploreStuck / 2);
+    const dir = exploreStuck === 0 ? straight : (straight + (exploreStuck % 2 ? k : 8 - k) + 8) % 8;
+    const bx = world.x;
+    const by = world.y;
+    step(dir);
     await sleep(WALK_PACE_MS);
+    // 1..6 y vuelve a empezar: si sigue trabado, el WALK_TIMEOUT_MS del
+    // explorador abandona ese objetivo.
+    exploreStuck = world.x === bx && world.y === by ? (exploreStuck % 6) + 1 : 0;
     lastX = world.x;
     lastY = world.y;
   }

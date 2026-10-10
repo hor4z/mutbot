@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  LEARN, SpotMeter, aggregate, chooseSpot, eligibleSpots, formatSpotTable,
+  LEARN, SpotMeter, aggregate, chooseSpot, eligibleSpots, formatSpotTable, activeDryExclusions,
   loadLearning, saveLearningChar, parseLearning, sampleWeight,
   type Spot, type SpotSample,
 } from './learning';
@@ -119,6 +119,20 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
   // Muestras de otro nivel no cuentan: a nivel 40, lo medido en 150 no influye.
   const old = chooseSpot({ ...base, level: 40, current: null, samples: [sample(2, 60, 60 * 9999)] });
   ok('muestras de otro nivel se ignoran', old.spot?.index === 8 && old.reason === 'no-data', old);
+
+  // Mapa seco (explore.ts): el spot actual excluido fuerza el cambio aunque
+  // no cumpla la permanencia, al siguiente elegible.
+  const dry = chooseSpot({ ...base, current: byIdx(21), dwellMs: 2 * MIN, samples: [], exclude: new Set([21]) });
+  ok('mapa seco: cambia ya al siguiente elegible', dry.spot?.index === 13 && dry.reason === 'dry' && /Tarkan sin monstruos/.test(dry.what), dry);
+  const dry2 = chooseSpot({ ...base, allowed: new Set([11, 12, 13, 21]), current: byIdx(13), samples: lots, exclude: new Set([21, 12]) });
+  ok('excluidos no se eligen aunque rindan', dry2.spot?.index === 13 && !dry2.ucb.has(21), { spot: dry2.spot, ucb: [...dry2.ucb] });
+  const dryOnly = chooseSpot({ ...base, level: 15, current: byIdx(2), samples: [], exclude: new Set([2]) });
+  ok('único spot y seco: se queda (none)', dryOnly.reason === 'none' && dryOnly.spot?.index === 2, dryOnly.reason);
+  // El tramo seco (0 exp, 2 min) es una muestra mala: baja la tasa del spot.
+  const withDry = aggregate([sample(21, 10, 4000), sample(21, 2, 0)], 150, 0).get(21)!;
+  ok('tramo seco baja la tasa (4000/12)', Math.abs(withDry.rate - 4000 / 12) < 1e-9, withDry);
+  const dryEx = activeDryExclusions(new Map([[21, 0], [13, 10 * MIN]]), 16 * MIN);
+  ok('exclusión seca vence a los 15 min', !dryEx.has(21) && dryEx.has(13), [...dryEx]);
 
   const table = formatSpotTable(SPOTS, best.stats, 13, best.ucb);
   ok('tabla: marca el actual y ordena por tasa', /^\* Atlans 3/m.test(table) && table.indexOf('Atlans 3') < table.indexOf('Tarkan'), table);
