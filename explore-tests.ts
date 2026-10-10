@@ -39,17 +39,32 @@ const MIN = 60 * S;
   ok('sin registros: nada', g.pick(0, 0) === null);
   g.record(0, 100, 100); g.record(0, 101, 105); g.record(0, 50, 50); g.record(3, 10, 10); g.record(3, 10, 10); g.record(3, 10, 10);
   const c = g.pick(0, 0)!;
-  ok('elige la de más conteo del MISMO mapa', c.map === 0 && c.count === 2 && c.cx === 8 && c.cy === 8, c);
+  ok('elige la de más exp del MISMO mapa', c.map === 0 && c.exp === 2 && c.cx === 8 && c.cy === 8, c);
   g.markEmpty(0, 8, 8, 10 * S);
   const c2 = g.pick(0, 20 * S)!;
-  ok('celda vacía hace <2 min se saltea', c2.cx === 4 && c2.cy === 4, c2);
+  ok('celda vacía hace < EMPTY_COOLDOWN_MS se saltea', c2.cx === 4 && c2.cy === 4, c2);
   const c3 = g.pick(0, 10 * S + EXPLORE.EMPTY_COOLDOWN_MS)!;
-  ok('pasados 2 min vuelve a ser candidata', c3.cx === 8 && c3.cy === 8, c3);
+  ok('pasado EMPTY_COOLDOWN_MS vuelve a ser candidata', c3.cx === 8 && c3.cy === 8, c3);
   g.markEmpty(0, 4, 4, 20 * S);
   ok('todas vacías: nada', g.pick(0, 30 * S) === null);
   const t = new HotSpotGrid();
   t.record(1, 10, 10); t.record(1, 200, 200);
   ok('empate: la más cercana', t.pick(1, 0, 190, 190)!.cx === 16 && t.pick(1, 0, 5, 5)!.cx === 0);
+
+  // Ponderación por EXP acumulada, no por conteo: una celda con un solo kill
+  // grande le gana a otra con muchos kills chicos.
+  const w = new HotSpotGrid();
+  for (let i = 0; i < 10; i++) w.record(0, 20, 20, 100); // 10 kills de 100 = 1000
+  w.record(0, 100, 100, 1500); w.record(0, 101, 101, 200); // 2 kills = 1700
+  const best = w.pick(0, 0)!;
+  ok('grilla ponderada por exp: gana la que más exp dio', best.cx === 8 && best.exp === 1700, best);
+  w.markEmpty(0, 8, 8, 0);
+  ok('vacía la mejor: sigue la segunda en exp', w.pick(0, 1 * S)!.cx === 1);
+  w.record(0, 100, 100, 50);
+  ok('un kill nuevo en la celda vacía la despierta', w.pick(0, 2 * S)!.cx === 8);
+  const copy = new HotSpotGrid();
+  copy.load(w.dump());
+  ok('dump/load conserva celdas y exp (sobrevive al reset)', copy.get(0, 8, 8)!.exp === 1750 && copy.get(0, 1, 1)!.exp === 1000);
 }
 
 // --- Salidas ---------------------------------------------------------------------
@@ -89,16 +104,18 @@ const MIN = 60 * S;
 
   // Spot caliente tiene prioridad sobre salidas.
   const e3 = new Explorer();
-  e3.onTarget(0, 60, 60, 0); e3.onTarget(0, 61, 62, 0); e3.onTarget(0, 150, 150, 0);
+  e3.onExp(0, 60, 60, 500, 0); e3.onExp(0, 61, 62, 500, 0); e3.onExp(0, 150, 150, 300, 0);
   a = e3.tick(0, 135, 128, 1 * S);
-  ok('con spots calientes: va al de más conteo', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 66 && a.y === 66, a);
+  ok('con spots calientes: va al de más exp', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 66 && a.y === 66, a);
   a = e3.tick(0, 66, 66, 10 * S);
   ok('en el spot caliente espera', a.action === 'wait' && a.goal.kind === 'hot');
-  a = e3.tick(0, 66, 66, 18 * S);
-  ok('a los 8 s vacío: lo marca y va al siguiente caliente', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 150 && e3.events[0]?.kind === 'hot-empty', { a, ev: e3.events });
-  ok('la celda quedó marcada vacía', e3.hot.get(0, 5, 5)!.emptyAt === 18 * S);
-  a = e3.tick(0, 150, 150, 20 * S);
-  a = e3.tick(0, 150, 150, 28 * S);
+  a = e3.tick(0, 66, 66, 39 * S);
+  ok('espera el respawn hasta 30 s', a.action === 'wait' && a.goal.kind === 'hot', a);
+  a = e3.tick(0, 66, 66, 40 * S);
+  ok('a los 30 s vacío: lo marca y va al siguiente caliente', a.action === 'walk' && a.goal.kind === 'hot' && a.x === 150 && e3.events[0]?.kind === 'hot-empty', { a, ev: e3.events });
+  ok('la celda quedó marcada vacía', e3.hot.get(0, 5, 5)!.emptyAt === 40 * S);
+  a = e3.tick(0, 150, 150, 42 * S);
+  a = e3.tick(0, 150, 150, 72 * S);
   ok('sin calientes disponibles: vuelve a las salidas', a.action === 'walk' && a.goal.kind === 'exit', a);
 
   // Timeout de caminata: objetivo inalcanzable se abandona.

@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -38,10 +38,13 @@ bun run proxy
 # El bot: login + loop autónomo que progresa el personaje.
 bun run bot --user <u> --pass <p> --char <c> \
   --auto-seconds 600 \
-  --build str,vit \
+  --build str:50,ene:33,vit:17 \
   --decision-log /tmp/decisiones.jsonl \
   --ws-port 8787
 ```
+
+`--auto-seconds 0` = sin límite: farmea y encadena resets indefinidamente (ver
+"Reset encadenado").
 
 Flag inexistente = el bot arranca con defaults y se cuelga esperando `LoginResponse`.
 Los reales son `--user`, `--pass`, `--char` (no `--account`/`--character`). Esto ya
@@ -58,6 +61,9 @@ pasó una vez y costó tres intentos de debugging.
 | `learning-tests.ts` | Tests offline de `learning.ts` (usa un dir temporal, sin red). |
 | `explore.ts` | Explorador (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
 | `explore-tests.ts` | Tests offline de `explore.ts` (reloj simulado, sin red). |
+| `farming.ts` | Farmeo por exp/segundo (lógica pura): valor y elección de objetivo, exp/segundos por tipo de monstruo, exp partida, autoevaluación. |
+| `farming-tests.ts` | Tests offline de `farming.ts` (reloj simulado, sin red). |
+| `browser-agent.js` | El agente que juega DENTRO del cliente web (pegado en la consola). Es la referencia: sube rápido, y sus comentarios explican cada decisión aprendida jugando. `farming.ts` y la ruta de spots son su port. |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS, en loopback por defecto). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |
@@ -135,11 +141,16 @@ bien dentro del cliente web):**
   - Los 200-299 se guardan aparte en `world.townNpcs`: son los candidatos de
     `discoverMerchant()`. **Bug arreglado de paso:** antes el descubrimiento
     sondeaba `world.npcs`, que solo tiene monstruos.
-- **Spots calientes** (`HotSpotGrid`): cada vez que se elige un objetivo se
-  anota su posición en una grilla de celdas de **12x12 por mapa** (contador +
-  "vacía desde"). Sin monstruos en scope, el bot va primero a la celda con más
-  conteo que no haya estado vacía en los últimos **2 min**; al llegar espera
-  **~8 s** y si no aparece nada la marca vacía y pasa a la siguiente.
+- **Spots calientes** (`HotSpotGrid`): cada exp ganada (`ExperienceGained`)
+  se **suma** a la celda de **12x12 por mapa** donde estaba el monstruo
+  muerto (posición sacada del registro id → tipo/posición, porque cuando llega
+  el evento ya salió del scope). Un spot vale por lo que **rinde**, no por
+  cuántos bichos tiene (antes contaba objetivos elegidos). Sin monstruos en
+  scope, el bot vuelve a la celda con más exp que no haya estado vacía en los
+  últimos **90 s** y **acampa ahí esperando el respawn hasta 30 s** antes de
+  marcarla vacía y pasar a la siguiente (con 8 s abandonaba spots buenos justo
+  antes del respawn). La grilla se conserva entre resets (depende del mapa,
+  no del nivel) y se guarda en `learning.json`.
 - **Salidas** (`exitTargets`): sin spots calientes, camina "hacia afuera" del
   pueblo. Centro del pueblo por mapa en `TOWN_CENTERS` (solo Lorencia
   confirmado: `(135,128)`; en otros mapas se usa la posición de llegada). Las
@@ -195,7 +206,10 @@ exp, kills y muertes. Tramos de menos de 30 s sin muertes se descartan.
 Sin `currentSpot` (arrancó sin `--warp` y todavía no warpeó) no se mide.
 
 **Dónde guarda.** `~/.mubot/learning.json` (fuera del repo; `--learn-file` lo
-cambia), con una entrada por personaje (`--char`): `{ resets, samples[] }`.
+cambia), con una entrada por personaje (`--char`): `{ resets, samples[], hot[],
+types }` — `hot` es la grilla de spots calientes (`{map, cx, cy, exp}`) y
+`types` lo aprendido por tipo de monstruo (`expByType`, `killSecByType`), como
+el `localStorage` del agente web: sobreviven a un reinicio del bot.
 Escritura atómica (tmp en el mismo dir + `rename`); cada save relee el archivo y
 reemplaza solo la entrada de su personaje, así dos bots con personajes
 distintos no se pisan. Archivo ausente = empieza de cero. Archivo corrupto =
@@ -205,7 +219,36 @@ personaje (quedan las últimas). `resets` es un **contador local** (se suma
 cuando `doReset()` termina bien): no hay un packet de resets que sepamos
 parsear todavía.
 
-**Cómo decide (`chooseSpot`, bandit UCB1).** Cada ~50 ticks `maybeChangeSpot()`:
+**Cómo decide hoy (`chooseRouteSpot`, la regla del agente web).** Spot =
+exp/min. Los spots son la **ruta del usuario** (`WARP_SPOTS`): Lorencia (warp
+2, nivel 10) → Devias 2/3/4 (5, 6, 7; nivel 20) → Arena (1, nivel 50) → Arena 2
+(24, 100) → Arena 3 (25, 200) → Arena 4 (26, 300). **Devias 1 (warp 4) no va:
+el usuario confirmó que no sirve.** Noria, Dungeon, Lost Tower, Atlans, etc.
+salieron de la lista (no están en su ruta). El zen de Arena no se capturó (se
+muestra "zen sin capturar"; el server igual valida). Cada 10 ticks, con 15 s
+mínimos entre warps, `maybeChangeSpot()`:
+
+1. **Tier nuevo:** si el nivel habilita un `reqLevel` mayor que todos los
+   vistos en este ciclo de reset (`tierSeen`), va a probar el primer spot de
+   ese tier (si ya está en uno de ese tier, se queda).
+2. **Rinde poco:** tras **2 min** (`ROUTE.EVAL_MS`) en un spot, si su exp/min
+   de la estadía es 0 o < **50%** del mejor conocido, cambia: primero a uno
+   sin medir (el de mayor nivel), si no al mejor medido si supera al actual.
+   Si no hay alternativa, se queda y vuelve a medir.
+3. **Sin spot** (arranque, muerte): sin tier nuevo, vuelve al mejor medido.
+4. **Mapa seco:** igual que antes, cambia aunque no hayan pasado los 2 min.
+
+"Mejor conocido" = `routeScores()`: exp/min por spot de las muestras **del
+ciclo de reset actual** (ponderadas por cercanía de nivel), solo de spots con
+al menos 2 min reales medidos. Después de un `/reset` el rendimiento por mapa
+se vuelve a medir desde cero (cambian stats y nivel). El agente web resetea
+igual su `spotScore`.
+
+**El bandit UCB1 de abajo (`chooseSpot`) sigue en `learning.ts` y testeado,
+pero el bot ya no lo usa:** pedía 5 min mínimos por spot y no reaccionaba a un
+tier nuevo; el agente web, con la regla de arriba, sube mucho más rápido.
+
+**(Histórico) Cómo decidía con `chooseSpot`, bandit UCB1.** Cada ~50 ticks `maybeChangeSpot()`:
 1. Candidatos: spots con `reqLevel <= nivel`, limitados por `--spots`.
 2. Datos: se ponderan las muestras por cercanía de nivel (triangular, ±40
    niveles; más lejos no cuentan) y las de otro reset pesan la mitad. Tasa
@@ -255,6 +298,67 @@ Al morir se corta la muestra y se olvida `currentSpot`, así el próximo
 `ObjectGotKilled` propio al morir, dónde respawnea este server, y si el
 re-warp tras morir es lo que haría un humano. El reparto de stats
 (`BUILD_WEIGHTS`) **no** aprende todavía: sigue fijo.
+
+## Farmeo por exp/segundo (`farming.ts`, port del agente web)
+
+El agente que juega dentro del cliente web (`browser-agent.js`) sube de nivel
+mucho más rápido que el bot headless. Su lógica de decisión está portada a
+`farming.ts` (pura, testeada en `farming-tests.ts`) y enganchada en
+`autonomousLoop`:
+
+- **Objetivo por EXP POR SEGUNDO, no por cercanía** (`pickTarget`):
+  `valor = (exp(tipo) + densidad) / (seg_kill(tipo) + distancia × 0.4)
+  × 0.4^(jugadores a ≤ 5 tiles del objetivo)`. Densidad: cada otro monstruo a
+  ≤ 3 tiles suma la mitad de su valor (Twisting Slash es de área). Los que se
+  estiman en > 8 s se descartan si hay alguno más rápido. Solo se miran
+  monstruos a < 28 tiles. El objetivo se mantiene hasta que muere o sale del
+  scope (o queda inalcanzable).
+- **Aprende por tipo de monstruo** (`MonsterTypeStats`, EMA 0.7/0.3):
+  - **exp por kill**, de `ExperienceGained` (C3 `0x16`): `KilledObjectId` u16
+    BE @3, `AddedExperience` u16 BE @5, `DamageOfLastHit` @7. Como
+    `AddedExperience` es u16, **un kill grande llega partido en tramos de
+    65535** con el mismo id: los que llegan en < 1.5 s se **suman** y el EMA
+    se calcula sobre la suma (`ExpSplitTracker`). Al llegar el evento el
+    monstruo ya salió del scope: el tipo sale del registro id → {tipo,
+    posición, mapa} que se llena en `AddNpcsToScope` y `ObjectWalked075`.
+  - **segundos hasta matarlo**: desde que se elige el objetivo hasta
+    `ObjectGotKilled` con nosotros como killer (incluye caminar hasta él, igual
+    que el agente web). Fuera de (0, 60) s no se aprende.
+- **Sin datos de un tipo:** exp ≈ √vidaMax × mediana(exp/√vida de los tipos
+  medidos) (en MU la exp va con el nivel del monstruo, que crece mucho más
+  lento que su vida: con monstruos más débiles se sube más rápido); segundos ≈
+  vida / mediana(vida/segundos) × 1.4. **La vida máxima no llega en el
+  protocolo headless** (el cliente web la lee de su `attributeSystem`): sale de
+  `data/monsters.json` (`HP` por `Numb`, `MONSTER_MAX_HP`). Para los custom
+  ≥ 300 (sin fila) se usa la mediana de la exp medida y 3 s.
+- **Jugadores en scope** (`world.players`) para la penalización: se leen de
+  `AddCharactersToScope` (C2 `0x12`) con el layout 0.95d del XML de OpenMU
+  (count @4, `CharacterData` de 31 bytes; 27 en 0.75), solo id BE@0 y X/Y
+  @2/@3; el stride se deduce del largo y si no cierra se ignora el packet. Se
+  actualizan con `ObjectWalked075`/`ObjectMoved` y se borran con
+  `MapObjectOutOfScope` y al cambiar de mapa. **Sin verificar en vivo.**
+- **Autoevaluación** (`SelfReport`) cada 5 min en consola: nivel, resets, kills,
+  exp/min en 5 y 30 min, % del tiempo peleando/caminando/esperando/otro, y
+  duración de cada ciclo de reset. También al terminar cada reset y al final.
+  El tiempo de cada iteración del loop se le atribuye a su fase (pelear =
+  hay objetivo, caminar/esperar = explorador, otro = pociones, stats, venta,
+  warp, reset).
+- `MUBOT_DEBUG_COMBAT=1` además loguea cada objetivo elegido con su exp/s
+  estimada y cuántos jugadores tiene cerca.
+
+### Reset encadenado
+
+A `--reset-level` (400): reparte los puntos con `/add` (build por defecto
+`str:50,ene:33,vit:17`), warp a Lorencia, `/reset`, vuelve a elegir el
+personaje, reparte los puntos nuevos y sigue. Los spots calientes y lo
+aprendido por tipo de monstruo se conservan; el rendimiento por mapa
+(`routeScores`) y el tier visto se vuelven a medir desde Lorencia. Con
+`--auto-seconds 0` lo repite indefinidamente.
+
+**Sin verificar en vivo desde el headless:** todo este bloque (elección por
+exp/s, exp partida, jugadores en scope, ruta de spots con Arena 1-4, reset
+encadenado). La lógica viene del agente web, que sí juega con el usuario, y
+está testeada offline.
 
 ## Combate: historia de tres bugs
 

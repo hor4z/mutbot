@@ -27,7 +27,13 @@ export type SpotSample = {
   at: string;     // ISO, fin del tramo
 };
 
-export type CharLearning = { resets: number; samples: SpotSample[] };
+// Además de las muestras por spot, se guarda lo que aprende el farmeo
+// (farming.ts / explore.ts) para que sobreviva a un reinicio del bot, como el
+// localStorage del agente web: exp y segundos de kill por tipo de monstruo, y
+// la grilla de spots calientes (exp acumulada por celda de 12x12 y mapa).
+export type HotCellData = { map: number; cx: number; cy: number; exp: number };
+export type TypeData = { expByType: Record<number, number>; killSecByType: Record<number, number> };
+export type CharLearning = { resets: number; samples: SpotSample[]; hot?: HotCellData[]; types?: TypeData };
 export type LearningFile = { version: 1; chars: Record<string, CharLearning> };
 
 // ---------------------------------------------------------------------------
@@ -317,6 +323,124 @@ export function chooseSpot(inp: ChooseInput, p: LearnParams = LEARN): SpotChoice
 }
 
 // ---------------------------------------------------------------------------
+// Ruta de spots del usuario (la regla del agente web, `browser-agent.js`, que
+// es la que sube rápido). Spot = exp/min:
+//   - al habilitarse por nivel un mapa de un tier nuevo, se va a probarlo;
+//   - tras EVAL_MS en un spot, si rinde < MIN_FRAC_OF_BEST del mejor conocido
+//     (o 0), se cambia: primero a uno sin medir (el de mayor nivel), si no al
+//     mejor medido si supera al actual;
+//   - lo medido vale para el ciclo de reset actual: después de un /reset el
+//     rendimiento por mapa se vuelve a medir (cambian stats y nivel).
+// Reemplaza al bandit UCB1 (`chooseSpot`) en el bot: el UCB1 tardaba 5 min
+// mínimos por spot y no reaccionaba a un tier nuevo.
+// ---------------------------------------------------------------------------
+export const ROUTE = {
+  EVAL_MS: 2 * 60_000,
+  MIN_FRAC_OF_BEST: 0.5,
+} as const;
+export type RouteParams = typeof ROUTE;
+
+export type RouteReason =
+  | 'none'        // no hay spot elegible (o no hay a dónde ir)
+  | 'stay'        // el actual sigue sirviendo
+  | 'start'       // no hay spot actual (arranque, muerte, reset)
+  | 'new-tier'    // se habilitó un tier de mapas nuevo por nivel
+  | 'ineligible'  // el actual ya no es elegible
+  | 'dry'         // el mapa actual se quedó sin monstruos
+  | 'poor';       // el actual rinde < MIN_FRAC_OF_BEST del mejor conocido
+
+export type RouteInput = {
+  spots: Spot[];
+  level: number;
+  allowed: Set<number> | null;
+  current: Spot | null;
+  stayMs: number;               // cuánto hace que está en `current`
+  stayExp: number;              // exp ganada desde que llegó a `current`
+  scores: ReadonlyMap<number, number>; // exp/min medida por spot en este ciclo de reset
+  tierSeen: number;             // mayor reqLevel ya visto en este ciclo
+  exclude?: ReadonlySet<number>;
+};
+
+export type RouteChoice = {
+  spot: Spot | null;            // a dónde ir (== current si se queda)
+  reason: RouteReason;
+  what: string;
+  tier: number;                 // mayor reqLevel elegible: el caller lo guarda como tierSeen
+  curRate: number;              // exp/min de la estadía actual
+  bestKnown: number;
+  restartEval: boolean;         // rinde poco pero no hay alternativa: medir de nuevo
+};
+
+// exp/min por spot en el ciclo de reset `reset`, ponderada por cercanía de
+// nivel (aggregate). Solo cuentan spots con al menos EVAL_MS medidos (tiempo
+// real, sin ponderar: si no, subir unos niveles dejaba a un spot recién
+// medido por debajo del umbral).
+export function routeScores(samples: SpotSample[], level: number, reset: number, p: RouteParams = ROUTE, lp: LearnParams = LEARN): Map<number, number> {
+  const mine = samples.filter((s) => s.reset === reset && sampleWeight(s, level, reset, lp) > 0);
+  const rawMs = new Map<number, number>();
+  for (const s of mine) rawMs.set(s.spot, (rawMs.get(s.spot) ?? 0) + s.ms);
+  const out = new Map<number, number>();
+  for (const [spot, st] of aggregate(mine, level, reset, lp)) if ((rawMs.get(spot) ?? 0) >= p.EVAL_MS) out.set(spot, st.rate);
+  return out;
+}
+
+export function chooseRouteSpot(inp: RouteInput, p: RouteParams = ROUTE): RouteChoice {
+  const { current, scores } = inp;
+  const exclude = inp.exclude ?? new Set<number>();
+  const eligible = eligibleSpots(inp.spots, inp.level, inp.allowed).filter((sp) => !exclude.has(sp.index));
+  const curRate = current && inp.stayMs > 0 ? inp.stayExp / (inp.stayMs / 60_000) : 0;
+  const bestKnown = Math.max(0, ...scores.values());
+  const tier = eligible.length ? eligible[0].reqLevel : inp.tierSeen;
+  const base = { tier, curRate, bestKnown, restartEval: false };
+  if (!eligible.length) return { ...base, spot: current, reason: 'none', what: `sin spots elegibles para nivel ${inp.level}` };
+
+  const curEligible = current != null && eligible.some((sp) => sp.index === current.index);
+  const curDry = current != null && exclude.has(current.index);
+  const newTier = tier > inp.tierSeen;
+  const evalDone = inp.stayMs >= p.EVAL_MS;
+  const poor = curEligible && evalDone && (curRate === 0 || curRate < bestKnown * p.MIN_FRAC_OF_BEST);
+  const r = (n: number) => Math.round(n);
+  const curTxt = current ? `${current.name} ${r(curRate)} exp/min` : 'sin spot';
+
+  if (curEligible && !poor && (!newTier || current!.reqLevel === tier)) {
+    return { ...base, spot: current, reason: 'stay', what: `${curTxt}${evalDone ? '' : ' (midiendo)'}` };
+  }
+
+  const others = eligible.filter((sp) => sp.index !== current?.index);
+  const untried = others.filter((sp) => !scores.has(sp.index)); // ya ordenados por reqLevel desc
+  const tried = others.filter((sp) => scores.has(sp.index)).sort((a, b) => scores.get(b.index)! - scores.get(a.index)!);
+  const curScore = curEligible ? curRate : -1;
+  let to: Spot | null;
+  let reason: RouteReason;
+  if (!current) reason = 'start';
+  else if (curDry) reason = 'dry';
+  else if (!curEligible) reason = 'ineligible';
+  else if (poor) reason = 'poor';
+  else reason = 'new-tier';
+  if (newTier && reason !== 'poor') to = others.find((sp) => sp.reqLevel === tier) ?? untried[0] ?? null;
+  // Sin spot (murió y respawneó en otro lado) y sin tier nuevo: volver al
+  // mejor medido; si no hay medidos, probar el de mayor nivel.
+  else if (reason === 'start') to = tried[0] ?? untried[0] ?? null;
+  else to = untried[0] ?? (tried[0] && scores.get(tried[0].index)! > curScore ? tried[0] : null);
+  if (!to && !curEligible) to = tried[0] ?? null;
+
+  if (!to) {
+    if (curEligible) return { ...base, spot: current, reason: 'stay', restartEval: poor, what: `${curTxt}: rinde poco pero no hay alternativa mejor` };
+    return { ...base, spot: current, reason: 'none', what: `${current?.name ?? 'sin spot'}: no hay otro spot elegible` };
+  }
+  const toTxt = scores.has(to.index) ? `${to.name} (${r(scores.get(to.index)!)} exp/min medidos)` : `${to.name} (sin medir)`;
+  const why = {
+    start: 'inicio',
+    'new-tier': `nuevo tier de mapas (nivel ${tier})`,
+    dry: `${current?.name} sin monstruos`,
+    ineligible: `${current?.name} ya no es elegible`,
+    poor: `${curTxt} < ${Math.round(p.MIN_FRAC_OF_BEST * 100)}% del mejor (${r(bestKnown)})`,
+    none: '', stay: '',
+  }[reason];
+  return { ...base, spot: to, reason, what: `${why} → ${toTxt}` };
+}
+
+// ---------------------------------------------------------------------------
 // Resumen legible para la consola.
 // ---------------------------------------------------------------------------
 export function formatSpotTable(spots: Spot[], stats: Map<number, SpotStats>, current: number | null, ucb?: Map<number, number>): string {
@@ -349,6 +473,12 @@ function validSample(s: any): s is SpotSample {
     isNum(s.exp) && isNum(s.kills) && isNum(s.deaths) && typeof s.at === 'string';
 }
 
+function numRecord(o: any): Record<number, number> {
+  const out: Record<number, number> = {};
+  if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) if (isNum(Number(k)) && isNum(v) && v >= 0) out[Number(k)] = v;
+  return out;
+}
+
 // Normaliza lo leído: descarta muestras mal formadas en vez de tirar todo.
 export function parseLearning(text: string): LearningFile {
   const raw = JSON.parse(text);
@@ -358,10 +488,17 @@ export function parseLearning(text: string): LearningFile {
   const out = emptyLearning();
   for (const [name, c] of Object.entries<any>(raw.chars)) {
     if (!c || typeof c !== 'object') continue;
-    out.chars[name] = {
+    const entry: CharLearning = {
       resets: isNum(c.resets) ? c.resets : 0,
       samples: Array.isArray(c.samples) ? c.samples.filter(validSample) : [],
     };
+    if (Array.isArray(c.hot)) {
+      entry.hot = c.hot
+        .filter((h: any) => h && isNum(h.map) && isNum(h.cx) && isNum(h.cy) && isNum(h.exp))
+        .map((h: any) => ({ map: h.map, cx: h.cx, cy: h.cy, exp: h.exp }));
+    }
+    if (c.types && typeof c.types === 'object') entry.types = { expByType: numRecord(c.types.expByType), killSecByType: numRecord(c.types.killSecByType) };
+    out.chars[name] = entry;
   }
   return out;
 }
@@ -400,7 +537,7 @@ export async function saveLearningChar(path: string, char: string, entry: CharLe
     // guardó el corrupto aparte al arrancar).
   }
   const samples = entry.samples.length > p.MAX_SAMPLES ? entry.samples.slice(-p.MAX_SAMPLES) : entry.samples;
-  disk.chars[char] = { resets: entry.resets, samples };
+  disk.chars[char] = { ...entry, samples };
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${++tmpSeq}`;
   await writeFile(tmp, JSON.stringify(disk, null, 1));
   await rename(tmp, path);
