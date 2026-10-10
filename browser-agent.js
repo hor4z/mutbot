@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -41,16 +41,21 @@
     killSecByType: old?.killSecByType ?? saved.killSecByType ?? {}, hpByType: old?.hpByType ?? saved.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
     target: null, explore: null, arrivedAt: 0, stuck: 0, lastPos: null,
     lastMonster: Date.now(), mapNoMonsterSince: Date.now(), scoutIdx: 0, hot: old?.hot ?? saved.hot ?? {},
+    camp: null, campBest: old?.campBest ?? {}, leftCamps: [], visited: old?.visited ?? {},
     cfg: {
-      hpPot: 0.55, mpPot: 0.2, scan: 28, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
+      hpPot: 0.55, mpPot: 0.2, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
+      // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
+      campRadius: 10, campEvalMs: 90000, campEmptyMs: 25000, campMinFrac: 0.5,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
-      resetLevel: 400, statBatch: 50, build: [['str', 50], ['ene', 33], ['vit', 17]],
+      resetLevel: 400, statBatch: 200, build: [['str', 50], ['ene', 33], ['vit', 17]],
       // Ruta del usuario: Lorencia → Devias 2/3/4 (Devias 1 no sirve) → Arena 1-4.
       spots: [[2, 'Lorencia', 10], [5, 'Devias 2', 20], [6, 'Devias 3', 20], [7, 'Devias 4', 20], [1, 'Arena', 50], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]],
       // Spot = exp/min. Tras evalMs, si rinde menos que minFracOfBest del mejor conocido, se cambia.
-      evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 30000,
+      evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 10000,
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -93,12 +98,14 @@
   }
   // Sin medición: vida / daño por segundo medido, con algo de pesimismo.
   ai.killSecOf = (e) => { const k = ai.killSecByType[e.npcType]; if (k != null) return k; const dps = ai.dps(); return dps ? (maxHpOf(e) / dps) * ai.cfg.unknownPessimism : 3; };
-  ai.pickTarget = (w, P, c) => {
-    const ms = [], players = [];
+  // Los otros jugadores están en playersQuery, no en byNetId.
+  const rivalsPos = (w) => (w.playersQuery?.entities ?? []).filter((e) => !e.localPlayer && e.transform).map((e) => e.transform.pos);
+  const expSince = (t) => ai.expLog.filter((x) => x.t >= t).reduce((a, x) => a + x.added, 0);
+  ai.freePick = (w, P, c) => {
+    const ms = [], players = rivalsPos(w);
     for (const e of w.byNetId.values()) {
-      if (e.localPlayer) continue;
-      if (e.npcType === undefined && e.playerAnimation) { players.push(e.transform.pos); continue; }
-      if (ai.isMonster(e)) { ai.netInfo.set(e.netId, { type: e.npcType, x: e.transform.pos.x, z: e.transform.pos.z }); maxHpOf(e); if (alive(e)) ms.push(e); }
+      if (e.localPlayer || !ai.isMonster(e)) continue;
+      ai.netInfo.set(e.netId, { type: e.npcType, x: e.transform.pos.x, z: e.transform.pos.z }); maxHpOf(e); if (alive(e)) ms.push(e);
     }
     if (ai.netInfo.size > 3000) ai.netInfo.clear();
     // Duros (kill estimado > maxKillSec) solo si no hay nada razonable.
@@ -115,11 +122,57 @@
     ai.lastPickRate = bestRate; ai.lastRivals = players.length;
     return best;
   };
+  // Como juega una persona: elegir un lugar, quedarse mientras rinde, cambiar cuando no.
+  ai.findCamp = (w, P) => {
+    const ms = []; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= ai.cfg.maxKillSec) ms.push(e);
+    const players = rivalsPos(w);
+    let best = null, bv = 0;
+    for (const e of ms) {
+      const p = e.transform.pos; let v = 0;
+      for (const o of ms) if (dist(o.transform.pos, p) <= ai.cfg.campRadius) v += ai.valueOf(o) / ai.killSecOf(o);
+      v *= Math.pow(1 - ai.cfg.competitionPenalty, players.filter((q) => dist(q, p) <= ai.cfg.campRadius).length);
+      v /= 1 + dist(P, p) / 40;
+      if (v > bv) { bv = v; best = { x: Math.round(p.x), z: Math.round(p.z) }; }
+    }
+    return best;
+  };
+  ai.pickTarget = (w, P, c) => {
+    const now = Date.now(), map = w.mapIndex;
+    if (ai.camp && ai.camp.map !== map) ai.camp = null;
+    if (ai.camp) {
+      const cp = ai.camp, min = (now - cp.since) / 60000, rate = min > 0 ? expSince(cp.since) / min : 0;
+      if (now - cp.since > c.campEvalMs) ai.campBest[map] = Math.max(ai.campBest[map] ?? 0, rate);
+      const poor = now - cp.since > c.campEvalMs && rate < (ai.campBest[map] ?? 0) * c.campMinFrac;
+      const empty = now - cp.lastSeen > c.campEmptyMs;
+      if (poor || empty) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
+    }
+    if (!ai.camp) {
+      const found = ai.findCamp(w, P);
+      const recentlyLeft = (p) => ai.leftCamps.some((l) => l.map === map && now - l.at < 120000 && dist(l, p) <= c.campRadius);
+      if (found && !recentlyLeft(found)) { ai.camp = { ...found, map, since: now, lastSeen: now }; L(`campamento en (${found.x},${found.z})`); }
+      else return ai.freePick(w, P, c);
+    }
+    const cp = ai.camp;
+    const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
+    if (t) cp.lastSeen = now;
+    return t;
+  };
   ai.nextGoal = (P, w) => {
     const now = Date.now();
-    // Spot = el punto que más exp dio en este mapa: volver ahí y esperar respawn.
-    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000).sort((a, b) => b.n - a.n)[0];
+    if (ai.camp && ai.camp.map === w.mapIndex && dist(ai.camp, P) > 3) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
+    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4).sort((a, b) => b.n - a.n)[0];
     if (h) return { x: h.x, z: h.z, kind: 'hot' };
+    // Explorar hacia donde menos estuvimos (celdas visitadas por mapa).
+    const vis = (ai.visited[w.mapIndex] ??= {});
+    let best = null, bs = -1e9;
+    for (let k = 0; k < 80; k++) {
+      const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * 22;
+      const x = Math.round(P.x + Math.cos(a) * r), z = Math.round(P.z + Math.sin(a) * r);
+      if (!walkable(w, x, z)) continue;
+      const sc = -(vis[cell({ x, z })] ?? 0) * 10 + Math.random() * 5;
+      if (sc > bs) { bs = sc; best = { x, z, kind: 'explore' }; }
+    }
+    if (best) return best;
     const home = ai.cfg.home[w.mapIndex] ?? { x: P.x, z: P.z };
     for (let tries = 0; tries < 8; tries++) {
       const dirName = ai.cfg.scoutOrder[ai.scoutIdx % ai.cfg.scoutOrder.length];
@@ -158,7 +211,7 @@
       const cycleMin = ai.cycleStart ? (Date.now() - ai.cycleStart) / 60000 : null;
       ai.cycles = ai.cycles ?? []; if (cycleMin) ai.cycles.push(Math.round(cycleMin));
       ai.cycleStart = Date.now();
-      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.spotScore = {}; ai.lastWarp = 0;
+      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.spotScore = {}; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }
@@ -250,7 +303,9 @@
     if (ai.busy || !ai.on || S.uiState !== 5 || S.sceneLoading) return;
     const pd = S.playerData;
     if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
-    if (pd.points >= ai.cfg.statBatch) { ai.busy = true; try { await ai.distribute(); } finally { ai.busy = false; } }
+    // Repartir puntos sin frenar el juego (antes se perdía ~1/3 del tiempo acá).
+    if (pd.points >= ai.cfg.statBatch && !ai.distributing) { ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }
   }, 5000);
+  ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
