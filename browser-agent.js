@@ -185,7 +185,23 @@
     const now = Date.now(), map = w.mapIndex;
     // Modo recorrida (roam=1): sin campamento, al mejor exp/s con la distancia como costo.
     // El usuario: "a veces moverse e ir tirando golpes rinde". El autoajuste decide.
-    if (c.roam) { ai.camp = null; return ai.freePick(w, P, c); }
+    // Recorrida con competencia (usuario, Arena 4 con 3 jugadores y 3 monstruos): la recorrida
+    // solo castigaba cada monstruo con gente cerca y se quedaba en la zona. Si hay >= crowdRivals
+    // a <= 10 tiles durante crowdMs y la exp de los últimos 45 s cae bajo crowdMinFrac de lo
+    // normal del tier, sale de recorrida por 4 min y acampa en la zona de abajo (Arenas).
+    if (c.roam && !ai.roamOff) {
+      const near = rivalsPos(w).filter((q) => dist(q, P) <= 10).length;
+      if (near >= c.crowdRivals) ai.roamCrowdSince ??= now; else ai.roamCrowdSince = null;
+      const ref = ai.tierRef?.[`t${ai.tierSeen ?? 0}`], recent = (expSince(now - 45000) / 45000) * 60000;
+      const g = c.preferDownMaps.includes(map) && ai.downZone(w);
+      if (g && dist(P, g) > 20 && ai.roamCrowdSince && now - ai.roamCrowdSince > c.crowdMs && (!ref || recent < ref * c.crowdMinFrac)) {
+        ai.roamOff = now + 240000; ai.roamCrowdSince = null;
+        ai.camp = { x: g.x, z: g.z, map, since: now, lastSeen: now, toDownZone: true };
+        L(`recorrida con ${near} jugadores cerca y poca exp: voy a la zona de abajo (${g.x},${g.z})`);
+      }
+    }
+    if (ai.roamOff && now > ai.roamOff) ai.roamOff = null;
+    if (c.roam && !ai.roamOff) { ai.camp = null; return ai.freePick(w, P, c); }
     if (ai.camp && ai.camp.map !== map) ai.camp = null;
     // Mientras viaja al campamento, los relojes de "vacío" y "competencia" no corren:
     // si no, lo abandonaba a mitad de camino y elegía otro (iba y venía).
@@ -251,11 +267,11 @@
   ai.nextGoal = (P, w) => {
     const now = Date.now();
     // Modo recorrida: sin campamento (si no, la memoria y el campamento se pisaban).
-    if (ai.cfg.roam) ai.camp = null;
+    if (ai.cfg.roam && !ai.roamOff) ai.camp = null;
     // En el campamento: quedarse esperando el respawn, nunca salir a cruzar el mapa.
     if (ai.camp && ai.camp.map === w.mapIndex) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
     const sc = ai.cfg.startCamp[w.mapIndex];
-    if (sc && !ai.cfg.roam && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
+    if (sc && (!ai.cfg.roam || ai.roamOff) && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
     // Spots conocidos solo si están cerca (hotMaxDist): Devias 1-4 son el MISMO mapa con
     // entradas en puntas opuestas; sin este tope cruzaba todo el mapa sin pelear.
     const inLeash = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(p, ai.arrival) <= ai.cfg.leashDist;
