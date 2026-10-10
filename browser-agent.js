@@ -506,6 +506,10 @@
       }
       if (ai.target) {
         ai.time.fight += 0.4;
+        // Peleando dentro del campamento, el campamento NO está vacío. lastSeen solo se tocaba al
+        // elegir objetivo: contra un monstruo duro (> 12 s) lo daba por vacío con 4 bichos a <= 7
+        // tiles, lo abandonaba y salía a deambular.
+        if (ai.camp && ai.camp.map === w.mapIndex && dist(ai.target.transform.pos, ai.camp) <= c.campRadius + 2) ai.camp.lastSeen = now;
         ai.lastMonster = ai.mapNoMonsterSince = now;
         if (w.attackTarget !== ai.target) w.attackTarget = ai.target;
         const tp = ai.target.transform.pos;
