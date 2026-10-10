@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -50,7 +50,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
-      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12,
+      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -404,6 +404,33 @@
     for (const e of w.byNetId.values()) { if (!e.droppedItem || !ai.isValuable(e.droppedItem)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.lootRadius && d < bd) { bd = d; best = e; } }
     if (best) { const di = best.droppedItem; ai.looting = { id: best.netId, at: now, what: `${di.group}/${di.num}${di.item?.isExcellent ? ' exc' : ''}` }; ai.on = false; w.attackTarget = null; w.castRequest = null; w.pickupTarget = best; L(`voy a levantar ${ai.looting.what} a ${bd} tiles`); }
   }, 300);
+  // Memoria de campamentos: al dejar uno se guarda posición + exp/min real (persiste
+  // entre resets). Sin campamento, ir directo al mejor conocido a <= campMemDist en vez
+  // de buscar: el usuario pidió caminar menos y encontrar el spot rápido.
+  const CAMPS_KEY = `mubot-camps:${S.playerData?.name ?? 'pj'}`;
+  try { ai.campHist = old?.campHist ?? JSON.parse(localStorage.getItem(CAMPS_KEY) || '{}'); } catch { ai.campHist = {}; }
+  let lastCamp = null;
+  ai.campMem = setInterval(() => {
+    const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
+    const cur = ai.camp;
+    if (lastCamp && lastCamp !== cur) {
+      const mins = (Date.now() - lastCamp.since) / 60000;
+      if (mins > 0.75) {
+        const rate = expSince(lastCamp.since) / mins, list = (ai.campHist[lastCamp.map] ??= []);
+        const near = list.find((c) => dist(c, lastCamp) <= 4);
+        if (near) { near.rate = near.rate * 0.6 + rate * 0.4; near.n++; near.level = S.playerData.level; } else list.push({ x: lastCamp.x, z: lastCamp.z, rate, n: 1, level: S.playerData.level });
+        list.sort((a, b) => b.rate - a.rate); list.length = Math.min(list.length, 20);
+        try { localStorage.setItem(CAMPS_KEY, JSON.stringify(ai.campHist)); } catch {}
+      }
+    }
+    lastCamp = cur;
+    if (!cur && !ai.target && ai.on && !ai.busy) {
+      const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
+      const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
+      cands.sort((a, b) => b.rate / (1 + dist(b, P) / 12) - a.rate / (1 + dist(a, P) / 12));
+      if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
+    }
+  }, 1000);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
