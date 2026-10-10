@@ -35,6 +35,13 @@
  *   --explore-dir 1     sesga la exploración hacia una dirección (0..7, 1=norte)
  *   --move dungeon      antes de arrancar, manda "/move <mapa>" por chat
  *                       (warp del server: valida nivel y cobra zen)
+ *   --spots 2,8,21      limita a qué warps puede ir el bot (default: todos)
+ *
+ * Aprendizaje (ver AGENTS.md, "Aprendizaje"):
+ *   --learn-file p.json  dónde guarda exp/min por spot y personaje
+ *                        (default ~/.mubot/learning.json)
+ *   --no-learn           no mide ni aprende: vuelve a la regla fija
+ *                        (spot de mayor nivel requerido)
  *
  * Control / UI:
  *   --decision-log r.jsonl  appendea cada decisión como JSONL (una por línea)
@@ -43,6 +50,12 @@
  *                           ws-server.ts): estado + decisiones en vivo.
  */
 import { appendFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import {
+  SpotMeter, chooseSpot, aggregate, formatSpotTable, loadLearning, saveLearningChar,
+  type Spot, type SpotSample, type CharLearning,
+} from './learning';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type StatusServer } from './ws-server';
@@ -1511,7 +1524,6 @@ async function moveToMap(mapName: string): Promise<boolean> {
 // nivel mínimo y el costo. El bot va al de mayor nivel permitido; los que
 // tienen jefes/eventos (Arena) quedan afuera.
 // ---------------------------------------------------------------------------
-type Spot = { index: number; name: string; reqLevel: number; zen: number };
 const WARP_SPOTS: Spot[] = [
   { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000 },
   { index: 3, name: 'Noria', reqLevel: 10, zen: 1000 },
@@ -1540,34 +1552,118 @@ const LORENCIA_WARP = 2;
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
 const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
 let currentSpot: Spot | null = null;
+// Desde cuándo está en currentSpot (para la permanencia mínima del bandit).
+let spotSince = 0;
 
+// Regla fija (la de antes del aprendizaje): el de mayor reqLevel permitido.
+// Se usa con --no-learn; con aprendizaje y sin datos, chooseSpot da lo mismo.
 function pickSpot(level: number): Spot | undefined {
   return WARP_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index))).sort(
     (a, b) => b.reqLevel - a.reqLevel,
   )[0];
 }
 
-async function warpAndWait(spot: Spot): Promise<boolean> {
+// ---------------------------------------------------------------------------
+// Aprendizaje (ver learning.ts y AGENTS.md, "Aprendizaje"): mide exp/min,
+// kills/min y muertes por spot, lo guarda por personaje y elige el spot con
+// un bandit UCB1 en vez de "el de mayor nivel".
+// ---------------------------------------------------------------------------
+const LEARN_ENABLED = !args.has('--no-learn');
+const LEARN_FILE = args.get('--learn-file') ?? join(homedir(), '.mubot', 'learning.json');
+const LEARN_SUMMARY_MS = 2 * 60_000;
+let learning: CharLearning = { resets: 0, samples: [] };
+const meter = new SpotMeter();
+
+async function loadLearningState() {
+  if (!LEARN_ENABLED) return;
+  const r = await loadLearning(LEARN_FILE);
+  learning = r.data.chars[CHAR_NAME] ?? { resets: 0, samples: [] };
+  if (r.status === 'corrupt') {
+    log(`Aprendizaje: ${LEARN_FILE} ilegible (${r.error}); arranco de cero${r.backup ? `, el original quedó en ${r.backup}` : ''}.`);
+  } else {
+    log(`Aprendizaje: ${learning.samples.length} muestra(s) de ${CHAR_NAME} en ${LEARN_FILE}${r.status === 'missing' ? ' (archivo nuevo)' : ''}.`);
+  }
+}
+
+function recordSample(s: SpotSample | null) {
+  if (s) learning.samples.push(s);
+}
+
+// Los saves se encadenan (muerte y resumen pueden coincidir): uno a la vez.
+let learnSaveChain: Promise<void> = Promise.resolve();
+function persistLearning(): Promise<void> {
+  if (!LEARN_ENABLED) return Promise.resolve();
+  // Nunca frena el juego: si el disco falla, se pierde a lo sumo un tramo.
+  learnSaveChain = learnSaveChain.then(() =>
+    saveLearningChar(LEARN_FILE, CHAR_NAME, learning).catch((e) =>
+      log(`Aprendizaje: no pude guardar ${LEARN_FILE}: ${(e as Error).message}`),
+    ),
+  );
+  return learnSaveChain;
+}
+
+// Corta el tramo en curso (lo guarda como muestra) y deja de medir.
+function endStint() {
+  recordSample(meter.flush(Date.now(), world.level));
+  meter.stop();
+}
+
+function logLearningSummary() {
+  if (!LEARN_ENABLED) return;
+  const now = Date.now();
+  const live = meter.peek(now);
+  const stats = aggregate(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
+  log(`Aprendizaje (nivel ${world.level}, reset ${learning.resets}, * = spot actual):\n${formatSpotTable(WARP_SPOTS, stats, currentSpot?.index ?? null)}`);
+}
+
+async function warpAndWait(spot: Spot, measure = true): Promise<boolean> {
   const waiter = waitFor('MapChanged075', 6000).catch(() => null);
   warpTo(spot.index);
   const ok = !!(await waiter);
-  if (ok) currentSpot = spot;
-  else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
+  if (ok) {
+    endStint();
+    currentSpot = spot;
+    spotSince = Date.now();
+    if (measure && LEARN_ENABLED) meter.start(spot.index, world.level, learning.resets, spotSince);
+  } else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
   return ok;
 }
 
 async function maybeChangeSpot(): Promise<boolean> {
-  const best = pickSpot(world.level);
+  let best: Spot | undefined | null;
+  let what: string;
+  let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
+  if (!LEARN_ENABLED) {
+    best = pickSpot(world.level);
+    what = `warp a ${best?.name} (nivel ${world.level}, cuesta ${best?.zen} zen)`;
+  } else {
+    const now = Date.now();
+    const live = meter.peek(now);
+    const choice = chooseSpot({
+      spots: WARP_SPOTS,
+      level: world.level,
+      reset: learning.resets,
+      allowed: ALLOWED_SPOTS,
+      current: currentSpot,
+      dwellMs: currentSpot ? now - spotSince : Infinity,
+      samples: live ? [...learning.samples, live] : learning.samples,
+    });
+    best = choice.spot;
+    what = `${choice.what} → warp a ${best?.name} (cuesta ${best?.zen} zen)`;
+    detail = {
+      ...detail,
+      reason: choice.reason,
+      stats: Object.fromEntries(choice.stats),
+      ucb: Object.fromEntries(choice.ucb),
+    };
+  }
   if (!best || best.index === currentSpot?.index) return false;
-  const ok = await decide({
-    kind: 'travel',
-    what: `warp a ${best.name} (nivel ${world.level}, cuesta ${best.zen} zen)`,
-    detail: { warp: best.index, from: currentSpot?.name ?? null, level: world.level },
-    autoOk: true,
-  });
+  const ok = await decide({ kind: 'travel', what, detail: { ...detail, warp: best.index }, autoOk: true });
   if (!ok) return false;
-  log(`Cambio de spot: ${currentSpot?.name ?? '?'} → ${best.name} (nivel ${world.level})`);
-  return warpAndWait(best);
+  log(`Cambio de spot: ${currentSpot?.name ?? '?'} → ${best.name} — ${what}`);
+  const moved = await warpAndWait(best);
+  if (moved) await persistLearning();
+  return moved;
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,7 +1680,10 @@ async function doReset(): Promise<boolean> {
   });
   if (!ok) return false;
   await investStatPoints(true);
-  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
+  // Lo medido hasta acá es del reset viejo: cortarlo antes de ir a Lorencia
+  // (el viaje a resetear no es farmeo y no se mide).
+  endStint();
+  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!, false);
   await sleep(2000);
   let listWaiter = waitFor('CharacterList', 8000).catch(() => null);
   sayChat(CHAR_NAME, '/reset');
@@ -1602,6 +1701,10 @@ async function doReset(): Promise<boolean> {
   log('Reset hecho. Vuelvo a entrar con el personaje.');
   world.npcs.clear();
   currentSpot = null;
+  meter.stop();
+  // Contador local de resets: el server no manda uno que sepamos parsear.
+  learning.resets++;
+  await persistLearning();
   await selectCharacter(list);
   await sleep(2500);
   await investStatPoints(true);
@@ -1622,14 +1725,43 @@ async function autonomousLoop(seconds: number) {
   let statPointsSpent = 0;
   let skillsUsed = 0;
   let resets = 0;
+  let deaths = 0;
   let nextResetTry = 0;
+  let lastSummary = Date.now();
+
+  // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro
+  // id); el meter descarta el duplicado. Se corta el tramo (la muerte queda en
+  // la muestra del spot donde pasó) y se olvida el spot actual: el respawn
+  // suele ser en otro lado, así que el próximo maybeChangeSpot vuelve a elegir
+  // (con la muerte ya penalizando a ese spot).
+  const onDeath = (source: string) => {
+    if (!meter.addDeath(Date.now())) return;
+    deaths++;
+    log(`Muerte #${deaths} (${source}) en ${currentSpot?.name ?? 'spot desconocido'}.`);
+    if (LEARN_ENABLED) {
+      endStint();
+      currentSpot = null;
+      void persistLearning();
+    }
+  };
+  let lastHp = world.hp;
+  const onHp = (raw: any) => {
+    const hp = new CurrentHealthAndShieldPacket(raw).Health;
+    if (hp === 0 && lastHp > 0) onDeath('HP 0');
+    lastHp = hp;
+  };
 
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === target;
     npcs.delete(p.KilledId & 0x7fff);
+    if ((p.KilledId & 0x7fff) === playerId) {
+      onDeath('ObjectGotKilled');
+      return;
+    }
     if ((p.KillerId & 0x7fff) === playerId) {
       kills++;
+      meter.addKill();
       log(`Kill #${kills} (Id=${p.KilledId})`);
     } else if (wasOurTarget && process.env.MUBOT_DEBUG_COMBAT) {
       // Zona concurrida: puede que otro jugador/NPC mate a nuestro objetivo
@@ -1641,10 +1773,12 @@ async function autonomousLoop(seconds: number) {
   const onExp = (raw: any) => {
     const p = new ExperienceGainedPacket(raw);
     totalExpGained += p.AddedExperience;
+    meter.addExp(p.AddedExperience);
     log(`+${p.AddedExperience} exp (total ${totalExpGained})`);
   };
   EventBus.on('ObjectGotKilled', onKilled);
   EventBus.on('ExperienceGained', onExp);
+  EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
   watchEconomy();
 
@@ -1660,6 +1794,13 @@ async function autonomousLoop(seconds: number) {
 
   while (Date.now() - start < seconds * 1000 && !kicked) {
     ticks++;
+    // Aprendizaje: cada ~2 min cierra un tramo, lo guarda y muestra la tabla.
+    if (LEARN_ENABLED && Date.now() - lastSummary >= LEARN_SUMMARY_MS) {
+      lastSummary = Date.now();
+      recordSample(meter.flush(lastSummary, world.level));
+      await persistLearning();
+      logLearningSummary();
+    }
     // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
     //    compras son caras de confirmar y no queremos spamearlas.
     if (ticks % 25 === 0 && !haveHealingPotions()) {
@@ -1785,12 +1926,19 @@ async function autonomousLoop(seconds: number) {
 
   EventBus.off('ObjectGotKilled', onKilled);
   EventBus.off('ExperienceGained', onExp);
+  EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
+  if (LEARN_ENABLED) {
+    // Cierra el tramo sin dejar de medir (no cambiamos de spot) y guarda.
+    recordSample(meter.flush(Date.now(), world.level));
+    await persistLearning();
+    logLearningSummary();
+  }
   drops.clear();
 
-  log(`\nFin autónomo: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${skillsUsed} skill(s), ${resets} reset(s).`);
+  log(`\nFin autónomo: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${skillsUsed} skill(s), ${resets} reset(s), ${deaths} muerte(s).`);
   log(`Posición final (${world.x},${world.y}) map=${world.map}. Desconectado: ${kicked}`);
-  return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed, resets };
+  return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed, resets, deaths };
 }
 
 // ---------------------------------------------------------------------------
@@ -1817,6 +1965,7 @@ async function main() {
   // SkillListUpdate / CharacterInventory, que llegan justo después del login.
   trackWorld();
   const { startX, startY } = await loginAndSelectCharacter();
+  await loadLearningState();
 
   if (args.has('--probe-dir')) {
     const dir = parseInt(args.get('--probe-dir')!);
@@ -1848,7 +1997,7 @@ async function main() {
   console.log(`\n=== Resumen ===`);
   console.log(`Duración: ${autoSeconds}s, sin GUI, ritmo humano.`);
   console.log(`Kills: ${r.kills}  Exp: ${r.totalExpGained}  Pociones: ${r.potionsDrunk}`);
-  console.log(`Puntos repartidos: ${r.statPointsSpent}  Skills usadas: ${r.skillsUsed}  Resets: ${r.resets}`);
+  console.log(`Puntos repartidos: ${r.statPointsSpent}  Skills usadas: ${r.skillsUsed}  Resets: ${r.resets}  Muertes: ${r.deaths}`);
   console.log(`Stats finales: ${STAT_ORDER.map((s) => `${s}=${world.stats[s]}`).join(' ')}`);
   console.log(`Skills conocidos: ${[...world.skills.values()].map((s) => `${s.number}(lv${s.level})`).join(', ') || 'ninguno'}`);
   console.log(`Desconectado por el server: ${kicked ? 'SÍ' : 'NO'}`);

@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server). 25 tests.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -54,6 +54,8 @@ pasó una vez y costó tres intentos de debugging.
 | `headless-bot.ts` | El bot. Login, mundo, loop autónomo, economía, capa de decisión. |
 | `ws-server.ts` | Telemetría por WebSocket (solo lectura), detrás de `--ws-port`. |
 | `packet-tests.ts` | Tests offline de parsers y builders. Sin red. |
+| `learning.ts` | Capa de aprendizaje (lógica pura): medición por spot, bandit UCB1, persistencia. |
+| `learning-tests.ts` | Tests offline de `learning.ts` (usa un dir temporal, sin red). |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS, en loopback por defecto). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |
@@ -139,6 +141,76 @@ defecto, sin cambios. Conectar un control real (que una UI apruebe/rechace
   propósito), no un bug del filtro.
 - `MUBOT_DEBUG_COMBAT=1`: loguea distancia al objetivo cada 5 ticks y cada
   intento de golpe. Se usó para diagnosticar el problema de combate de abajo.
+
+## Aprendizaje
+
+El bot ya no elige el mapa con una regla fija: mide cuánto rinde cada spot y
+elige con esa experiencia. La lógica es pura y está en `learning.ts`
+(testeada en `learning-tests.ts`); `headless-bot.ts` solo la engancha.
+
+**Qué mide.** Mientras está en un spot (`currentSpot`, que se setea al warpear),
+`SpotMeter` acumula exp (`ExperienceGained`), kills propios (`ObjectGotKilled`
+con `KillerId` = nosotros) y muertes. Muerte = el HP propio cae a 0
+(`CurrentHealthAndShield`) o llega `ObjectGotKilled` con `KilledId` = nosotros;
+las dos señales dentro de 15 s cuentan como una. El tramo se corta en una
+**muestra** cada ~2 min, al cambiar de spot, al morir, antes de un reset y al
+terminar. Cada muestra guarda spot, nivel y reset al que se midió, duración,
+exp, kills y muertes. Tramos de menos de 30 s sin muertes se descartan.
+Sin `currentSpot` (arrancó sin `--warp` y todavía no warpeó) no se mide.
+
+**Dónde guarda.** `~/.mubot/learning.json` (fuera del repo; `--learn-file` lo
+cambia), con una entrada por personaje (`--char`): `{ resets, samples[] }`.
+Escritura atómica (tmp en el mismo dir + `rename`); cada save relee el archivo y
+reemplaza solo la entrada de su personaje, así dos bots con personajes
+distintos no se pisan. Archivo ausente = empieza de cero. Archivo corrupto =
+empieza de cero y el original se renombra a `learning.json.corrupt-<ts>`.
+Muestras mal formadas se descartan una por una. Tope de 2000 muestras por
+personaje (quedan las últimas). `resets` es un **contador local** (se suma
+cuando `doReset()` termina bien): no hay un packet de resets que sepamos
+parsear todavía.
+
+**Cómo decide (`chooseSpot`, bandit UCB1).** Cada ~50 ticks `maybeChangeSpot()`:
+1. Candidatos: spots con `reqLevel <= nivel`, limitados por `--spots`.
+2. Datos: se ponderan las muestras por cercanía de nivel (triangular, ±40
+   niveles; más lejos no cuentan) y las de otro reset pesan la mitad. Tasa
+   efectiva = `exp / (minutos + muertes × 3)`: cada muerte cuesta 3 minutos de
+   farmeo.
+3. Permanencia mínima de **5 min** en el spot antes de evaluar cambio (cada
+   warp cuesta zen). Excepción: si el spot actual dejó de ser elegible (reset,
+   `--spots`) o no hay spot actual (arranque, muerte, reset), decide ya.
+4. Sin datos para este nivel: **regla vieja** (mayor `reqLevel`).
+5. Exploración acotada: un spot sin datos se prueba solo si está entre los 4 de
+   mayor `reqLevel` elegibles.
+6. Con datos: UCB1 con recompensa = tasa / mejor tasa (0..1), una "jugada" = 5
+   min de farmeo, bonus `0.3·√(2 ln N / n)`. Para moverse, el mejor tiene que
+   superar al actual por 0.05 (histéresis, evita oscilar).
+
+UCB1 y no epsilon-greedy: epsilon-greedy explora con warps al azar para
+siempre (zen y tiempo tirados, y un personaje que salta de mapa sin motivo se
+ve raro); UCB1 es determinista, explora solo donde falta evidencia y cada
+decisión se explica con números. Los parámetros están en `LEARN` (`learning.ts`).
+
+Cada cambio pasa por `decide()` (`kind: 'travel'`) con un `what` que explica el
+porqué, ej. `Atlans 3: 412 exp/min vs Tarkan 345 exp/min (n=6) → warp a
+Atlans 3 (cuesta 5000 zen)`, y en `detail` van `reason`
+(`no-data`/`explore`/`exploit`/`ineligible`), la tabla y los puntajes UCB.
+Cada ~2 min se loguea la tabla aprendida:
+
+```
+[bot] Aprendizaje (nivel 150, reset 0, * = spot actual):
+  spot              n    min  exp/min kill/min muertes efectiva   ucb
+  Atlans 3          1   30.0      412      4.1     0.0      412
+* Tarkan            1   30.0      380      3.8     1.0      345
+```
+
+Al morir se corta la muestra y se olvida `currentSpot`, así el próximo
+`maybeChangeSpot` vuelve a warpear (el respawn suele ser en otro lado).
+`--no-learn` desactiva todo y vuelve a `pickSpot()` (mayor `reqLevel`).
+
+**Sin verificar en vivo:** que el server mande `CurrentHealthAndShield` con 0 /
+`ObjectGotKilled` propio al morir, dónde respawnea este server, y si el
+re-warp tras morir es lo que haría un humano. El reparto de stats
+(`BUILD_WEIGHTS`) **no** aprende todavía: sigue fijo.
 
 ## Combate: dos bugs reales arreglados, uno sin resolver
 
