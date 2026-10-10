@@ -62,6 +62,10 @@ export const LEARN = {
   SWITCH_MARGIN: 0.05,
   // Tope de muestras por personaje para que el JSON no crezca sin límite.
   MAX_SAMPLES: 2000,
+  // Un spot donde el mapa entero quedó sin monstruos (ver explore.ts,
+  // DRY_MAP_MS) no se vuelve a elegir durante esto. El tramo seco en sí ya
+  // queda como muestra mala (0 exp en >= 2 min).
+  DRY_EXCLUDE_MS: 15 * 60_000,
 } as const;
 export type LearnParams = typeof LEARN;
 
@@ -201,6 +205,7 @@ export type ChoiceReason =
   | 'none'        // no hay spot elegible
   | 'dwell'       // todavía no se cumplió la permanencia mínima
   | 'ineligible'  // el spot actual ya no sirve (nivel/--spots): cambio forzado
+  | 'dry'         // el mapa actual se quedó sin monstruos: cambio forzado
   | 'no-data'     // sin datos de nada: regla vieja (mayor reqLevel)
   | 'explore'     // probar un spot sin datos para este nivel
   | 'exploit'     // otro spot rinde mejor
@@ -222,7 +227,17 @@ export type ChooseInput = {
   current: Spot | null;
   dwellMs: number;            // cuánto hace que está en `current`
   samples: SpotSample[];      // historial + el tramo en curso
+  // Spots "secos" (mapa sin monstruos hace poco): no se eligen, y si el actual
+  // está acá, se cambia aunque no cumpla la permanencia mínima.
+  exclude?: ReadonlySet<number>;
 };
+
+// Spots secos vigentes: los que se marcaron hace menos de DRY_EXCLUDE_MS.
+export function activeDryExclusions(dryAt: ReadonlyMap<number, number>, now: number, p: LearnParams = LEARN): Set<number> {
+  const out = new Set<number>();
+  for (const [spot, at] of dryAt) if (now - at < p.DRY_EXCLUDE_MS) out.add(spot);
+  return out;
+}
 
 export function eligibleSpots(spots: Spot[], level: number, allowed: Set<number> | null): Spot[] {
   return spots
@@ -234,7 +249,9 @@ const fmt = (n: number) => (n >= 100 ? Math.round(n).toString() : n.toFixed(1));
 
 export function chooseSpot(inp: ChooseInput, p: LearnParams = LEARN): SpotChoice {
   const { level, reset, current, dwellMs } = inp;
-  const cands = eligibleSpots(inp.spots, level, inp.allowed);
+  const exclude = inp.exclude ?? new Set<number>();
+  const curDry = current != null && exclude.has(current.index);
+  const cands = eligibleSpots(inp.spots, level, inp.allowed).filter((sp) => !exclude.has(sp.index));
   const stats = aggregate(inp.samples, level, reset, p);
   const ucb = new Map<number, number>();
   const base = { stats, ucb };
@@ -253,8 +270,8 @@ export function chooseSpot(inp: ChooseInput, p: LearnParams = LEARN): SpotChoice
     return s && hasData(sp) ? `${sp.name} ${fmt(s.rate)} exp/min (n=${s.n})` : `${sp.name} sin datos`;
   };
   const curTxt = current ? describe(current) : 'sin spot';
-  const prefix = curEligible || current == null ? '' : `${current.name} ya no es elegible; `;
-  const reasonIfMoving = (r: ChoiceReason): ChoiceReason => (curEligible || current == null ? r : 'ineligible');
+  const prefix = curEligible || current == null ? '' : curDry ? `${current.name} sin monstruos; ` : `${current.name} ya no es elegible; `;
+  const reasonIfMoving = (r: ChoiceReason): ChoiceReason => (curEligible || current == null ? r : curDry ? 'dry' : 'ineligible');
 
   if (!withData.length) {
     const sp = cands[0];
