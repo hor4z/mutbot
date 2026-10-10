@@ -217,7 +217,10 @@
     if (sc && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
     // Spots conocidos solo si están cerca (hotMaxDist): Devias 1-4 son el MISMO mapa con
     // entradas en puntas opuestas; sin este tope cruzaba todo el mapa sin pelear.
-    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4 && dist(c, P) <= ai.cfg.hotMaxDist).sort((a, b) => b.n - a.n)[0];
+    const inLeash = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(p, ai.arrival) <= ai.cfg.leashDist;
+    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4 && dist(c, P) <= ai.cfg.hotMaxDist && inLeash(c)).sort((a, b) => b.n - a.n)[0];
+    // Fuera de la correa (llegó lejos de la llegada): volver a la llegada.
+    if (!inLeash(P)) return { x: Math.round(ai.arrival.x), z: Math.round(ai.arrival.z), kind: 'llegada' };
     if (h) return { x: h.x, z: h.z, kind: 'hot' };
     // Explorar hacia donde menos estuvimos (celdas visitadas por mapa).
     const vis = (ai.visited[w.mapIndex] ??= {});
