@@ -169,7 +169,10 @@
     if (ai.camp && dist(P, ai.camp) > c.campRadius) { ai.camp.lastSeen = now; ai.camp.crowdSince = null; }
     if (ai.camp) {
       const cp = ai.camp, min = (now - cp.since) / 60000, rate = min > 0 ? expSince(cp.since) / min : 0;
-      if (now - cp.since > c.campEvalMs) ai.campBest[map] = Math.max(ai.campBest[map] ?? 0, rate);
+      // Referencia del mapa = promedio móvil de lo que rindieron sus campamentos (no el
+      // máximo): un campamento con suerte subía la vara y hacía abandonar spots estables.
+      // El usuario: "a veces conviene quedarse en un spot"; lo que importa es lo rentable sostenido.
+      if (now - cp.since > c.campEvalMs && !cp.counted) { cp.counted = true; const prev = ai.campBest[map]; ai.campBest[map] = prev == null ? rate : prev * 0.7 + rate * 0.3; }
       const poor = now - cp.since > c.campEvalMs && rate < (ai.campBest[map] ?? 0) * c.campMinFrac;
       const empty = now - cp.lastSeen > c.campEmptyMs;
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
