@@ -257,3 +257,19 @@ El usuario los dejó para después; ahora sigue Horaz solo (`browser-agent.js` s
 - Anotar dónde aparecen los dorados por mapa (`mubot:goldSpots`) e ir primero ahí.
 - Detectar el inicio de la invasión por el aviso del chat ("¡El Dragón Dorado está invadiendo!").
 - Mientras caza, pelear los comunes a <= 3 tiles: si los ignora, lo rodean.
+
+## Roadmap: llevar todo al bot sin navegador (`headless-bot.ts`)
+
+`duo.js` y `hunter.js` solo funcionan en el navegador: se comunican por `localStorage`
+entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda party
+(`headless-bot.ts`, handler de `PartyRequest`). Orden acordado con el usuario:
+
+1. **Prueba larga de Horaz solo sin navegador** (24 h contra el server real). Antes hay que cerrar
+   su sesión en el navegador: nunca dos sesiones de la misma cuenta.
+2. **Dúo sin navegador.** Un solo proceso con las dos conexiones, para que la posición del líder
+   sea memoria compartida sin relay. La alternativa son dos procesos con un socket local.
+   - Party: aceptar solo la del compañero (`C1 06 41 01 <id>`) y seguir rechazando el resto.
+   - Portar lo aprendido en `duo.js`: mismo tile, pociones al 85 %, esperar a > 8 tiles,
+     atraer solo con el líder quieto, tope de mapa y resetear juntos.
+   - Credenciales de las dos cuentas en el `.env`, nunca en el código.
+3. **Modo cazador sin navegador**, con la búsqueda dividida que se describe arriba.
