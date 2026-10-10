@@ -593,6 +593,9 @@ Todo por **chat** (`C1 len 00 <nombre 10 bytes> <texto>`):
   tiene fuerza y energía al tope: `planStats` manda lo que no entra a agilidad y después a vitalidad.
   Antes repetía `/add str`/`/add ene` rechazados cada 3 s sin fin. El server contesta con un
   `CharacterInformation` completo (F3/03) y `CharacterResets` (`C1 06 FE 00 ..`).
+- `/reset` exige **nivel 400**: probado en 300, el server contestó "El nivel necesario para el
+  reset es 400." (2026-10-10). El agente ya no prueba niveles menores (`resetProbe: []`).
+  La barra muestra `Resets: 15 · GR: 1`: hay **grand reset**, todavía sin investigar.
 - `/reset` (el usuario lo hizo en nivel 400, en Lorencia, después de repartir puntos).
   El server descuenta zen y **devuelve al cliente a la selección de personaje**
   (`CharacterList`); hay que volver a elegir el personaje para entrar.
