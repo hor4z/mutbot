@@ -71,7 +71,7 @@
     every(() => {
       const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe || S.uiState !== 5 || S.sceneLoading) return;
       const now = Date.now();
-      if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.75 && now - lastPot > 600) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
+      if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.85 && now - lastPot > 400) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
       w.attackTarget = null; w.castRequest = null;
       const h = read(leaderName); if (!h) return;
       // Si el líder está en un mapa que el seguidor no puede entrar (nivel), esperar en
@@ -90,6 +90,10 @@
   const partyWith = (name) => {
     publish(S.playerData.name);
     window.__partyWith = name; window.__inParty = false;
+    // En dúo el líder SIEMPRE protege al compañero (usuario): primero los monstruos a <= 5
+    // tiles de él; la ruta y el estilo de farmeo del líder no cambian.
+    const ai = window.__ai;
+    if (ai && !ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(name); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
