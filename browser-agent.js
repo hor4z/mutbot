@@ -52,8 +52,9 @@
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
-      // saltando de campamento en campamento, terminaba en la zona de Devias 1.
-      leashDist: 40,
+      // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
+      // "en las otras Devias hay spots muy cerca de donde sale el pj".
+      leashDist: 25,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
