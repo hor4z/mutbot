@@ -470,7 +470,9 @@
       // Desde nivel 10 (en Lorencia el plan B es Noria) y con al menos 45 s en el lugar.
       // Con todo lleno, saltar cada 50 s entre Devias 3/4/2 empeoró el ciclo 6: como mucho un
       // salto por hambre cada 2 min, ≥2 jugadores y ≥60 s en el lugar.
-      const starving = pd.level >= 10 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && rivalsNear >= 2 && recentRate < (ref ? ref * 0.25 : 5e6);
+      const starving = pd.level >= 10 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && (rivalsNear >= 2 ? recentRate < (ref ? ref * 0.25 : 5e6) : !!ref && recentRate < ref * 0.35);
+      // Sin competencia también: Devias 3 daba ~3M/min (lo normal del tramo ~10M) con un solo
+      // jugador cerca y deambulaba; Devias 4 al lado rendía el doble (usuario: "probá en otro Devias").
       const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (crowdedSpot && now - ai.lastWarp > 15000) {
