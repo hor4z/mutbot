@@ -52,7 +52,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 5, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 5, roam: 0, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -172,6 +172,9 @@
   };
   ai.pickTarget = (w, P, c) => {
     const now = Date.now(), map = w.mapIndex;
+    // Modo recorrida (roam=1): sin campamento, al mejor exp/s con la distancia como costo.
+    // El usuario: "a veces moverse e ir tirando golpes rinde". El autoajuste decide.
+    if (c.roam) { ai.camp = null; return ai.freePick(w, P, c); }
     if (ai.camp && ai.camp.map !== map) ai.camp = null;
     // Mientras viaja al campamento, los relojes de "vacío" y "competencia" no corren:
     // si no, lo abandonaba a mitad de camino y elegía otro (iba y venía).

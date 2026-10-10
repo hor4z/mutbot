@@ -25,6 +25,8 @@
     castRange: { min: 2, max: 5, step: 1 },
     skillMinMp: { min: 0, max: 0.4, step: 0.1 },
     campDistDecay: { min: 5, max: 30, step: 6 },
+    // 0 = acampar, 1 = recorrer pegando (decisión del autoajuste, no mía)
+    roam: { min: 0, max: 1, step: 1 },
   };
   const WINDOW_MS = 180000, PAIRS = 2, MIN_GAIN = 0.05;
   // Aplicar lo aprendido en sesiones anteriores.
@@ -34,6 +36,8 @@
   const pick = (o) => Object.fromEntries(Object.keys(SPACE).map((k) => [k, o[k]]));
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ best: pick(ai.cfg), history: t.history.slice(-200) })); } catch {} };
   const propose = () => {
+    // La primera prueba: acampar vs recorrer (la duda del usuario).
+    if (!t.history.some((h) => h.key === 'roam')) return { key: 'roam', from: ai.cfg.roam ?? 0, to: (ai.cfg.roam ?? 0) ? 0 : 1 };
     const keys = Object.keys(SPACE);
     for (let tries = 0; tries < 20; tries++) {
       const k = keys[Math.floor(Math.random() * keys.length)], sp = SPACE[k];
