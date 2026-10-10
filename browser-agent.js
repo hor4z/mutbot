@@ -217,7 +217,11 @@
       // Sin campamentos medidos en el mapa (campBest se borra en cada reset y al reinstalar), la
       // vara es lo normal del tramo de nivel (tierRef): en Arena 3 quedó en un campamento vacío
       // a ~60M/min (lo normal ~200M) porque "rinde poco" nunca daba verdadero.
-      const ref = ai.campBest[map] ?? ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0;
+      // Y nunca menos que lo que rindió el mejor campamento conocido del mapa a un nivel parecido
+      // (campHist): con la vara del tramo (71M) un campamento a 60M "no rendía poco" y tenía la
+      // zona de abajo a ~405M.
+      const lvl = S.playerData.level, memBest = Math.max(0, ...(ai.campHist?.[map] ?? []).filter((h) => Math.abs((h.level ?? lvl) - lvl) < 100 && h.n >= 1).map((h) => h.rate));
+      const ref = Math.max(ai.campBest[map] ?? ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0, memBest);
       const poor = now - cp.since > c.campEvalMs && rate < ref * c.campMinFrac;
       const empty = now - cp.lastSeen > c.campEmptyMs;
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
