@@ -1,6 +1,7 @@
 /**
  * Modo cazador: invasión dorada (todas las horas a los :50, 15 min).
- * Se carga después de browser-agent.js y tuner.js. Con `auto` (por defecto) caza solo:
+ * Se carga después de browser-agent.js y tuner.js. Con `__hunt.auto = true` caza solo (por defecto
+ * NO: el usuario quiere practicar búsqueda y caza supervisadas antes de meterla en la rutina):
  *
  *  - Lee el paquete propio 0xFD (InvasionMonsters): estado, total y vivos POR MAPA. Así sabe a qué
  *    mapa ir y cuándo cortar, sin depender del panel (que mostró "Noria" con los dragones en Devias).
@@ -37,7 +38,7 @@
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
-  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? true, map: null, visited: new Set(), seen: new Set(), saved: null, start: null, timer: null });
+  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, start: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
   if (!window.__invHooked) {

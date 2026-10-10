@@ -289,3 +289,12 @@ entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda p
   aun con el arreglo del destino. Ninguna de las dos se vuelve a probar sola: quedan en el
   historial del tuner.
 - El reset exige nivel 400 (lo contestó el server). La mejora sale solo de llegar antes a 400.
+
+## Roadmap del personaje: caza de la invasión dorada
+
+En práctica supervisada (2026-10-10). `hunter.js` se carga con `auto` apagado y se arranca a mano.
+Cuando el usuario la dé por pulida, se activa sola (`__hunt.auto = true`) al principio del ciclo
+(nivel < 250), a los :50 de cada hora. Lo que hay que medir en las prácticas:
+- dorados por minuto y niveles ganados por mapa (Noria / Lorencia / Devias),
+- si a nivel ~200 todavía conviene o solo al arranque,
+- si la memoria de dónde aparecen (`mubot-gold:<pj>`) acorta la búsqueda.

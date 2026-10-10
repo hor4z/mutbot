@@ -13,8 +13,8 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
 - **Nunca tipear contraseñas en el navegador.** Si la pestaña no está logueada o está en la pantalla
   de login, pedirle al usuario que entre él con el personaje y avisar cuando esté.
 - **Una sola sesión por cuenta:** no correr `bun run bot` con la misma cuenta que está abierta en el navegador.
-- **`hunter.js` sí** (desde 2026-10-10, pedido del usuario): caza la invasión dorada sola al principio
-  del ciclo y vuelve a farmear. **`duo.js` no**: en pausa; solo si lo pide.
+- **`hunter.js` se carga pero con `auto` apagado**: la caza se practica supervisada (`__hunt.start()`)
+  hasta que el usuario la dé por pulida y pida meterla en la rutina. **`duo.js` no**: en pausa.
 - **Ritmo humano:** no tocar animaciones, cooldowns ni velocidad de packets.
 
 ## Pasos
