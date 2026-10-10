@@ -297,11 +297,13 @@
     ai.busy = true; W().attackTarget = null;
     try {
       L(`RESET: nivel ${S.playerData.level}`);
-      await ai.distribute();
-      if (W().mapIndex !== 0) { S.warpCommandRequest(2); await sleep(6000); }
+      // Sin repartir antes: los puntos sobrantes se suman a los del reset (ahorra ~8 s).
+      // Primero /reset donde esté; si el server no lo acepta fuera de Lorencia, warp y reintento.
       say('/reset');
-      for (let i = 0; i < 40 && S.uiState === 5; i++) await sleep(500);
-      if (S.uiState === 5) { L('RESET: el server no nos sacó del mundo; reintento en 10 min'); ai.nextResetTry = Date.now() + 600000; return; }
+      for (let i = 0; i < 12 && S.uiState === 5; i++) await sleep(500);
+      if (S.uiState === 5 && W().mapIndex !== 0) { L('RESET: no lo aceptó acá; voy a Lorencia y reintento'); ai.resetNeedsLorencia = true; S.warpCommandRequest(2); await sleep(6000); say('/reset'); for (let i = 0; i < 40 && S.uiState === 5; i++) await sleep(500); }
+      else if (S.uiState !== 5 && W()?.mapIndex !== 0) ai.resetNeedsLorencia = false;
+      if (S.uiState === 5) { L('RESET: el server no nos sacó del mundo; reintento en 2 min'); ai.nextResetTry = Date.now() + 120000; return; }
       await sleep(2500);
       S.selectCharacterRequest(S.playerData.name || 'Horaz');
       for (let i = 0; i < 40 && S.uiState !== 5; i++) await sleep(500);
@@ -314,7 +316,8 @@
       // Lo que rinde cada mapa se conserva: Arena 1 no sirve en ningún ciclo.
       // La ronda exploratoria dura un ciclo: se apaga al resetear (se prende a mano o al pedirla).
       ai.mapEnteredAt = {}; ai.exploreRound = !!ai.exploreRoundNext; ai.exploreRoundNext = false;
-      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
+      // Tras el reset aparece en Lorencia: marcarlo como spot actual evita un warp inútil.
+      ai.resets++; ai.spot = W()?.mapIndex === 0 ? 2 : null; ai.spotRun = ai.spot ? { spot: 2, start: Date.now(), kills0: ai.kills } : null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }

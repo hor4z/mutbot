@@ -191,3 +191,14 @@ acumulados. Hasta entonces, nada que saque tiempo del ciclo.
 3. Decidir con números si conviene desviarse: valor esperado de la caja + exp del dorado
    frente a los minutos de ciclo que se pierden.
 4. Levantar las cajas (ya activo) y, más adelante, abrirlas y aprovechar lo que salga.
+
+## 13. Registro de ciclos (agente web)
+
+| Ciclo | Min | Resets/día | 10→100 | 100→200 | 200→300 | 300→400 | Reset | Cambios principales |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 25 | 58 | 10,8 | 2,0 | 3,0 | ~9 | — | primera corrida medida (con parches en vivo) |
+| 2 | 20 | 72 | — | — | — | — | 22 s | ruta fija, cripta, correa, pelea en el camino |
+| 3 | 14,7 | 98 | 2,5 | 1,5 | 3,2 | 7,1 | 22 s | exp por segundo (medición), giro caminando, conglomerados, hambre con rivales |
+
+Siguiente (ciclo 4): reset sin warp ni reparto previo, sin warp a Lorencia tras el reset.
+Tramo que decide: 300→400 (7,1 min, ~48% del ciclo).
