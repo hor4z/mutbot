@@ -58,7 +58,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
+      campUpgrade: 1.25, crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
       // Ancla con radio 7 y 3 s (usuario: "era un buen spot pero tenía que matar alrededor un poco";
       // con 4 tiles y 6 s se quedaba demasiado estático).
       anchor: 1, anchorRadius: 7, anchorWaitMs: 3000, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
@@ -226,6 +226,15 @@
       const lvl = S.playerData.level, memBest = Math.max(0, ...(ai.campHist?.[map] ?? []).filter((h) => Math.abs((h.level ?? lvl) - lvl) < 100 && h.n >= 1).map((h) => h.rate));
       const ref = Math.max(ai.campBest[map] ?? ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0, memBest);
       const poor = now - cp.since > c.campEvalMs && rate < ref * c.campMinFrac;
+      // Mejor afuera (usuario: "afuera gana más, no lo entiendo"): en los corrales de Arena 4 hacía
+      // ~314M/min con la zona de abajo medida en ~405M. Si un spot conocido del mapa rinde
+      // >= campUpgrade × lo de acá, ir para allá (aunque acá no sea "pobre").
+      const bestMem = (ai.campHist?.[map] ?? []).filter((h) => Math.abs((h.level ?? lvl) - lvl) < 100 && dist(h, cp) > 6).sort((a, b) => b.rate - a.rate)[0];
+      if (!poor && now - cp.since > c.campEvalMs && bestMem && bestMem.rate >= rate * c.campUpgrade) {
+        L(`hay algo mejor: (${bestMem.x},${bestMem.z}) ~${Math.round(bestMem.rate / 1e6)}M contra ${Math.round(rate / 1e6)}M acá`);
+        ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }];
+        ai.camp = { x: bestMem.x, z: bestMem.z, map, since: now, lastSeen: now, known: true }; ai.explore = null; return ai.freePick(w, P, { ...c, scan: c.enRouteScan });
+      }
       const empty = now - cp.lastSeen > c.campEmptyMs;
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
       if (rivalsHere >= c.crowdRivals) cp.crowdSince ??= now; else cp.crowdSince = null;
