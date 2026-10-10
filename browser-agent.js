@@ -33,8 +33,10 @@
   const SCREEN = { up: [-1, 1], right: [1, 1], down: [1, -1], left: [-1, -1] };
   const ai = (window.__ai = {
     on: true, busy: false, log: old?.log ?? [], samples: old?.samples ?? [], kills: old?.kills ?? 0, resets: old?.resets ?? 0,
-    t0: Date.now(), lastPotion: 0, lastWarp: 0, spot: old?.spot ?? null,
-    spotScore: old?.spotScore ?? saved.spotScore ?? {}, spotRun: null, tierSeen: old?.tierSeen ?? 0,
+    t0: Date.now(), lastPotion: 0, lastWarp: old?.lastWarp ?? 0, spot: old?.spot ?? null,
+    // Reinstalar no debe hacerlo abandonar el spot en el que está.
+    spotScore: old?.spotScore ?? saved.spotScore ?? {}, spotRun: old?.spotRun ?? null, tierSeen: old?.tierSeen ?? 0,
+    cycles: old?.cycles ?? [], cycleStart: old?.cycleStart ?? null, time: old?.time,
     expByType: old?.expByType ?? saved.expByType ?? {}, expLog: old?.expLog ?? [], expHooked: old?.expHooked ?? false,
     killSecByType: old?.killSecByType ?? saved.killSecByType ?? {}, hpByType: old?.hpByType ?? saved.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
     target: null, explore: null, arrivedAt: 0, stuck: 0, lastPos: null,
@@ -65,9 +67,6 @@
   const cell = (p) => `${Math.floor(p.x / 12)},${Math.floor(p.z / 12)}`;
   // n = exp acumulada en la celda: un spot vale por lo que rinde, no por cuántos bichos tiene.
   ai.noteHot = (map, p, value = 1) => { const h = (ai.hot[map] ??= {}); const c = (h[cell(p)] ??= { x: Math.round(p.x), z: Math.round(p.z), n: 0, emptyAt: 0 }); c.n += value; c.emptyAt = 0; };
-  // Lo que importa es la exp por kill para MI nivel: se aprende de experienceGained
-  // ({added, killedNetId}; kills grandes llegan partidos en tramos de 65535).
-  // Sin dato todavía, la vida máxima sirve de estimación.
   // Exp por kill: se aprende de experienceGained ({added, killedNetId}; kills grandes
   // llegan partidos en tramos de 65535). Cuando llega el evento el monstruo ya salió
   // del mundo, por eso el tipo se busca en netInfo (lo que vimos de cada netId).
@@ -234,7 +233,7 @@
     } catch (e) { L('error: ' + e.message); }
   };
   // Autoevaluación: exp/min reciente y en qué se fue el tiempo.
-  ai.time = ai.time ?? { fight: 0, walk: 0, idle: 0, other: 0 };
+  ai.time ??= { fight: 0, walk: 0, idle: 0, other: 0 };
   ai.report = () => {
     const now = Date.now(), win = (ms) => ai.expLog.filter((x) => x.t > now - ms).reduce((a, x) => a + x.added, 0) / (ms / 60000);
     const T = ai.time, tot = T.fight + T.walk + T.idle + T.other || 1;
