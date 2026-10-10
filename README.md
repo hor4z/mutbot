@@ -62,3 +62,18 @@ contra el server real, así que el bot no mata nada todavía. Detalle en
 Es un proyecto independiente: `net/`, `packets/` y `data/` son copias del
 cliente MU JS, así que no necesita ese repo para correr (solo para regenerar
 `packets/`, ver `AGENTS.md`).
+## Agente en el navegador (sin que nadie lo dirija)
+
+1. En una terminal: `bun run agent` (sirve los archivos del agente en `127.0.0.1:8788`, solo local).
+2. Entrá al juego con el personaje en https://mu.mormon.garden/ y abrí la consola (F12 → Console).
+3. Pegá esta línea y Enter:
+
+```js
+for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js']) (0, eval)(await (await fetch('http://127.0.0.1:8788/' + f)).text())
+```
+
+Desde ahí juega solo: farmea, reparte puntos, resetea en 400, vuelve a entrar con el personaje y
+repite. Lo aprendido queda en el `localStorage` del navegador. La terminal se puede cerrar una vez
+cargado. Si recargás la pestaña (F5), hay que volver a pegar la línea, con la terminal abierta.
+Para pararlo: `__ai.on = false` (y `__ai.on = true` para seguir). El log: `__ai.log.slice(-20)`.
+`bg-timers.js` evita que Chrome lo frene cuando la pestaña no está a la vista.
