@@ -46,7 +46,8 @@
       // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
       // hpPot 0.55 no alcanzó en Arena 4 con skill continuo: murió en un grupo.
       // castRange 3: Twisting Slash gira alrededor del DK (~2-3 tiles). Con 6 giraba en el aire.
-      hpPot: 0.7, mpPot: 0.3, castRange: 3, vitShare: 0.15, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // vitShare 0.05: con 15% la vida y el maná quedaban siempre llenos en Arena 4.
+      hpPot: 0.7, mpPot: 0.3, castRange: 3, vitShare: 0.05, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
@@ -119,7 +120,11 @@
     __eventBus.on('experienceGained', (p) => {
       const a = window.__ai; if (!a || !p?.added) return;
       const now = Date.now();
-      a.expLog.push({ t: now, added: p.added }); if (a.expLog.length > 5000) a.expLog.shift();
+      // Un registro por segundo: los kills grandes llegan en ~60 tramos de 65535 y con un
+      // registro por tramo los 5000 lugares cubrían ~30 s de juego, así que toda medición
+      // de 1-3 min (spots, campamentos, autoajuste) salía truncada.
+      const b = Math.floor(now / 1000) * 1000, lastE = a.expLog[a.expLog.length - 1];
+      if (lastE && lastE.t === b) lastE.added += p.added; else { a.expLog.push({ t: b, added: p.added }); if (a.expLog.length > 20000) a.expLog.shift(); }
       const info = a.netInfo.get(p.killedNetId); if (!info) return;
       const k = info.type, last = a.lastExpKill;
       if (last && last.netId === p.killedNetId && now - last.t < 1500) { last.sum += p.added; a.expByType[k] = last.prev == null ? last.sum : last.prev * 0.7 + last.sum * 0.3; }
