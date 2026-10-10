@@ -41,7 +41,7 @@
     killSecByType: old?.killSecByType ?? saved.killSecByType ?? {}, hpByType: old?.hpByType ?? saved.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
     target: null, explore: null, arrivedAt: 0, stuck: 0, lastPos: null,
     lastMonster: Date.now(), mapNoMonsterSince: Date.now(), scoutIdx: 0, hot: old?.hot ?? saved.hot ?? {},
-    camp: null, campBest: old?.campBest ?? {}, leftCamps: [], visited: old?.visited ?? {},
+    camp: null, campBest: old?.campBest ?? {}, leftCamps: [], visited: old?.visited ?? {}, tierRef: old?.tierRef ?? {},
     cfg: {
       // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
       // hpPot 0.55 no alcanzó en Arena 4 con skill continuo: murió en un grupo.
@@ -367,7 +367,15 @@
       // Competencia: 2 campamentos abandonados por gente en 2 min = spot lleno. Pasar a otra
       // entrada del mismo tramo (Devias 2/3/4); si todas estuvieron llenas hace poco y el
       // nivel lo permite, plan B (Arena 1). Pedido del usuario.
-      const crowdedSpot = (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
+      // Hambre: casi nada de exp en los últimos 45 s con jugadores cerca → irse YA. Pasó en
+      // Devias 3: 2M exp/min con un jugador a 1 tile y la regla de campamento no saltaba.
+      const tierKey = `t${tier}`, recentRate = (expSince(now - 45000) / 45000) * 60000;
+      if (now - ai.lastWarp > 60000 && recentRate > 0) ai.tierRef[tierKey] = ai.tierRef[tierKey] == null ? recentRate : ai.tierRef[tierKey] * 0.95 + recentRate * 0.05;
+      const ref = ai.tierRef[tierKey];
+      const rivalsNear = rivalsPos(w).filter((q) => dist(q, P) <= 12).length;
+      const starving = now - ai.lastWarp > 45000 && rivalsNear >= 1 && recentRate < (ref ? ref * 0.25 : 5e6);
+      if (starving) L(`casi sin exp (${Math.round(recentRate / 1e6)}M/min) con ${rivalsNear} jugador(es) cerca: cambio de lugar`);
+      const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (crowdedSpot && now - ai.lastWarp > 15000) {
         ai.crowdedAt = { ...(ai.crowdedAt ?? {}), [ai.spot]: now }; ai.crowdLeaves = [];
