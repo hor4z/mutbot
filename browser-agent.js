@@ -332,6 +332,10 @@
   ai.timer = setInterval(ai.tick, 400);
   ai.sampler = setInterval(() => { const pd = S.playerData; ai.samples.push({ t: Date.now(), level: pd.level, map: W()?.mapIndex, kills: ai.kills }); if (ai.samples.length > 3000) ai.samples.shift(); }, 30000);
   ai.mgr = setInterval(async () => {
+    // Retomar desde la selección de personaje (corte, reset a medias, pestaña recargada).
+    const me = S.playerData?.name || 'Horaz';
+    if (ai.on && !ai.busy && S.uiState === 3 && (S.charactersList ?? []).some((c) => c.Name === me)) { ai.charSelectSince ??= Date.now(); if (Date.now() - ai.charSelectSince > 5000) { ai.charSelectSince = null; L(`en selección de personaje: entro con ${me}`); S.selectCharacterRequest(me); } return; }
+    ai.charSelectSince = null;
     if (ai.busy || !ai.on || S.uiState !== 5 || S.sceneLoading) return;
     const pd = S.playerData;
     if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
