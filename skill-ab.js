@@ -10,6 +10,12 @@
   if (!ai) return 'primero instalá browser-agent.js';
   const prev = ai.skillAB;
   for (const k of ['timer']) if (prev?.[k]) clearInterval(prev[k]);
+  const ab = (ai.skillAB = { arms: [41, 42, 'alt'], idx: prev?.idx ?? 0, winStart: Date.now(), windows: prev?.windows ?? [], WINDOW: 120000, done: prev?.done ?? null });
+  ai.rot ??= { on: false, seq: [41, 42], i: 0 };
+  const apply = (arm) => { if (arm === 'alt') ai.rot.on = true; else { ai.rot.on = false; ai.cfg.skill = arm; } };
+  // El usuario descartó Rageful Blow (42): "es lento, perdemos tiempo". Queda Twisting Slash.
+  ab.done ??= { best: 41, by: 'usuario: Rageful Blow es lento' };
+  if (ab.done) { apply(ab.done.best); return `ya decidido: ${ab.done.best}`; }
   ai.rot = { on: false, seq: [41, 42], i: 0 };
   clearInterval(ai.caster);
   ai.caster = setInterval(() => {
@@ -20,11 +26,7 @@
     if (ai.rot.on) { const sk = ai.rot.seq[ai.rot.i++ % ai.rot.seq.length]; ai.cfg.skill = sk; if (S.currentSkill !== sk) S.selectSkill(sk); }
     w.castRequest = { target: t, point: { x: tp.x, y: tp.z }, forced: false };
   }, 50);
-  const ab = (ai.skillAB = { arms: [41, 42, 'alt'], idx: prev?.idx ?? 0, winStart: Date.now(), windows: prev?.windows ?? [], WINDOW: 120000, done: prev?.done ?? null });
-  const apply = (arm) => { if (arm === 'alt') ai.rot.on = true; else { ai.rot.on = false; ai.cfg.skill = arm; } };
-  // El usuario descartó Rageful Blow (42): "es lento, perdemos tiempo". Queda Twisting Slash.
-  ab.done ??= { best: 41, by: 'usuario: Rageful Blow es lento' };
-  if (ab.done) { apply(ab.done.best); return `ya decidido: ${ab.done.best}`; }
+
   ab.timer = setInterval(() => {
     const now = Date.now(), lvl = S.playerData.level ?? 0;
     if (S.uiState !== 5 || ai.busy || lvl < 250) { ab.winStart = now; ab.waitingResume = true; if (lvl < 250) { ai.rot.on = false; ai.cfg.skill = 41; } return; }
