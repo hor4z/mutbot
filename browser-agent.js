@@ -49,7 +49,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
-      crowdRivals: 2, crowdMs: 10000,
+      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
@@ -133,7 +133,7 @@
       const p = e.transform.pos; let v = 0;
       for (const o of ms) if (dist(o.transform.pos, p) <= ai.cfg.campRadius) v += ai.valueOf(o) / ai.killSecOf(o);
       v *= Math.pow(1 - ai.cfg.competitionPenalty, players.filter((q) => dist(q, p) <= ai.cfg.campRadius).length);
-      v /= 1 + dist(P, p) / 40;
+      v /= 1 + dist(P, p) / ai.cfg.campDistDecay; // caminar cuesta: a 12 tiles vale la mitad
       if (v > bv) { bv = v; best = { x: Math.round(p.x), z: Math.round(p.z) }; }
     }
     return best;
@@ -141,6 +141,9 @@
   ai.pickTarget = (w, P, c) => {
     const now = Date.now(), map = w.mapIndex;
     if (ai.camp && ai.camp.map !== map) ai.camp = null;
+    // Mientras viaja al campamento, los relojes de "vacío" y "competencia" no corren:
+    // si no, lo abandonaba a mitad de camino y elegía otro (iba y venía).
+    if (ai.camp && dist(P, ai.camp) > c.campRadius) { ai.camp.lastSeen = now; ai.camp.crowdSince = null; }
     if (ai.camp) {
       const cp = ai.camp, min = (now - cp.since) / 60000, rate = min > 0 ? expSince(cp.since) / min : 0;
       if (now - cp.since > c.campEvalMs) ai.campBest[map] = Math.max(ai.campBest[map] ?? 0, rate);
