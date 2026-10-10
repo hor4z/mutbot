@@ -600,12 +600,14 @@
   // Loot valioso: cajas (Box of Kundun 14/11), joyas (Bless 14/13, Soul 14/14,
   // Life 14/16, Creation 14/22, Guardian 14/31, Chaos 12/15) e ítems excelentes.
   // El zen y el equipo común no se levantan. Mientras levanta, pausa la pelea.
+  // Solo lo que sirve: cajas, joyas y piezas del set de Horaz (set 1: casco 7, armadura 8,
+  // pantalón 9, guantes 10, botas 11). Levantar "cualquier excelente" llenó el inventario
+  // de armas que un DK no usa (usuario: "lleno de cosas que son basura").
   ai.isValuable = (di) => {
     if (!di || di.isMoney) return false;
-    if (di.item?.isExcellent) return true;
-    // Guantes del set de Horaz (10/1): le faltan y completan el set (casco 7/1, armadura 8/1, pantalón 9/1, botas 11/1).
-    if (di.group === 10 && di.num === 1) return true;
-    return (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) || (di.group === 12 && di.num === 15);
+    if (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) return true;
+    if (di.group === 12 && di.num === 15) return true;
+    return [7, 8, 9, 10, 11].includes(di.group) && di.num === 1;
   };
   ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {
