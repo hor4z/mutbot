@@ -28,7 +28,11 @@
     publish(me);
     // Mapas: solo los que el seguidor puede entrar (tope = su nivel).
     const all = ai.cfg.allSpots ?? ai.cfg.spots; ai.cfg.allSpots = all;
-    Object.defineProperty(ai.cfg, 'spots', { configurable: true, enumerable: true, get() { const f = read(followerName); const cap = f ? f.level : 999; return all.filter((s) => s[2] <= cap && !(s[0] === 2 && cap >= 20)); } });
+    // Tope = nivel del seguidor. Si deja de publicar (p. ej. comprando en una tienda), usar su
+    // ÚLTIMO nivel conocido: con "sin tope" el líder se fue a Arena 4 y el seguidor no podía entrar.
+    let lastCap = null;
+    const capNow = () => { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + followerName) || 'null'); if (v?.level) lastCap = v.level; } catch {} return lastCap ?? 999; };
+    Object.defineProperty(ai.cfg, 'spots', { configurable: true, enumerable: true, get() { const cap = capNow(); return all.filter((s) => s[2] <= cap && !(s[0] === 2 && cap >= 20)); } });
     ai.tierSeen = 0; ai.spotRun = null; ai.lastWarp = 0; ai.cfg.leashDist = 10;
     // Proteger al seguidor: primero los monstruos a <= 3 tiles de él (en Arena 1 se le
     // pegaron 7 de golpe en la entrada).
