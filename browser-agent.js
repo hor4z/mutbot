@@ -66,6 +66,8 @@
       // está llena de monstruos de mucha exp (125/126/127 dan ~1.6M en <2 s a nivel 240).
       // El usuario la señaló; al llegar se va directo ahí.
       preferDownMaps: [83, 84, 85],
+      // Devias (2): "el spot está arriba" de la llegada (usuario). En pantalla arriba = (-x, +z).
+      arrivalSpotDir: { 2: [-1, 1] },
       // Curiosidad: atacar primero tipos con < curiosityKills kills medidos a <= curiosityRadius.
       curiosityRadius: 8, curiosityKills: 3,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
@@ -306,6 +308,12 @@
         const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`);
         // Un campamento elegido durante el warp (con monstruos del mapa anterior) fuera de la correa se descarta.
         if (ai.camp && (ai.camp.map !== w.mapIndex || (ai.cfg.leashMaps.includes(w.mapIndex) && dist(ai.camp, ai.arrival) > ai.cfg.leashDist))) { L(`descarto campamento (${ai.camp.x},${ai.camp.z}): lejos de la llegada`); ai.camp = null; ai.explore = null; }
+        const dir = ai.cfg.arrivalSpotDir[w.mapIndex];
+        if (dir) {
+          let g = null;
+          for (const R of [12, 15, 9, 18]) { for (let j = 0; j < 12 && !g; j++) { const x = Math.round(p0.x + dir[0] * R + (Math.random() - 0.5) * 6), z = Math.round(p0.z + dir[1] * R + (Math.random() - 0.5) * 6); if (walkable(w, x, z)) g = { x, z }; } if (g) break; }
+          if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`spot de llegada (arriba) en (${g.x},${g.z})`); }
+        }
         if (ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
       }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
