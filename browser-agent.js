@@ -50,7 +50,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
-      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12,
+      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -172,8 +172,11 @@
   };
   ai.nextGoal = (P, w) => {
     const now = Date.now();
-    if (ai.camp && ai.camp.map === w.mapIndex && dist(ai.camp, P) > 3) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
-    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4).sort((a, b) => b.n - a.n)[0];
+    // En el campamento: quedarse esperando el respawn, nunca salir a cruzar el mapa.
+    if (ai.camp && ai.camp.map === w.mapIndex) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
+    // Spots conocidos solo si están cerca (hotMaxDist): Devias 1-4 son el MISMO mapa con
+    // entradas en puntas opuestas; sin este tope cruzaba todo el mapa sin pelear.
+    const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4 && dist(c, P) <= ai.cfg.hotMaxDist).sort((a, b) => b.n - a.n)[0];
     if (h) return { x: h.x, z: h.z, kind: 'hot' };
     // Explorar hacia donde menos estuvimos (celdas visitadas por mapa).
     const vis = (ai.visited[w.mapIndex] ??= {});
