@@ -52,7 +52,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 5, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -203,7 +203,13 @@
     const cp = ai.camp;
     // En camino al campamento: pelear con lo que esté a <= 6 tiles. Antes ignoraba todo lo
     // que no estuviera dentro del campamento y cruzaba lugares buenos sin pegar (usuario).
-    if (dist(P, cp) > c.campRadius) { const near = ai.freePick(w, P, { ...c, scan: 6 }); if (near) return near; }
+    if (dist(P, cp) > c.campRadius) {
+      // Si en el camino hay un montón de monstruos juntos, quedarse ahí (usuario: "lugares
+      // con conglomerados de monstruos"): la memoria de spots mide si rinde.
+      let n = 0; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= c.maxKillSec && dist(e.transform.pos, P) <= 8) n++;
+      if (n >= c.clusterStop) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
+      else { const near = ai.freePick(w, P, { ...c, scan: 6 }); if (near) return near; }
+    }
     const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
     if (t) cp.lastSeen = now;
     return t;
