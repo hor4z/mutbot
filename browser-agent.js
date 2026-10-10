@@ -51,6 +51,9 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
+      // saltando de campamento en campamento, terminaba en la zona de Devias 1.
+      leashDist: 40,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -123,8 +126,9 @@
     const easy = ms.filter((e) => ai.killSecOf(e) <= c.maxKillSec);
     const pool = easy.length ? easy : ms;
     let best = null, bestRate = 0;
+    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || dist(p, ai.arrival) <= c.leashDist;
     for (const e of pool) {
-      const p = e.transform.pos, d = dist(P, p); if (d >= c.scan) continue;
+      const p = e.transform.pos, d = dist(P, p); if (d >= c.scan || !leashed(p)) continue;
       let crowd = 0; for (const o of pool) if (o !== e && dist(o.transform.pos, p) <= 3) crowd += ai.valueOf(o) * 0.5;
       const rivals = players.filter((q) => dist(q, p) <= c.playerRadius).length;
       const rate = ((ai.valueOf(e) + crowd) / (ai.killSecOf(e) + d * c.secPerTile)) * Math.pow(1 - c.competitionPenalty, rivals);
@@ -138,8 +142,9 @@
     const ms = []; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= ai.cfg.maxKillSec) ms.push(e);
     const players = rivalsPos(w);
     let best = null, bv = 0;
+    const leashed = (p) => !ai.arrival || ai.arrival.map !== w.mapIndex || dist(p, ai.arrival) <= ai.cfg.leashDist;
     for (const e of ms) {
-      const p = e.transform.pos; let v = 0;
+      const p = e.transform.pos; if (!leashed(p)) continue; let v = 0;
       for (const o of ms) if (dist(o.transform.pos, p) <= ai.cfg.campRadius) v += ai.valueOf(o) / ai.killSecOf(o);
       v *= Math.pow(1 - ai.cfg.competitionPenalty, players.filter((q) => dist(q, p) <= ai.cfg.campRadius).length);
       v /= 1 + dist(P, p) / ai.cfg.campDistDecay; // caminar cuesta: a 12 tiles vale la mitad
@@ -188,7 +193,7 @@
     for (let k = 0; k < 80; k++) {
       const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * 22;
       const x = Math.round(P.x + Math.cos(a) * r), z = Math.round(P.z + Math.sin(a) * r);
-      if (!walkable(w, x, z)) continue;
+      if (!walkable(w, x, z) || (ai.arrival && ai.arrival.map === w.mapIndex && dist({ x, z }, ai.arrival) > ai.cfg.leashDist)) continue;
       const sc = -(vis[cell({ x, z })] ?? 0) * 10 + Math.random() * 5;
       if (sc > bs) { bs = sc; best = { x, z, kind: 'explore' }; }
     }
@@ -258,6 +263,8 @@
       if (ai.busy || S.uiState !== 5) { ai.time && (ai.time.other += 0.4); return; }
       if (S.sceneLoading) { ai.lastMonster = ai.mapNoMonsterSince = Date.now(); return; }
       const w = W(), pe = w?.playerEntity; if (!pe) return;
+      // Punto de llegada del último warp (correa): se fija al terminar de cargar.
+      if (ai.arrivalPending && Date.now() - ai.arrivalPending > 3000) { const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`); }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
@@ -296,6 +303,7 @@
           const why = !run ? 'inicio' : newTier ? `nuevo nivel de mapa (${tier})` : mapDead ? 'mapa sin monstruos' : `rinde poco (${Math.round(kpm)} exp/min vs mejor ${Math.round(bestKnown)})`;
           ai.lastWarp = now; ai.spot = to[0]; ai.target = null; w.attackTarget = null; ai.explore = null; ai.mapNoMonsterSince = ai.lastMonster = now; ai.scoutIdx = 0;
           ai.spotRun = { spot: to[0], start: now + 8000, kills0: ai.kills };
+          ai.arrival = null; ai.arrivalPending = Date.now();
           S.warpCommandRequest(to[0]); L(`warp → ${to[1]} (${why})`); return;
         }
         if (run && (poor || mapDead)) { ai.spotRun = { ...run, start: now, kills0: ai.kills }; ai.mapNoMonsterSince = now; }
@@ -435,7 +443,7 @@
     lastCamp = cur;
     if (!cur && !ai.target && ai.on && !ai.busy) {
       const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
-      const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
+      const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => (!ai.arrival || dist(c, ai.arrival) <= ai.cfg.leashDist) && dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
       cands.sort((a, b) => b.rate / (1 + dist(b, P) / 12) - a.rate / (1 + dist(a, P) / 12));
       if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
     }
