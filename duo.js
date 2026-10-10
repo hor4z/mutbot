@@ -122,11 +122,12 @@
     // (con "nivel actual >= 400" Horaz quedó esperando para siempre en Arena 4).
     if (ai && !ai.cfg.__resetHeld) { const base = ai.cfg.resetLevel; let seen = false; Object.defineProperty(ai.cfg, 'resetLevel', { configurable: true, enumerable: true, get() { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); if (v?.level >= base) seen = true; } catch {} if (S.playerData.level < base) seen = false; return seen ? base : 999; }, set(v) {} }); ai.cfg.__resetHeld = true; }
     // Esperar al compañero (Melu murió a 23 tiles: Horaz siguió cambiando de campamento mientras
-    // ella quedaba quieta lanzando): si está a > 4 tiles en el mismo mapa, el líder no avanza a su
-    // próxima meta, vuelve hacia él; protegerlo (pickTarget) sigue igual.
-    if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > 4) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
+    // ella quedaba quieta lanzando): si está a > 8 tiles en el mismo mapa, el líder no avanza a su
+    // próxima meta, vuelve hacia él; protegerlo (pickTarget) sigue igual. Con 4 tiles quedaban en
+    // bucle en Lorencia: al caminar el seguidor siempre va 4-6 tiles atrás y el líder volvía.
+    if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > 8) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
     // nextGoal solo se consulta al llegar: cortar el viaje en curso si el compañero quedó atrás.
-    if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > 4 && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
+    if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > 8 && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
