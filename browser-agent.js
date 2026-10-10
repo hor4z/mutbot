@@ -52,7 +52,7 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -75,7 +75,7 @@
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
       densityWeight: 0.02, exploreRoundMs: 60000, exploreFightRadius: 6,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
-      playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
+      playerRadius: 5, competitionPenalty: 0.3, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
       resetLevel: 400, statBatch: 200,
       // Ruta del usuario: Lorencia → Devias 3/4 (mejor), Devias 2 si no → Arena 2/3/4. Devias 1 y Arena 1 no sirven (Arena 1: monstruos flojos y dispersos, ~0 exp/min medido).
@@ -186,7 +186,10 @@
       const empty = now - cp.lastSeen > c.campEmptyMs;
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
       if (rivalsHere >= c.crowdRivals) cp.crowdSince ??= now; else cp.crowdSince = null;
-      const crowded = cp.crowdSince && now - cp.crowdSince > c.crowdMs;
+      // Con gente pero rindiendo bien no se va: "a veces hay competencia pero no es mejor que
+      // yo" (usuario). Solo cuenta si además la exp del campamento cayó bajo crowdMinFrac
+      // de lo normal del mapa.
+      const crowded = cp.crowdSince && now - cp.crowdSince > c.crowdMs && now - cp.since > 45000 && rate < (ai.campBest[map] ?? Infinity) * c.crowdMinFrac;
       if (crowded) { ai.crowdLeaves = [...(ai.crowdLeaves ?? []).filter((t) => now - t < 120000), now]; }
       if (poor || empty || crowded) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
     }
