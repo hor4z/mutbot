@@ -20,6 +20,8 @@
   const timers = (window.__duoTimers ??= []);
   const every = (fn, ms) => { const id = window.setInterval(fn, ms); timers.push(id); (window.__mubotTimers ??= []).push(id); return id; };
   const publish = (name) => every(() => { const pe = W()?.playerEntity; if (!pe || S.uiState !== 5) return; const P = pe.transform.pos; try { localStorage.setItem('mubot:follow:' + name, JSON.stringify({ x: Math.round(P.x), z: Math.round(P.z), map: W().mapIndex, spot: window.__ai?.spot, level: S.playerData.level, at: Date.now() })); } catch {} }, 1000);
+  // Nivel mínimo de cada warp (lista del cliente, perfil v097d).
+  const REQ = { 2: 10, 3: 10, 4: 20, 5: 20, 6: 20, 7: 20, 1: 50, 24: 100, 25: 200, 26: 300 };
   const stop = () => { while (timers.length) window.clearInterval(timers.pop()); };
 
   const leader = (followerName) => {
@@ -71,7 +73,10 @@
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.75 && now - lastPot > 600) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
       w.attackTarget = null; w.castRequest = null;
       const h = read(leaderName); if (!h) return;
-      if (w.mapIndex !== h.map) { if (now - lastWarp > 20000 && h.spot != null) { lastWarp = now; S.warpCommandRequest(h.spot); } return; }
+      // Si el líder está en un mapa que el seguidor no puede entrar (nivel), esperar en
+      // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
+      const canEnter = h.spot != null && (REQ[h.spot] ?? 0) <= pd.level;
+      if (w.mapIndex !== h.map) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter) S.warpCommandRequest(h.spot); else if (w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
       if (dist(pe.transform.pos, h) > 2) { const m = pe.playerMoveTo; m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; }
     }, 400);
     every(async () => { if (S.uiState !== 5 || ai.distributing || (S.playerData.points ?? 0) < 10) return; ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }, 5000);
