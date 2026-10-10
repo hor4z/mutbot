@@ -7,6 +7,12 @@
  *   __hunt.stop()     // vuelve a la ruta de farmeo normal
  * En dúo: si el compañero queda a > 8 tiles, primero vuelve a buscarlo (Melu murió sola).
  * Las cajas que tiran los dorados las levanta el looter de siempre.
+ *
+ * RESULTADO (primera prueba, Devias): funciona mal. Recorrer un mapa entero a ciegas es lento
+ * (Devias es enorme y la vista es de ~15-20 tiles), el widget no dice bien el mapa (mostraba
+ * "Noria" con los dragones en Devias) y otros jugadores los matan en pocos minutos. Ignorar a
+ * los comunes lo dejó rodeado de Assassins sin pegar. Falta saber DÓNDE aparecen: anotar
+ * posiciones de dorados vistos por mapa (como `hot`) e ir directo ahí en la próxima invasión.
  */
 (() => {
   const ai = window.__ai, S = __store, W = () => __world;
