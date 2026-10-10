@@ -11,8 +11,8 @@
  *   Líder:     __duo.leader('Melu')      // farmea normal, solo en mapas que el seguidor
  *                                        // puede entrar, a <= 10 tiles de él; lo invita a party
  *   Seguidor:  __duo.follower('Horaz')   // NO ataca: sigue al líder a <= 4 tiles, mismo
- *   window.__pullSkill = 9                // opcional: el seguidor tira Evil Spirit para atraer monstruos al líder
  *                                        // warp, pociones y reparto de puntos; acepta su party
+ *   window.__pullSkill = 9                // opcional: el seguidor tira Evil Spirit para atraer monstruos al líder
  */
 (() => {
   const S = __store, W = () => __world;
