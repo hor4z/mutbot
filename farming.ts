@@ -31,8 +31,11 @@ export const FARM = {
   CROWD_WEIGHT: 0.5,
   // Competencia: cada jugador a <= PLAYER_RADIUS del objetivo multiplica el
   // valor por COMPETITION_FACTOR (otro jugador nos roba el kill o el respawn).
+  // 0.7 = penalización 0.3 por jugador, como `competitionPenalty` del agente web
+  // (con 0.4 se iba de objetivos que igual rendían: "a veces hay competencia pero
+  // no es mejor que yo").
   PLAYER_RADIUS: 5,
-  COMPETITION_FACTOR: 0.4,
+  COMPETITION_FACTOR: 0.7,
   // Solo se consideran monstruos a menos de esto (Chebyshev, tiles).
   SCAN: 28,
   // EMA de lo aprendido: nuevo = viejo × EMA_OLD + medido × (1 − EMA_OLD).
@@ -228,38 +231,88 @@ export function pickTarget<C extends Candidate>(
 }
 
 // ---------------------------------------------------------------------------
+// Registro de exp POR SEGUNDO (un bucket por segundo).
+//
+// Los kills grandes llegan partidos en tramos de 65535 (~60 ExperienceGained
+// por kill a nivel alto). El agente web guardaba un registro por evento con
+// tope fijo (5000): cubría ~30 s de juego, así que toda medición de 1-3 min
+// (spots, campamentos, autoajuste) salía truncada. Con un bucket por segundo,
+// MAX_BUCKETS segundos cubren horas sin importar cuántos tramos lleguen.
+//
+// Todas las mediciones de exp/min por ventana del bot salen de acá y dividen
+// por la ventana REAL cubierta (si el registro empezó hace 2 min, "exp/min en
+// 30 min" divide por 2 min, no por 30).
+// ---------------------------------------------------------------------------
+export class ExpLog {
+  private buckets: Array<{ t: number; n: number }> = [];
+  readonly startedAt: number;
+
+  constructor(now: number, private readonly maxBuckets = 6 * 3600) {
+    this.startedAt = now;
+  }
+
+  get size(): number {
+    return this.buckets.length;
+  }
+
+  add(n: number, now: number) {
+    if (!(n > 0)) return;
+    const t = Math.floor(now / 1000) * 1000;
+    const last = this.buckets[this.buckets.length - 1];
+    if (last && last.t === t) last.n += n;
+    else {
+      this.buckets.push({ t, n });
+      if (this.buckets.length > this.maxBuckets) this.buckets.shift();
+    }
+  }
+
+  // Exp ganada desde `t` (inclusive, al segundo) hasta ahora.
+  sumSince(t: number): number {
+    const from = Math.floor(t / 1000) * 1000;
+    let s = 0;
+    for (let i = this.buckets.length - 1; i >= 0 && this.buckets[i].t >= from; i--) s += this.buckets[i].n;
+    return s;
+  }
+
+  // Exp/min desde `since` hasta `now` (ventana real; 0 si todavía no pasó tiempo).
+  rateSince(since: number, now: number): number {
+    const ms = now - Math.max(since, this.startedAt);
+    return ms > 0 ? this.sumSince(Math.max(since, this.startedAt)) / (ms / 60_000) : 0;
+  }
+
+  // Exp/min en la ventana [now − ms, now], recortada a lo que el registro cubre.
+  perMin(now: number, ms: number): number {
+    return this.rateSince(now - ms, now);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Autoevaluación: exp/min reciente y en qué se va el tiempo.
 // ---------------------------------------------------------------------------
 export type TimeKind = 'fight' | 'walk' | 'wait' | 'other';
 
 export class SelfReport {
-  private expLog: Array<{ t: number; n: number }> = [];
+  readonly exp: ExpLog;
   readonly time: Record<TimeKind, number> = { fight: 0, walk: 0, wait: 0, other: 0 };
   readonly cyclesMin: number[] = [];
   cycleStart: number;
 
-  constructor(now: number, private readonly keepMs = 30 * 60_000) {
+  constructor(now: number, exp?: ExpLog) {
     this.cycleStart = now;
+    this.exp = exp ?? new ExpLog(now);
   }
 
   addExp(n: number, now: number) {
-    if (n <= 0) return;
-    this.expLog.push({ t: now, n });
-    const cut = now - this.keepMs;
-    let i = 0;
-    while (i < this.expLog.length && this.expLog[i].t < cut) i++;
-    if (i) this.expLog.splice(0, i);
+    this.exp.add(n, now);
   }
 
   addTime(kind: TimeKind, ms: number) {
     if (ms > 0) this.time[kind] += ms;
   }
 
-  // Exp por minuto en la ventana [now − ms, now].
+  // Exp por minuto en la ventana [now − ms, now] (ventana real, ver ExpLog).
   expPerMin(now: number, ms: number): number {
-    let s = 0;
-    for (const e of this.expLog) if (e.t > now - ms) s += e.n;
-    return s / (ms / 60_000);
+    return this.exp.perMin(now, ms);
   }
 
   // Terminó un ciclo de reset: guarda su duración y arranca otro.
@@ -285,4 +338,115 @@ export class SelfReport {
       `  ciclos de reset: ${cycles} (actual: ${Math.round((now - this.cycleStart) / 60_000)} min)`,
     ].join('\n');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Registro de tramos por ciclo: minuto (desde el inicio del ciclo) en que se
+// llegó a cada nivel hito. Persiste en learning.json para comparar ciclos y
+// proyectar resets/día (como `ai.cycleLog` del agente web).
+// ---------------------------------------------------------------------------
+export const CYCLE_MARKS = [20, 50, 100, 200, 300, 350, 400] as const;
+export type CycleRecord = { start: number; end?: number; min?: number; marks: Record<number, number> };
+
+export class CycleLog {
+  cur: CycleRecord;
+  readonly done: CycleRecord[];
+
+  constructor(now: number, init?: { cur?: CycleRecord | null; done?: CycleRecord[] }, private readonly keep = 200) {
+    this.done = [...(init?.done ?? [])];
+    this.cur = init?.cur ? { start: init.cur.start, marks: { ...init.cur.marks } } : { start: now, marks: {} };
+  }
+
+  // Devuelve los hitos nuevos alcanzados (para loguearlos).
+  observe(level: number, now: number): number[] {
+    const out: number[] = [];
+    for (const m of CYCLE_MARKS) {
+      if (level >= m && this.cur.marks[m] == null) {
+        this.cur.marks[m] = +((now - this.cur.start) / 60_000).toFixed(1);
+        out.push(m);
+      }
+    }
+    return out;
+  }
+
+  // Reset hecho: cierra el ciclo (solo se guarda si llegó al 400: un ciclo
+  // empezado a la mitad, p.ej. al arrancar el bot en nivel 250, no compara).
+  reset(now: number): CycleRecord | null {
+    let closed: CycleRecord | null = null;
+    if (this.cur.marks[400] != null) {
+      closed = { ...this.cur, end: now, min: +((now - this.cur.start) / 60_000).toFixed(1) };
+      this.done.push(closed);
+      if (this.done.length > this.keep) this.done.splice(0, this.done.length - this.keep);
+    }
+    this.cur = { start: now, marks: {} };
+    return closed;
+  }
+
+  // Promedio de minutos por ciclo de los últimos `n` y resets/día proyectados.
+  projection(n = 5): { cycles: number; avgMin: number | null; perDay: number | null } {
+    const last = this.done.slice(-n).filter((c) => c.min && c.min > 0);
+    if (!last.length) return { cycles: 0, avgMin: null, perDay: null };
+    const avg = last.reduce((a, c) => a + c.min!, 0) / last.length;
+    return { cycles: last.length, avgMin: +avg.toFixed(1), perDay: Math.round(1440 / avg) };
+  }
+
+  format(n = 5): string {
+    const p = this.projection(n);
+    const marks = (c: CycleRecord) => CYCLE_MARKS.filter((m) => c.marks[m] != null).map((m) => `${m}@${c.marks[m]}`).join(' ') || '-';
+    const lines = [`  ciclo actual: ${marks(this.cur)}`];
+    for (const c of this.done.slice(-n)) lines.push(`  ciclo ${c.min} min (${Math.round(1440 / (c.min || 1))}/día): ${marks(c)}`);
+    lines.push(p.perDay != null ? `  proyección: ${p.perDay} resets/día (promedio ${p.avgMin} min, ${p.cycles} ciclo(s))` : '  proyección: sin ciclos completos todavía');
+    return lines.join('\n');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reparto de puntos del Dark Knight con Twisting Slash (agente web, planStats):
+//   daño del skill ≈ (fuerza/4) × (2 + energía/1000)
+//   rinden igual cuando energía ≈ fuerza − 2000: debajo, todo a energía;
+//   arriba, mitad y mitad. Vitalidad: VIT_SHARE (con 15% la vida y el maná
+//   quedaban siempre llenos en Arena 4; el usuario bajó a 5%).
+// ---------------------------------------------------------------------------
+export const STATS_PLAN = { VIT_SHARE: 0.05, ENE_GAP: 2000 } as const;
+
+export function planStats(points: number, str: number, ene: number, p = STATS_PLAN): { ene: number; str: number; vit: number } {
+  if (!(points > 0)) return { ene: 0, str: 0, vit: 0 };
+  const vit = Math.floor(points * p.VIT_SHARE);
+  let left = points - vit;
+  const gap = Math.max(0, str - p.ENE_GAP - ene);
+  const toEne = Math.min(left, gap);
+  left -= toEne;
+  const half = Math.floor(left / 2);
+  return { ene: toEne + half, str: left - half, vit };
+}
+
+// ---------------------------------------------------------------------------
+// Loot valioso (agente web, isValuable): cajas (Box of Kundun 14/11), joyas
+// (Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31, Chaos
+// 12/15), ítems excelentes y los guantes 10/1 (le faltan al set de Horaz). El
+// zen y el equipo común NO se levantan: cada viaje a levantar es tiempo sin pelear.
+// ---------------------------------------------------------------------------
+export const VALUABLE_JEWELS_14 = new Set([11, 13, 14, 16, 22, 31]);
+export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean };
+
+export function isValuableDrop(d: DropInfo): boolean {
+  if (d.isMoney) return false;
+  if (d.excellent) return true;
+  if (d.group === 10 && d.num === 1) return true;
+  return (d.group === 14 && VALUABLE_JEWELS_14.has(d.num)) || (d.group === 12 && d.num === 15);
+}
+
+// El drop valioso más cercano a <= radius (o null).
+export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12): D | null {
+  let best: D | null = null;
+  let bd = Infinity;
+  for (const d of drops) {
+    if (!isValuableDrop(d)) continue;
+    const dd = cheb(me, d);
+    if (dd <= radius && dd < bd) {
+      bd = dd;
+      best = d;
+    }
+  }
+  return best;
 }

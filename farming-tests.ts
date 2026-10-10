@@ -5,7 +5,7 @@
  *
  *   bun run farming-tests.ts
  */
-import { ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, median, pickTarget, targetRate } from './farming';
+import { CycleLog, ExpLog, ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, isValuableDrop, median, pickLoot, pickTarget, planStats, targetRate } from './farming';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -98,10 +98,10 @@ const hpOf = (t: number) => HP[t] ?? null;
   ok('sin vecinos: sin bonus', near(ra.rate, 100 / (1 + 6 * 0.4)));
   ok('un grupo un poco más lejos le gana al solitario (al más cercano del grupo)', pickTarget(me, pool, [], st)?.target.id === 11);
 
-  // Competencia: cada jugador a <= 5 del objetivo multiplica por 0.4.
+  // Competencia: cada jugador a <= 5 del objetivo resta 0.3 (× 0.7), como el agente web.
   const players = [{ x: 11, y: 3 }, { x: 9, y: 0 }, { x: 40, y: 40 }];
   const rc = targetRate(me, b2, pool, players, st);
-  ok('competencia: × 0.4 por jugador a <= 5', rc.rivals === 2 && near(rc.rate, rb.rate * 0.4 * 0.4), rc);
+  ok('competencia: penalización 0.3 por jugador a <= 5', FARM.COMPETITION_FACTOR === 0.7 && rc.rivals === 2 && near(rc.rate, rb.rate * 0.7 * 0.7), rc);
   ok('con jugadores encima del grupo, va al solitario', pickTarget(me, pool, players, st)?.target.id === 10);
 
   ok('fuera de SCAN no se considera', pickTarget(me, [{ id: 20, type: 1, x: FARM.SCAN, y: 0 }], [], st) === null);
@@ -111,7 +111,7 @@ const hpOf = (t: number) => HP[t] ?? null;
 // --- Autoevaluación -------------------------------------------------------------------
 {
   const r = new SelfReport(0);
-  r.addExp(1000, 1 * MIN);
+  r.addExp(1000, 0.5 * MIN);
   r.addExp(5000, 20 * MIN);
   r.addExp(3000, 31 * MIN);
   ok('exp/min en 5 min', near(r.expPerMin(31 * MIN, 5 * MIN), 3000 / 5));
@@ -124,6 +124,72 @@ const hpOf = (t: number) => HP[t] ?? null;
   ok('duración de cada ciclo de reset', r.cyclesMin.join() === '45,30', r.cyclesMin);
   const txt = r.format(80 * MIN, 123, 2);
   ok('informe legible con nivel, resets, exp/min y ciclos', txt.includes('nivel 123') && txt.includes('resets 2') && txt.includes('45 min, 30 min') && txt.includes('peleando 60%'), txt);
+}
+
+// --- Registro de exp por segundo ---------------------------------------------------------
+{
+  // Un kill grande a nivel alto: ~60 tramos de 65535 en el mismo segundo.
+  const log = new ExpLog(0, 300);
+  for (let k = 0; k < 600; k++) for (let i = 0; i < 60; i++) log.add(65535, k * S + i * 10);
+  ok('un bucket por segundo, no uno por tramo', log.size === 300, log.size);
+  ok('el tope en segundos cubre minutos aunque lleguen 60 tramos/s', near(log.sumSince(500 * S), 100 * 60 * 65535));
+  // Antes (un registro por tramo, tope fijo) 5000 lugares cubrían ~83 s acá.
+  const full = new ExpLog(0);
+  for (let k = 0; k < 180; k++) for (let i = 0; i < 60; i++) full.add(65535, k * S + i * 10);
+  ok('3 min de kills partidos: la medición de 3 min no sale truncada', near(full.perMin(180 * S, 3 * MIN), 60 * 65535 * 60), full.perMin(180 * S, 3 * MIN));
+  const young = new ExpLog(0);
+  for (let k = 0; k < 60; k++) young.add(1000, k * S);
+  ok('ventana real: con 1 min de registro, "30 min" divide por 1 min', near(young.perMin(60 * S, 30 * MIN), 60_000), young.perMin(60 * S, 30 * MIN));
+  ok('rateSince: exp/min desde un instante', near(full.rateSince(120 * S, 180 * S), 60 * 65535 * 60));
+  ok('sin tiempo transcurrido: 0', full.rateSince(180 * S, 180 * S) === 0);
+  full.add(0, 200 * S); full.add(-5, 200 * S);
+  ok('exp <= 0 no se registra', full.sumSince(190 * S) === 0);
+}
+
+// --- Registro de tramos por ciclo -------------------------------------------------------
+{
+  const c = new CycleLog(0);
+  ok('hitos nuevos al subir', c.observe(25, 2 * MIN).join() === '20' && c.observe(120, 4 * MIN).join() === '50,100');
+  ok('un hito se registra una sola vez', c.observe(130, 5 * MIN).length === 0 && c.cur.marks[20] === 2);
+  c.observe(400, 15 * MIN);
+  const closed = c.reset(16 * MIN);
+  ok('reset tras el 400: se cierra el ciclo con sus minutos', closed?.min === 16 && closed.marks[400] === 15 && c.done.length === 1, closed);
+  c.observe(250, 20 * MIN);
+  ok('ciclo empezado sin llegar al 400 no se guarda', c.reset(30 * MIN) === null && c.done.length === 1);
+  c.observe(400, 44 * MIN); c.reset(44 * MIN);
+  const p = c.projection();
+  ok('proyección resets/día = 1440 / promedio', p.cycles === 2 && p.avgMin === 15 && p.perDay === 96, p);
+  const restored = new CycleLog(99 * MIN, { cur: c.cur, done: c.done });
+  ok('retomar: el ciclo en curso conserva su inicio', restored.cur.start === 44 * MIN && restored.done.length === 2);
+  ok('informe con la proyección', c.format().includes('96 resets/día'), c.format());
+  ok('sin ciclos: sin proyección', new CycleLog(0).projection().perDay === null);
+}
+
+// --- Reparto de puntos ------------------------------------------------------------------------
+{
+  let p = planStats(1000, 10000, 3000);
+  ok('energía lejos de fuerza − 2000: todo a energía salvo 5% vitalidad', p.vit === 50 && p.ene === 950 && p.str === 0, p);
+  p = planStats(1000, 10000, 7900);
+  ok('cerca: completa el hueco y el resto mitad/mitad', p.vit === 50 && p.ene === 100 + 425 && p.str === 425, p);
+  p = planStats(1001, 5000, 5000);
+  ok('arriba de fuerza − 2000: mitad/mitad', p.vit === 50 && p.ene + p.str === 951 && Math.abs(p.ene - p.str) <= 1, p);
+  ok('sin puntos: nada', planStats(0, 1, 1).ene === 0);
+}
+
+// --- Loot valioso ------------------------------------------------------------------------------
+{
+  ok('joyas y cajas', [11, 13, 14, 16, 22, 31].every((n) => isValuableDrop({ group: 14, num: n })) && isValuableDrop({ group: 12, num: 15 }));
+  ok('guantes 10/1', isValuableDrop({ group: 10, num: 1 }) && !isValuableDrop({ group: 10, num: 2 }));
+  ok('excelente: sí; equipo común, pociones y zen: no', isValuableDrop({ group: 5, num: 3, excellent: true }) && !isValuableDrop({ group: 5, num: 3 }) && !isValuableDrop({ group: 14, num: 1 }) && !isValuableDrop({ group: 14, num: 13, isMoney: true }));
+  const me = { x: 50, y: 50 };
+  const ds = [
+    { id: 1, x: 52, y: 50, group: 14, num: 1 },          // poción: no
+    { id: 2, x: 58, y: 50, group: 14, num: 13 },         // bless a 8
+    { id: 3, x: 54, y: 50, group: 14, num: 14 },         // soul a 4
+    { id: 4, x: 70, y: 50, group: 14, num: 22 },         // creation a 20: lejos
+  ];
+  ok('el valioso más cercano a <= 12', pickLoot(me, ds)?.id === 3);
+  ok('nada valioso cerca: null', pickLoot(me, [ds[0], ds[3]]) === null);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE FARMEO PASARON' : `\n${fails} TEST(S) DE FARMEO FALLARON`);

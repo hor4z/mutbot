@@ -18,9 +18,12 @@
  *
  * Loop autónomo (juega solo, sin GUI, sin flood):
  *   --auto-seconds 600  cuánto tiempo corre el loop autónomo (0 = sin límite:
- *                       farmea y encadena resets indefinidamente)
+ *                       farmea y encadena resets indefinidamente, reconectando
+ *                       con backoff si se corta la conexión)
  *   --reset-level 400   nivel al que hace /reset (default 400)
- *   --build str,vit     orden de inversión de puntos de estadística
+ *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: el del agente
+ *                       web, planStats: energía hasta fuerza − 2000, después
+ *                       mitad/mitad, 5% vitalidad)
  *   --max-stat 300      tope por atributo (default 10000 = sin tope)
  *   --heal-at 60        usa potion cuando HP% <= este valor
  *   --skills 41,42      números de skill de ataque, en orden de preferencia
@@ -40,6 +43,8 @@
  *                       (warp del server: valida nivel y cobra zen)
  *   --spots 2,5,1       limita a qué warps de la ruta puede ir el bot (default:
  *                       toda la ruta, ver WARP_SPOTS)
+ *   --free-route        en vez de la ruta fija por tramo (chooseFixedRoute),
+ *                       la regla vieja que prueba mapas por exp/min (chooseRouteSpot)
  *
  * Aprendizaje (ver AGENTS.md, "Aprendizaje"):
  *   --learn-file p.json  dónde guarda exp/min por spot, exp/segundos por tipo
@@ -58,11 +63,14 @@ import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  SpotMeter, chooseRouteSpot, routeScores, aggregate, formatSpotTable, loadLearning, saveLearningChar, activeDryExclusions,
+  SpotMeter, chooseRouteSpot, chooseFixedRoute, routeScores, routeTier, aggregate, formatSpotTable, loadLearning, saveLearningChar, activeDryExclusions,
+  CROWD_FALLBACK,
   type Spot, type SpotSample, type CharLearning,
 } from './learning';
 import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './explore';
-import { ExpSplitTracker, MonsterTypeStats, SelfReport, pickTarget, type TimeKind } from './farming';
+import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
+import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
+import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type StatusServer } from './ws-server';
@@ -221,6 +229,8 @@ const XOR32_KEY_097D = new Uint8Array([
 ]);
 
 function sendToGS(buffer: DataView) {
+  // Socket cerrado (corte, reconexión en curso): no se manda nada.
+  if (!gsSocket || gsSocket.readyState !== WebSocket.OPEN) return;
   let packet = new Uint8Array(buffer.buffer);
   const header = packet[0];
   const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
@@ -309,7 +319,9 @@ const SELL_AT_PRESSURE = 0.6;
 
 // Skills de ataque configurables (números de skill, NO índices de lista).
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.
-const DEFAULT_ATTACK_SKILLS = [19, 49, 14, 15, 40, 41, 42, 43, 45, 46, 47, 48, 50, 51, 55];
+// Twisting Slash (41) primero: es el skill fijo de Horaz. Rageful Blow (42)
+// fuera: el usuario lo descartó (lento). El resto queda para otros personajes.
+const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 48, 50, 51, 55];
 
 // ---------------------------------------------------------------------------
 // Métricas
@@ -790,6 +802,20 @@ function trackWorld() {
     world.players.clear();
     drops.clear();
     sendToGS(ClientReadyAfterMapChangePacket.createPacket().buffer);
+    // Punto de llegada (correa de Devias) y primer campamento (camp.ts).
+    onMapArrival();
+  });
+
+  // Invitaciones a party: rechazar siempre (pedido del usuario), con un
+  // respiro humano antes de contestar (ver protocol097.ts).
+  EventBus.on('PartyRequest', (raw: any) => {
+    const id = parsePartyRequest(toBytes(raw));
+    if (id == null) return;
+    const [lo, hi] = PARTY_DECLINE_DELAY_MS;
+    setTimeout(() => {
+      sendToGS(new DataView(buildPartyDecline(id).buffer));
+      log(`Party rechazada (de #${id}).`);
+    }, lo + Math.random() * (hi - lo));
   });
 }
 
@@ -797,9 +823,7 @@ async function loginAndSelectCharacter() {
   login(USERNAME, PASSWORD);
   const loginBytes = await waitFor('LoginResponse');
   const loginResp = new LoginResponsePacket(loginBytes);
-  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) {
-    throw new Error(`Login falló: ${LoginResponseLoginResultEnum[loginResp.Success]}`);
-  }
+  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
   log('Login OK');
 
   const listWaiter = waitFor('CharacterList');
@@ -841,8 +865,12 @@ async function selectCharacter(charListBytes: any) {
     stats: { str: info.str, agi: info.agi, vit: info.vit, ene: info.ene },
   });
   log(
-    `Entré al mundo con ${target.Name}: pos=(${info.x},${info.y}) map=${info.map} exp=${info.exp} HP=${info.hp}/${info.maxHp}`,
+    `Entré al mundo con ${target.Name}: pos=(${info.x},${info.y}) map=${info.map} nivel=${world.level} puntos=${info.levelUpPoints} exp=${info.exp} HP=${info.hp}/${info.maxHp}`,
   );
+  // Retomar desde el estado real: si ya está en el mapa del tramo, la ruta lo
+  // adopta sin warpear (chooseFixedRoute, 'adopt').
+  canAdopt = true;
+  onMapArrival();
   return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
 }
 
@@ -1093,14 +1121,17 @@ const MAX_STAT = parseInt(args.get('--max-stat') ?? '10000');
 // Sin peso, cada stat pesa 1. Default: el reparto que usó el usuario en su
 // tercer reset con un Dark Knight que pelea con Twisting Slash (la energía
 // sube el daño de los skills del DK).
-const BUILD_WEIGHTS: Array<[StatName, number]> = (args.get('--build') ?? 'str:50,ene:33,vit:17')
+// Sin --build se usa planStats (farming.ts), el reparto del agente web.
+const BUILD_ARG = args.get('--build');
+const BUILD_WEIGHTS: Array<[StatName, number]> = (BUILD_ARG ?? 'str:50,ene:33,vit:17')
   .split(',')
   .map((part) => part.trim().split(':'))
   .filter(([name]) => STAT_ORDER.includes(name as StatName))
   .map(([name, w]) => [name as StatName, w ? Number(w) : 1]);
-const BUILD = BUILD_WEIGHTS.map(([name]) => name);
-// Con menos puntos que esto no vale la pena un comando de chat por stat.
-const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '20');
+const BUILD = BUILD_ARG ? BUILD_WEIGHTS.map(([name]) => name) : (['ene', 'str', 'vit'] as StatName[]);
+// Con menos puntos que esto no vale la pena frenar a repartir (3 comandos de
+// chat = ~7.5 s sin pelear). El agente web reparte de a 200.
+const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '200');
 const RESET_LEVEL = parseInt(args.get('--reset-level') ?? '400');
 const ATTACK_SKILLS = (args.get('--skills') ?? '')
   .split(',')
@@ -1126,11 +1157,19 @@ const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit',
 async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
-  const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
-  const total = active.reduce((acc, [, w]) => acc + w, 0);
-  if (!total) return 0;
-  const plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
-  plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
+  let plan: Array<[StatName, number]>;
+  if (!BUILD_ARG) {
+    // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
+    // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
+    const p = planStats(points, world.stats.str, world.stats.ene);
+    plan = [['ene', p.ene], ['str', p.str], ['vit', p.vit]];
+  } else {
+    const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
+    const total = active.reduce((acc, [, w]) => acc + w, 0);
+    if (!total) return 0;
+    plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
+    plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
+  }
   const ok = await decide({
     kind: 'stat',
     what: plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '),
@@ -1202,6 +1241,8 @@ function checkSurvival(): boolean {
 // 41 (Twisting Slash) verificado en una captura del cliente real; 42 (Rageful
 // Blow) es área en OpenMU, sin verificar todavía.
 const AREA_SKILLS = new Set([41, 42]);
+// Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
+const SKILL_MIN_MANA = 0.15;
 
 function pickAttackSkill(): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
@@ -1227,7 +1268,7 @@ function useSkill(targetId: number): boolean {
 }
 
 // --- Loot -------------------------------------------------------------------
-type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number };
+type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean };
 const drops = new Map<number, ScopedDrop>();
 
 // Bug real encontrado jugando (cuenta melu): 'ItemsDropped' (C2/0x20) y
@@ -1251,7 +1292,8 @@ function parseDropsPacket(raw: any): ScopedDrop[] {
       // El group/num salen del ItemData de 12 bytes (mismo layout que
       // ItemAddedToInventory): num = byte 0, group = nibble alto del byte 5.
       const d = it.ItemData;
-      return { id: it.Id & 0x7fff, x: it.PositionX, y: it.PositionY, group: (d.getUint8(5) & 0xf0) >> 4, num: d.getUint8(0) };
+      const excellent = isExcellentItemData(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+      return { id: it.Id & 0x7fff, x: it.PositionX, y: it.PositionY, group: (d.getUint8(5) & 0xf0) >> 4, num: d.getUint8(0), excellent };
     });
   }
   if (bytes.length === 14) {
@@ -1271,50 +1313,71 @@ function watchDrops(): () => void {
       log(`AVISO: no pude parsear un drop, lo ignoro: ${(e as Error).message}`);
     }
   };
+  // Drop que levantó otro o que expiró: sacarlo, si no se iba a buscarlo.
+  const onRemoved = (raw: any) => {
+    for (const id of parseItemDropRemoved(toBytes(raw))) drops.delete(id);
+  };
   EventBus.on('ItemsDropped', onDrop);
-  return () => EventBus.off('ItemsDropped', onDrop);
+  EventBus.on('ItemDropRemoved', onRemoved);
+  return () => {
+    EventBus.off('ItemsDropped', onDrop);
+    EventBus.off('ItemDropRemoved', onRemoved);
+  };
 }
 
-// Prioridad al elegir qué drop levantar primero: dinero (no ocupa slot de
-// inventario) > equipamiento/desconocido (lo "mejor", decisión del humano
-// qué hacer después) > basura confirmada (igual se levanta para vender, pero
-// de última, así no compite por espacio con algo que valga la pena). NO hay
-// "dropear en el piso" todavía: eso es un packet nuevo sin verificar contra
-// el server real (ver AGENTS.md, "Pendiente"), así que la basura se sigue
-// levantando y vendiendo, nunca se descarta sin más.
-function dropPriority(d: ScopedDrop): number {
-  if (d.isMoney) return 3;
-  if (EQUIP_GROUPS.has(d.group)) return 2;
-  if (!JUNK_GROUPS.has(d.group)) return 1; // grupo desconocido: no asumimos que es basura
-  return 0; // basura confirmada
-}
+// Loot valioso (farming.ts, isValuableDrop): cajas, joyas, excelentes y los
+// guantes 10/1. El zen y el equipo común NO se levantan (cada viaje es tiempo
+// sin pelear). Se camina hasta el drop (a <= 12 tiles) y se levanta a <= 1;
+// mientras tanto no se pelea, como el agente web. Un drop al que no se llega
+// en LOOT_TIMEOUT_MS se olvida.
+const LOOT_RADIUS = 12;
+const LOOT_TIMEOUT_MS = 8000;
+let looting: { id: number; since: number } | null = null;
 
-async function pickupNearbyDrops(): Promise<boolean> {
-  if (!drops.size) return false;
-  // Mejor prioridad primero; a igual prioridad, el más cercano (el server
-  // igual valida el rango).
-  let best: ScopedDrop | undefined;
-  for (const d of drops.values()) {
-    if (!best) { best = d; continue; }
-    const pd = dropPriority(d), pb = dropPriority(best);
-    if (pd > pb || (pd === pb && chebyshev(world.x, world.y, d.x, d.y) < chebyshev(world.x, world.y, best.x, best.y))) {
-      best = d;
-    }
+// Devuelve true si hizo algo (un paso o el pickup).
+async function lootStep(): Promise<boolean> {
+  if (!drops.size) {
+    looting = null;
+    return false;
   }
-  if (!best) return false;
-  const ok = await decide({
-    kind: 'pickup',
-    what: `recoger drop Id=${best.id} (${best.group}/${best.num}) en (${best.x},${best.y})`,
-    detail: { itemId: best.id, group: best.group, num: best.num, x: best.x, y: best.y },
-  });
-  if (!ok) return false;
-  drops.delete(best.id);
+  const now = Date.now();
+  if (looting && (!drops.has(looting.id) || now - looting.since > LOOT_TIMEOUT_MS)) {
+    if (drops.has(looting.id)) {
+      log(`No llego al drop Id=${looting.id}, lo dejo.`);
+      drops.delete(looting.id);
+    }
+    looting = null;
+  }
+  const d = looting ? drops.get(looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS);
+  if (!d) return false;
+  if (!looting) {
+    const ok = await decide({
+      kind: 'pickup',
+      what: `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`,
+      detail: { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y },
+    });
+    if (!ok) {
+      drops.delete(d.id);
+      return false;
+    }
+    looting = { id: d.id, since: now };
+  }
+  if (chebyshev(world.x, world.y, d.x, d.y) > 1) {
+    step(directionTowards(world.x, world.y, d.x, d.y));
+    await sleep(WALK_PACE_MS);
+    return true;
+  }
+  drops.delete(d.id);
+  looting = null;
   const p = PickupItemRequest075Packet.createPacket();
-  p.ItemId = best.id;
+  p.ItemId = d.id;
   sendToGS(p.buffer);
-  log(`Recojo item Id=${best.id} en (${best.x},${best.y})`);
+  lootCount++;
+  log(`Levanto ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`);
+  await sleep(300);
   return true;
 }
+let lootCount = 0;
 
 // --- Economía: qué es basura y qué vale la pena guardar -------------------
 // El bot no tiene ni el precio ni IsSellableToNpc del server, así que usa el
@@ -1615,17 +1678,24 @@ async function moveToMap(mapName: string): Promise<boolean> {
 // Zen: los de Lorencia/Devias son los de la lista de warp; los de Arena no se
 // capturaron todavía (0 = desconocido, el server igual valida y cobra).
 // ---------------------------------------------------------------------------
+// map = mapa al que deja el warp (Lorencia 0, Devias 2, Arenas 2/3/4 = 83/84/85
+// según el agente web). La ruta FIJA por tramo está en learning.ts (FIXED_ROUTE).
 const WARP_SPOTS: Spot[] = [
-  { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000 },
+  { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000, map: 0 },
   // Orden = preferencia entre spots del mismo nivel: Devias 3/4 antes que la 2.
-  { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500 },
-  { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
-  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
-  // Arena 1 (warp 1) fuera: monstruos flojos y dispersos, ~0 exp/min medido jugando.
-  { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0 },
-  { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0 },
-  { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0 },
+  { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500, map: 2 },
+  { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500, map: 2 },
+  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000, map: 2 },
+  // Arena 1 (warp 1): monstruos flojos y dispersos, ~0 exp/min medido jugando.
+  // Solo como plan B si todas las Devias están llenas de gente (nivel 50-99).
+  { index: CROWD_FALLBACK.warp, name: 'Arena', reqLevel: 50, zen: 0 },
+  { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0, map: 83 },
+  { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0, map: 84 },
+  { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0, map: 85 },
 ];
+// Sin el plan B: lo que usan --no-learn y --free-route.
+const ROUTE_SPOTS = WARP_SPOTS.filter((sp) => sp.index !== CROWD_FALLBACK.warp);
+const FIXED_ROUTE_ON = !args.has('--free-route');
 const zenTxt = (sp: Spot | null | undefined) => (sp?.zen ? `cuesta ${sp.zen} zen` : 'zen sin capturar');
 const LORENCIA_WARP = 2;
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
@@ -1640,7 +1710,7 @@ let spotSince = 0;
 // Regla fija (la de antes del aprendizaje): el de mayor reqLevel permitido.
 // Se usa con --no-learn.
 function pickSpot(level: number, exclude: ReadonlySet<number> = new Set()): Spot | undefined {
-  return WARP_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index)) && !exclude.has(sp.index)).sort(
+  return ROUTE_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index)) && !exclude.has(sp.index)).sort(
     (a, b) => b.reqLevel - a.reqLevel,
   )[0];
 }
@@ -1663,6 +1733,33 @@ const meter = new SpotMeter();
 const typeStats = new MonsterTypeStats((type) => MONSTER_MAX_HP.get(type) ?? null);
 const expTracker = new ExpSplitTracker(typeStats);
 const hotGrid = new HotSpotGrid();
+// Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de
+// exp/min por ventana (informe, campamentos, hambre) salen de acá.
+const expLog = new ExpLog(Date.now());
+// Campamentos (camp.ts): correa, memoria, vara por mapa. Hambre por tramo.
+// Registro de tramos por ciclo. Se recrean al cargar learning.json.
+let camps = new CampManager();
+let hunger = new Hunger();
+let cycleLog = new CycleLog(Date.now());
+// Kills por tipo (curiosidad: tipos con < 3 kills medidos van primero).
+const typeKills: Record<number, number> = {};
+// Último MapChanged / entrada al mundo (el hambre no mira el primer minuto).
+let lastArrivalAt = Date.now();
+// Se puede adoptar el mapa actual como spot sin warpear (al entrar al mundo);
+// tras una muerte no (respawnea en el pueblo: hay que volver a warpear).
+let canAdopt = true;
+// Spot → cuándo se lo dejó por competencia (ruta fija: no volver enseguida).
+const crowdedAt = new Map<number, number>();
+// Último spot en el que estuvo (tras morir se vuelve a esa entrada).
+let lastSpotIndex: number | null = null;
+
+function onMapArrival() {
+  lastArrivalAt = Date.now();
+  camps.onArrival(world.map, world.x, world.y, lastArrivalAt, world.level);
+  const lz = camps.leashFor(world.map);
+  log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
+  for (const e of camps.events) log(`Campamento: ${e}.`);
+}
 
 async function loadLearningState() {
   if (!LEARN_ENABLED) return;
@@ -1673,6 +1770,9 @@ async function loadLearningState() {
     Object.assign(typeStats.killSecByType, learning.types.killSecByType);
   }
   if (learning.hot) hotGrid.load(learning.hot);
+  camps = new CampManager(CAMP, new CampMemory(CAMP, learning.camps ?? []));
+  hunger = new Hunger(CAMP, learning.tierRef);
+  cycleLog = new CycleLog(Date.now(), learning.cycles ?? undefined);
   if (r.status === 'corrupt') {
     log(`Aprendizaje: ${LEARN_FILE} ilegible (${r.error}); arranco de cero${r.backup ? `, el original quedó en ${r.backup}` : ''}.`);
   } else {
@@ -1691,6 +1791,9 @@ function persistLearning(): Promise<void> {
   // Nunca frena el juego: si el disco falla, se pierde a lo sumo un tramo.
   learning.types = typeStats.snapshot();
   learning.hot = hotGrid.dump().map(({ map, cx, cy, exp }) => ({ map, cx, cy, exp }));
+  learning.camps = camps.memory.dump();
+  learning.cycles = { cur: cycleLog.cur, done: cycleLog.done.slice(-200) };
+  learning.tierRef = { ...hunger.ref };
   learnSaveChain = learnSaveChain.then(() =>
     saveLearningChar(LEARN_FILE, CHAR_NAME, learning).catch((e) =>
       log(`Aprendizaje: no pude guardar ${LEARN_FILE}: ${(e as Error).message}`),
@@ -1737,10 +1840,13 @@ async function warpAndWait(spot: Spot, measure = true): Promise<boolean> {
   return ok;
 }
 
-// Spot = exp/min, con la regla de la ruta del usuario (chooseRouteSpot): un
-// tier nuevo se prueba, y tras 2 min un spot que rinde < 50% del mejor
-// conocido se cambia. Lo medido es del ciclo de reset actual.
-async function maybeChangeSpot(): Promise<boolean> {
+// Por defecto, la RUTA FIJA por tramo (chooseFixedRoute, learning.ts): cambia
+// de mapa solo al cruzar un tramo, con el mapa vacío (90 s) o por competencia
+// que bajó la exp (campamentos abandonados por gente, o "hambre"). Si ya está
+// en el mapa del tramo al entrar al mundo, lo adopta sin warpear.
+// Con --free-route: la regla vieja (chooseRouteSpot) que prueba mapas por exp/min.
+type SpotSignals = { mapDead?: boolean; crowded?: boolean };
+async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
   if (now - lastWarpAt < WARP_COOLDOWN_MS) return false;
   let best: Spot | undefined | null;
@@ -1748,14 +1854,42 @@ async function maybeChangeSpot(): Promise<boolean> {
   let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
   const exclude = activeDryExclusions(dryAt, now);
   if (exclude.size) detail.dry = [...exclude];
-  if (!LEARN_ENABLED) {
+  if (FIXED_ROUTE_ON) {
+    const choice = chooseFixedRoute({
+      spots: WARP_SPOTS,
+      level: world.level,
+      allowed: ALLOWED_SPOTS,
+      current: currentSpot,
+      currentMap: canAdopt ? world.map : -1,
+      mapDead: !!sig.mapDead,
+      crowded: !!sig.crowded,
+      crowdedAt,
+      now,
+      prefer: lastSpotIndex,
+    });
+    if (choice.reason === 'crowd' && currentSpot) crowdedAt.set(currentSpot.index, now);
+    if (sig.crowded) camps.crowdLeaves = [];
+    if (choice.reason === 'adopt' && choice.spot) {
+      // Ya está en el mapa del tramo: seguir acá sin warpear.
+      log(`Spot: ${choice.what}.`);
+      currentSpot = choice.spot;
+      spotSince = now;
+      stayExp = 0;
+      if (LEARN_ENABLED) meter.start(choice.spot.index, world.level, learning.resets, now);
+      return false;
+    }
+    if (!choice.warp || !choice.spot || choice.spot.index === currentSpot?.index) return false;
+    best = choice.spot;
+    what = `${choice.what} (${zenTxt(best)})`;
+    detail = { ...detail, reason: choice.reason, tier: choice.tier };
+  } else if (!LEARN_ENABLED) {
     best = pickSpot(world.level, exclude);
     what = `warp a ${best?.name} (nivel ${world.level}, ${zenTxt(best)})`;
   } else {
     const live = meter.peek(now);
     const scores = routeScores(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
     const choice = chooseRouteSpot({
-      spots: WARP_SPOTS,
+      spots: ROUTE_SPOTS,
       level: world.level,
       allowed: ALLOWED_SPOTS,
       current: currentSpot,
@@ -1834,6 +1968,13 @@ async function doReset(): Promise<boolean> {
   // monstruo se conservan: dependen del mapa, no del nivel.
   tierSeen = 0;
   stayExp = 0;
+  // La vara de cada mapa depende del nivel: se vuelve a medir. La memoria de
+  // campamentos se conserva (guarda el nivel al que se midió).
+  camps.onReset();
+  crowdedAt.clear();
+  // Cierra el ciclo en el registro de tramos (solo cuenta si llegó al 400).
+  const closed = cycleLog.reset(Date.now());
+  if (closed) log(`Ciclo cerrado: ${closed.min} min (${Math.round(1440 / (closed.min || 1))} resets/día a este ritmo).`);
   // Contador local de resets: el server no manda uno que sepamos parsear.
   learning.resets++;
   await persistLearning();
@@ -1849,10 +1990,16 @@ async function doReset(): Promise<boolean> {
 // Autoevaluación en consola cada esto (ver SelfReport en farming.ts).
 const REPORT_EVERY_MS = 5 * 60_000;
 
-// seconds = 0: sin límite (resets encadenados indefinidamente).
-async function autonomousLoop(seconds: number) {
-  log(`\n--- Modo autónomo: ${seconds ? `${seconds}s` : 'sin límite'} ---`);
-  log(`Build=${BUILD.join('>')} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}]`);
+// Totales de todas las sesiones (el loop corre una vez por conexión).
+type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
+
+// Autoevaluación acumulada entre sesiones (reconexiones), sobre el ExpLog.
+const report = new SelfReport(Date.now(), expLog);
+
+// Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
+async function autonomousLoop(deadline: number): Promise<LoopResult> {
+  log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
+  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta=${FIXED_ROUTE_ON ? 'fija por tramo' : 'libre'}`);
 
   const npcs = world.npcs;
   let totalExpGained = 0;
@@ -1864,29 +2011,31 @@ async function autonomousLoop(seconds: number) {
   let deaths = 0;
   let nextResetTry = 0;
   let lastSummary = Date.now();
-  const report = new SelfReport(Date.now());
   let lastReport = Date.now();
+  let lastCycleCheck = 0;
+  let lastCastAt = 0;
   // Fase de la iteración anterior: el tiempo hasta la próxima se le atribuye.
   let phase: TimeKind = 'other';
   let phaseAt = Date.now();
   // Desde cuándo perseguimos al objetivo actual (segundos hasta matarlo).
   let targetSince = 0;
   let targetType = -1;
+  let starvingLogged = 0;
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro
-  // id); el meter descarta el duplicado. Se corta el tramo (la muerte queda en
-  // la muestra del spot donde pasó) y se olvida el spot actual: el respawn
-  // suele ser en otro lado, así que el próximo maybeChangeSpot vuelve a elegir
-  // (con la muerte ya penalizando a ese spot).
+  // id); el meter descarta el duplicado. Se corta el tramo y se olvida el spot
+  // actual: el respawn es en el pueblo, así que el próximo maybeChangeSpot
+  // vuelve a warpear (canAdopt = false: no adoptar el pueblo como spot).
   const onDeath = (source: string) => {
     if (!meter.addDeath(Date.now())) return;
     deaths++;
     log(`Muerte #${deaths} (${source}) en ${currentSpot?.name ?? 'spot desconocido'}.`);
-    if (LEARN_ENABLED) {
-      endStint();
-      currentSpot = null;
-      void persistLearning();
-    }
+    endStint();
+    lastSpotIndex = currentSpot?.index ?? lastSpotIndex;
+    currentSpot = null;
+    canAdopt = false;
+    camps.camp = null;
+    if (LEARN_ENABLED) void persistLearning();
   };
   let lastHp = world.hp;
   const onHp = (raw: any) => {
@@ -1908,17 +2057,17 @@ async function autonomousLoop(seconds: number) {
       meter.addKill();
       // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
       if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
-      log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
+      if (process.env.MUBOT_DEBUG_COMBAT) log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
     } else if (wasOurTarget && process.env.MUBOT_DEBUG_COMBAT) {
       // Zona concurrida: puede que otro jugador/NPC mate a nuestro objetivo
-      // antes que nosotros — no es un bug, pero conviene verlo para no
-      // confundirlo con "nunca llega a pegar".
+      // antes que nosotros — no es un bug, pero conviene verlo.
       log(`DEBUG combate: nuestro objetivo Id=${p.KilledId} lo mató otro (KillerId=${p.KillerId})`);
     }
   };
   // ExperienceGained (C3 16): KilledObjectId u16 BE @3, AddedExperience u16
-  // BE @5. Un kill de más de 65535 llega partido en varios packets con el
-  // mismo id: ExpSplitTracker los suma para la exp por tipo (farming.ts).
+  // BE @5. Un kill de más de 65535 llega partido en ~60 packets con el mismo
+  // id: ExpSplitTracker los suma para la exp por tipo (farming.ts) y ExpLog
+  // los agrega por segundo (no un registro por tramo: ver ExpLog).
   const onExp = (raw: any) => {
     const p = new ExperienceGainedPacket(raw);
     const added = p.AddedExperience;
@@ -1928,16 +2077,22 @@ async function autonomousLoop(seconds: number) {
     stayExp += added;
     report.addExp(added, now);
     const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
+    if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
     // El spot caliente se pondera por exp: se suma donde estaba el monstruo.
     if (ev.info && ev.info.map === world.map) explorer.onExp(world.map, ev.info.x, ev.info.y, added, now);
-    const what = ev.info ? ` tipo ${ev.info.type}${ev.continuation ? `, kill partido: ${ev.sum}` : ''}` : '';
-    log(`+${added} exp${what} (total ${totalExpGained})`);
+    if (process.env.MUBOT_DEBUG_EXP) {
+      const what = ev.info ? ` tipo ${ev.info.type}${ev.continuation ? `, kill partido: ${ev.sum}` : ''}` : '';
+      log(`+${added} exp${what} (total ${totalExpGained})`);
+    }
   };
   EventBus.on('ObjectGotKilled', onKilled);
   EventBus.on('ExperienceGained', onExp);
   EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
-  watchEconomy();
+  if (!economyWatched) {
+    watchEconomy();
+    economyWatched = true;
+  }
 
   const unreachable = new Set<number>();
   let target: number | null = null;
@@ -1945,13 +2100,51 @@ async function autonomousLoop(seconds: number) {
   let lastX = world.x;
   let lastY = world.y;
   // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
+  // Se usa solo cuando no hay campamento (camp.ts) al que ir.
   const explorer = new Explorer(EXPLORE_PREF, EXPLORE, hotGrid);
-  let exploreStuck = 0;
-  let lastExploreGoal: unknown = null;
-  const start = Date.now();
+  let explorerMap: number | null = null;
+  let walkStuck = 0;
+  let lastGoalTxt = '';
   let ticks = 0;
+  const logCampEvents = () => {
+    for (const e of camps.events) log(`Campamento: ${e}.`);
+    camps.events = [];
+  };
 
-  while ((seconds <= 0 || Date.now() - start < seconds * 1000) && !kicked) {
+  // Un paso hacia (x, y); si no avanza, rodea el obstáculo abriendo de a 45°
+  // (alternando lados) y vuelve a la recta.
+  const walkTowards = async (x: number, y: number) => {
+    const straight = directionTowards(world.x, world.y, x, y);
+    const k = Math.ceil(walkStuck / 2);
+    const dir = walkStuck === 0 ? straight : (straight + (walkStuck % 2 ? k : 8 - k) + 8) % 8;
+    const bx = world.x;
+    const by = world.y;
+    step(dir);
+    await sleep(WALK_PACE_MS);
+    walkStuck = world.x === bx && world.y === by ? (walkStuck % 6) + 1 : 0;
+    lastX = world.x;
+    lastY = world.y;
+  };
+
+  // Skill de área con CUALQUIER monstruo a <= CAST_RANGE, aunque esté
+  // caminando (Twisting Slash gira alrededor del DK). Respeta SKILL_PACE_MS
+  // entre casts y no espera: el paso de caminata sigue en la misma iteración.
+  const castOnTheWay = (): boolean => {
+    const now = Date.now();
+    if (now - lastCastAt < SKILL_PACE_MS) return false;
+    const skill = pickAttackSkill();
+    if (!skill || !AREA_SKILLS.has(skill.number)) return false;
+    if (world.maxMana > 0 && world.mana / world.maxMana < SKILL_MIN_MANA) return false;
+    const t = target != null ? npcs.get(target) ?? null : null;
+    const c = castCandidate({ x: world.x, y: world.y }, npcs.values(), t, CAMP.CAST_RANGE);
+    if (!c) return false;
+    sendAreaSkill(skill.index, c.x, c.y, directionTowards(world.x, world.y, c.x, c.y), c.id);
+    lastCastAt = now;
+    skillsUsed++;
+    return true;
+  };
+
+  while ((deadline <= 0 || Date.now() < deadline) && !kicked) {
     ticks++;
     {
       const t = Date.now();
@@ -1959,11 +2152,20 @@ async function autonomousLoop(seconds: number) {
       phaseAt = t;
       phase = 'other';
     }
-    // Autoevaluación cada ~5 min.
+    // Registro de tramos por ciclo: minuto al llegar a 20/50/100/.../400.
+    if (Date.now() - lastCycleCheck >= 2000) {
+      lastCycleCheck = Date.now();
+      const marks = cycleLog.observe(world.level, lastCycleCheck);
+      for (const m of marks) if (m >= 100) log(`Tramo: nivel ${m} al minuto ${cycleLog.cur.marks[m]} del ciclo.`);
+      if (marks.length) void persistLearning();
+    }
+    // Autoevaluación cada ~5 min (con la proyección de resets/día).
     if (Date.now() - lastReport >= REPORT_EVERY_MS) {
       lastReport = Date.now();
       const spotTxt = currentSpot ? `spot ${currentSpot.name} (${Math.round(stayExp / Math.max((lastReport - spotSince) / 60_000, 1e-6))} exp/min)` : 'sin spot';
-      log(report.format(lastReport, world.level, learning.resets, `${kills} kills, ${spotTxt}`));
+      const campTxt = camps.camp ? `, campamento (${camps.camp.x},${camps.camp.y}) vara ${Math.round(camps.best[world.map] ?? 0)} exp/min` : '';
+      log(report.format(lastReport, world.level, learning.resets, `${kills} kills, ${lootCount} loot, ${spotTxt}${campTxt}`));
+      log(`Tramos por ciclo:\n${cycleLog.format()}`);
     }
     // Aprendizaje: cada ~2 min cierra un tramo, lo guarda y muestra la tabla.
     if (LEARN_ENABLED && Date.now() - lastSummary >= LEARN_SUMMARY_MS) {
@@ -1991,6 +2193,7 @@ async function autonomousLoop(seconds: number) {
         target = null;
         report.cycleDone(Date.now());
         log(report.format(Date.now(), world.level, learning.resets, 'reset hecho'));
+        log(`Tramos por ciclo:\n${cycleLog.format()}`);
       } else {
         nextResetTry = Date.now() + 10 * 60_000;
       }
@@ -2004,54 +2207,81 @@ async function autonomousLoop(seconds: number) {
       continue;
     }
 
-    // 4) ¿Hay un mapa mejor para mi nivel? (warp; ver pickSpot)
-    // (cada 10 ticks, ~5-10 s; maybeChangeSpot respeta WARP_COOLDOWN_MS)
-    if (ticks % 10 === 0) await maybeChangeSpot();
+    // 4) Hambre: casi nada de exp en 45 s con jugadores cerca → cambiar YA de
+    //    entrada o de mapa (o, si no hay a dónde, de campamento).
+    const now0 = Date.now();
+    const rivalsNear = [...world.players.values()].filter((q) => chebyshev(q.x, q.y, world.x, world.y) <= CAMP.HUNGER_RIVAL_DIST).length;
+    const recentRate = expLog.perMin(now0, CAMP.HUNGER_WINDOW_MS);
+    const hungry = hunger.check({ now: now0, tier: routeTier(world.level).minLevel, recentRate, lastWarpAt: lastArrivalAt, rivalsNear });
+    if (hungry.starving && now0 - starvingLogged > 15_000) {
+      starvingLogged = now0;
+      log(`Casi sin exp (${Math.round(recentRate)} exp/min en 45 s, referencia ${Math.round(hungry.ref ?? 0)}) con ${rivalsNear} jugador(es) cerca: cambio de lugar.`);
+    }
 
-    // 3) Desviar inventario antes de llenarse: la basura no sirve si no se
-    //    vende, y un inventario lleno impide recoger loot bueno.
+    // 5) ¿Cambiar de spot? (ruta fija: tramo nuevo, competencia, hambre). Cada
+    //    10 ticks, o ya si hay hambre/competencia; respeta WARP_COOLDOWN_MS.
+    const crowded = hungry.starving || camps.crowdedSpot(now0);
+    if (ticks % 10 === 0 || crowded || !currentSpot) {
+      const moved = await maybeChangeSpot({ crowded });
+      if (moved) {
+        target = null;
+        continue;
+      }
+      if (hungry.starving && camps.camp && now0 - camps.camp.since > CAMP.HUNGER_WINDOW_MS) {
+        // No hay otra entrada/mapa: al menos cambiar de campamento.
+        camps.leave(now0, world.level, 'hambre con jugadores cerca', true, expLog);
+        logCampEvents();
+        target = null;
+      }
+    }
+
+    // 6) Desviar inventario antes de llenarse.
     if (inventoryPressure() > SELL_AT_PRESSURE) {
       await sellJunkToMerchant();
       continue;
     }
 
-
-    // 4) Recoger loot en el piso antes de pelear, PERO no si ya hay un
-    //    objetivo a distancia de golpe: bug real encontrado jugando (cuenta
-    //    melu) — en una zona con mucho drop acumulado (loot de otros
-    //    jugadores), el bot se quedaba recogiendo para siempre y nunca
-    //    llegaba a elegir/atacar un monstruo, aunque hubiera uno al lado.
+    // 7) Loot valioso (cajas, joyas, excelentes, guantes 10/1), PERO no si ya
+    //    hay un objetivo a distancia de golpe (bug real: en una zona con mucho
+    //    drop acumulado el bot se quedaba recogiendo y nunca peleaba).
     const targetInMeleeRange =
       target != null && npcs.has(target) && chebyshev(world.x, world.y, npcs.get(target)!.x, npcs.get(target)!.y) <= 1;
-    if (!targetInMeleeRange && (await pickupNearbyDrops())) {
-      await sleep(150);
+    if (!targetInMeleeRange && (await lootStep())) {
+      phase = 'walk';
       continue;
     }
 
-    // 5) Elegir / mantener objetivo.
-    //    Por EXP POR SEGUNDO (farming.ts, pickTarget), no por cercanía: exp
-    //    por kill del tipo / (segundos de kill + distancia × 0.4), con bonus
-    //    de densidad (Twisting Slash es de área) y penalización por
-    //    jugadores cerca. El objetivo se mantiene hasta que muere o sale.
+    // 8) Elegir / mantener objetivo: campamento (camp.ts) + exp/s (farming.ts).
     if (target != null && !npcs.has(target)) target = null;
     if (target == null) {
-      const pick = pickTarget(
-        { x: world.x, y: world.y },
-        [...npcs.values()].filter((n) => !unreachable.has(n.id)),
-        [...world.players.values()],
-        typeStats,
-      );
+      const now = Date.now();
+      const pick = camps.pick({
+        now,
+        map: world.map,
+        me: { x: world.x, y: world.y },
+        level: world.level,
+        monsters: [...npcs.values()].filter((n) => !unreachable.has(n.id)),
+        players: [...world.players.values()],
+        stats: typeStats,
+        exp: expLog,
+        typeKills,
+      });
+      logCampEvents();
       if (pick) {
-        target = pick.target.id;
-        targetType = pick.target.type;
-        targetSince = Date.now();
+        target = pick.id;
+        targetType = pick.type;
+        targetSince = now;
         stuckCount = 0;
-        if (process.env.MUBOT_DEBUG_COMBAT) {
-          log(`DEBUG objetivo: Id=${target} tipo=${targetType} ${pick.rate.toFixed(1)} exp/s estimada, ${pick.rivals} jugador(es) cerca`);
-        }
+        if (process.env.MUBOT_DEBUG_COMBAT) log(`DEBUG objetivo: Id=${target} tipo=${targetType} en (${pick.x},${pick.y})`);
       }
     }
-    if (target != null) explorer.sawMonster(Date.now());
+    // El reloj de mapa vacío corre desde la llegada, aunque el explorador
+    // todavía no haya tenido que elegir a dónde caminar (había campamento).
+    if (explorerMap !== world.map) {
+      explorerMap = world.map;
+      explorer.enterMap(world.map, world.x, world.y, Date.now());
+    }
+    if (npcs.size) explorer.sawMonster(Date.now());
 
     if (target != null) {
       const t = npcs.get(target)!;
@@ -2061,8 +2291,15 @@ async function autonomousLoop(seconds: number) {
       }
       phase = 'fight';
       if (dist <= 1) {
-        // A distancia de golpe: skill si hay, si no el hit normal.
+        // A distancia de golpe: skill si hay (respetando SKILL_PACE_MS desde el
+        // último cast, también los del camino), si no el hit normal.
+        const sinceCast = Date.now() - lastCastAt;
+        if (sinceCast < SKILL_PACE_MS && pickAttackSkill()) {
+          await sleep(SKILL_PACE_MS - sinceCast);
+          continue;
+        }
         if (useSkill(target)) {
+          lastCastAt = Date.now();
           skillsUsed++;
           await sleep(SKILL_PACE_MS);
         } else {
@@ -2078,6 +2315,8 @@ async function autonomousLoop(seconds: number) {
         stuckCount = 0;
         continue;
       }
+      // Girar con lo que esté a <= 3 mientras se acerca (no frena la caminata).
+      castOnTheWay();
       const straight = directionTowards(world.x, world.y, t.x, t.y);
       const dir = stuckCount >= 3 ? (straight + 2 + (stuckCount % 4)) % 8 : straight;
       step(dir);
@@ -2089,33 +2328,48 @@ async function autonomousLoop(seconds: number) {
       continue;
     }
 
-    // 6) Sin nada que hacer: explorar (explore.ts, ver AGENTS.md "Loop
-    // autónomo — exploración").
-    //  a) Mapa seco: DRY_MAP_MS sin ningún monstruo en todo el mapa → el spot
-    //     queda excluido un rato (el tramo con 0 exp ya es una muestra mala
-    //     para el bandit) y se pasa al siguiente spot elegible.
-    //  b) Si no, ir a la celda caliente con más kills-objetivo que no haya
-    //     estado vacía en los últimos 2 min; al llegar esperar ~8 s.
-    //  c) Sin celdas calientes: caminar a las "salidas" del pueblo, en orden,
-    //     abandonando cada una a los 20 s de llegar sin ver monstruos.
-    // Reemplaza al explorador viejo (caminata recta de 25 pasos con giros),
-    // que tardaba minutos en salir de una zona vacía.
+    // 9) Sin objetivo.
+    //  a) Mapa vacío DRY_MAP_MS (90 s): la ruta fija pasa a otra entrada del
+    //     tramo (o se queda si no hay); el spot queda excluido un rato.
     const now = Date.now();
     if (explorer.isDry(now)) {
       const where = currentSpot?.name ?? `map ${world.map}`;
-      log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 60_000} min en ${where}: busco otro spot.`);
+      log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${where}: busco otro spot.`);
       if (currentSpot) {
         dryAt.set(currentSpot.index, now);
         // Corta el tramo ya: queda como muestra (0 exp) aunque después no se warpee.
         recordSample(meter.flush(now, world.level));
       }
-      const moved = await maybeChangeSpot();
+      const moved = await maybeChangeSpot({ mapDead: true });
       if (!moved) {
         log('No hay otro spot elegible (o se rechazó el warp): sigo explorando acá.');
         explorer.resetDry(Date.now());
       }
       continue;
     }
+    //  b) Campamento (actual, memoria, arranque) o volver a la correa.
+    const cg = camps.goal(now, world.map, { x: world.x, y: world.y }, world.level, expLog);
+    logCampEvents();
+    if (cg) {
+      const txt = `${cg.kind} (${cg.x},${cg.y})`;
+      if (txt !== lastGoalTxt) {
+        lastGoalTxt = txt;
+        log(`Voy a ${txt} desde (${world.x},${world.y}) map=${world.map}.`);
+      }
+      if (chebyshev(world.x, world.y, cg.x, cg.y) <= 2) {
+        // En el campamento esperando el respawn: sin packets.
+        phase = 'wait';
+        await sleep(500);
+        continue;
+      }
+      phase = 'walk';
+      castOnTheWay();
+      await walkTowards(cg.x, cg.y);
+      continue;
+    }
+    //  c) Explorador: spots calientes (<= 30 tiles, dentro de la correa) y,
+    //     sin ellos, salidas del pueblo (o alrededor de la llegada si hay correa).
+    explorer.setLeash(camps.leashFor(world.map));
     const act = explorer.tick(world.map, world.x, world.y, now);
     for (const e of explorer.events) {
       const g = e.goal;
@@ -2127,32 +2381,23 @@ async function autonomousLoop(seconds: number) {
       }[e.kind];
       log(`Explorar: ${txt}.`);
     }
-    if (act.goal !== lastExploreGoal) {
-      lastExploreGoal = act.goal;
+    {
       const g = act.goal;
-      log(`Explorar: voy a ${g.kind === 'hot' ? `spot caliente (${g.x},${g.y}), ${Math.round(explorer.hot.get(world.map, g.cx, g.cy)?.exp ?? 0)} exp acumulada ahí` : `salida #${g.index + 1}/${explorer.exitList.length} (${g.x},${g.y})`} desde (${world.x},${world.y}) map=${world.map}.`);
+      const txt = g.kind === 'hot' ? `spot caliente (${g.x},${g.y})` : `salida #${g.index + 1}/${explorer.exitList.length} (${g.x},${g.y})`;
+      if (txt !== lastGoalTxt) {
+        lastGoalTxt = txt;
+        log(`Explorar: voy a ${txt}${g.kind === 'hot' ? `, ${Math.round(explorer.hot.get(world.map, g.cx, g.cy)?.exp ?? 0)} exp acumulada ahí` : ''} desde (${world.x},${world.y}) map=${world.map}.`);
+      }
     }
     phase = act.action === 'wait' ? 'wait' : 'walk';
     if (act.action === 'wait') {
       // Parado mirando: sin packets, solo deja correr el tick (si aparece un
-      // monstruo, el paso 5 lo toma).
+      // monstruo, el paso 8 lo toma).
       await sleep(500);
       continue;
     }
-    // Caminar hacia el objetivo de exploración; si no avanza, rodea el
-    // obstáculo abriendo de a 45° (alternando lados) y vuelve a la recta.
-    const straight = directionTowards(world.x, world.y, act.x, act.y);
-    const k = Math.ceil(exploreStuck / 2);
-    const dir = exploreStuck === 0 ? straight : (straight + (exploreStuck % 2 ? k : 8 - k) + 8) % 8;
-    const bx = world.x;
-    const by = world.y;
-    step(dir);
-    await sleep(WALK_PACE_MS);
-    // 1..6 y vuelve a empezar: si sigue trabado, el WALK_TIMEOUT_MS del
-    // explorador abandona ese objetivo.
-    exploreStuck = world.x === bx && world.y === by ? (exploreStuck % 6) + 1 : 0;
-    lastX = world.x;
-    lastY = world.y;
+    castOnTheWay();
+    await walkTowards(act.x, act.y);
   }
 
   EventBus.off('ObjectGotKilled', onKilled);
@@ -2160,46 +2405,77 @@ async function autonomousLoop(seconds: number) {
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
   if (LEARN_ENABLED) {
-    // Cierra el tramo sin dejar de medir (no cambiamos de spot) y guarda.
-    recordSample(meter.flush(Date.now(), world.level));
+    // Cierra el tramo y guarda.
+    endStint();
     await persistLearning();
     logLearningSummary();
   }
   drops.clear();
+  looting = null;
 
-  log(report.format(Date.now(), world.level, learning.resets, 'fin'));
-  log(`\nFin autónomo: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${skillsUsed} skill(s), ${resets} reset(s), ${deaths} muerte(s).`);
+  log(report.format(Date.now(), world.level, learning.resets, kicked ? 'conexión cortada' : 'fin'));
+  log(`Tramos por ciclo:\n${cycleLog.format()}`);
+  log(`\nFin del loop: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${skillsUsed} skill(s), ${resets} reset(s), ${deaths} muerte(s).`);
   log(`Posición final (${world.x},${world.y}) map=${world.map}. Desconectado: ${kicked}`);
   return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed, resets, deaths };
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Main: una sesión por conexión. Si se corta (kick, red, timeout), reconecta
+// con backoff y retoma el ciclo desde el estado REAL: login → elegir personaje
+// → leer nivel/mapa/puntos (CharacterInformation) → la ruta fija adopta el
+// mapa si ya está en el del tramo, o warpea; a nivel 400 resetea. Nunca hay
+// dos sesiones a la vez: se reconecta solo con la anterior ya cerrada.
 // ---------------------------------------------------------------------------
-async function main() {
-  console.log(`\nBot headless contra proxy=${PROXY} connectServer=${CS_HOST}:${CS_PORT}`);
-  console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
-
-  const wsPortArg = args.get('--ws-port');
-  let stateInterval: ReturnType<typeof setInterval> | undefined;
-  if (wsPortArg) {
-    const wsPort = parseInt(wsPortArg);
-    statusServer = startStatusServer({ port: wsPort });
-    log(`Telemetría (solo lectura) en ws://127.0.0.1:${wsPort}`);
-    stateInterval = setInterval(() => statusServer?.broadcastState(snapshotWorld()), 1000);
+class LoginError extends Error {
+  constructor(readonly result: number) {
+    super(`Login falló: ${LoginResponseLoginResultEnum[result] ?? result}`);
   }
+}
+// Errores de login que no se arreglan reintentando.
+const FATAL_LOGIN = new Set<number>([
+  LoginResponseLoginResultEnum.InvalidPassword,
+  LoginResponseLoginResultEnum.AccountInvalid,
+  LoginResponseLoginResultEnum.AccountBlocked,
+  LoginResponseLoginResultEnum.WrongVersion,
+]);
 
+let worldTracked = false;
+let economyWatched = false;
+
+function closeSockets() {
+  try { csSocket?.close(); } catch {}
+  try { gsSocket?.close(); } catch {}
+}
+
+function clearScope() {
+  world.npcs.clear();
+  world.townNpcs.clear();
+  world.players.clear();
+  drops.clear();
+  looting = null;
+  openedNpcId = null;
+  currentSpot = null;
+  meter.stop();
+}
+
+async function session(first: boolean, deadline: number): Promise<LoopResult> {
+  kicked = false;
+  clearScope();
   await connectToConnectServer();
   const { ip, port } = await getGameServerAddress();
   await connectToGameServer(ip, port);
   // A partir de acá el server empieza a mandar el estado del mundo, así que
   // enganchamos el tracker ANTES de seleccionar personaje para no perder
   // SkillListUpdate / CharacterInventory, que llegan justo después del login.
-  trackWorld();
+  // Una sola vez: los handlers del EventBus sobreviven a la reconexión.
+  if (!worldTracked) {
+    trackWorld();
+    worldTracked = true;
+  }
   const { startX, startY } = await loginAndSelectCharacter();
-  await loadLearningState();
 
-  if (args.has('--probe-dir')) {
+  if (first && args.has('--probe-dir')) {
     const dir = parseInt(args.get('--probe-dir')!);
     log(`\n--- Modo prueba: UN solo WalkRequest, dirección ${dir}, desde (${startX},${startY}) ---`);
     sendToGS(buildWalkPacket(startX, startY, [dir]).buffer);
@@ -2210,30 +2486,80 @@ async function main() {
     process.exit(0);
   }
 
-  // Keepalives como el cliente web (ver sendPing/sendEcho).
+  if (first) {
+    const warp = args.get('--warp') ? parseInt(args.get('--warp')!) : null;
+    if (warp != null) {
+      const spot = WARP_SPOTS.find((sp) => sp.index === warp) ?? { index: warp, name: `warp ${warp}`, reqLevel: 0, zen: 0 };
+      await warpAndWait(spot);
+    }
+    const moveTo = args.get('--move');
+    if (moveTo) await moveToMap(moveTo);
+  }
+  // Damos un par de segundos a que lleguen skill list, inventario y NPCs
+  // en scope antes de que el loop empiece a decidir.
+  await sleep(2000);
+  return autonomousLoop(deadline);
+}
+
+async function main() {
+  console.log(`\nBot headless contra proxy=${PROXY} connectServer=${CS_HOST}:${CS_PORT}`);
+  console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
+
+  const wsPortArg = args.get('--ws-port');
+  if (wsPortArg) {
+    const wsPort = parseInt(wsPortArg);
+    statusServer = startStatusServer({ port: wsPort });
+    log(`Telemetría (solo lectura) en ws://127.0.0.1:${wsPort}`);
+    setInterval(() => statusServer?.broadcastState(snapshotWorld()), 1000);
+  }
+
+  // Lo aprendido (memoria de campamentos, ciclos, tipos) antes de entrar: la
+  // llegada al mundo ya usa la memoria de campamentos.
+  await loadLearningState();
+
+  // Keepalives como el cliente web (ver sendPing/sendEcho). sendToGS no
+  // manda nada si el socket está cerrado.
   setInterval(() => !kicked && sendPing(), 5000);
   setInterval(() => !kicked && sendEcho(), 2000);
 
   const autoSeconds = parseInt(args.get('--auto-seconds') ?? '600');
-  const warp = args.get('--warp') ? parseInt(args.get('--warp')!) : null;
-  if (warp != null) {
-    const spot = WARP_SPOTS.find((sp) => sp.index === warp) ?? { index: warp, name: `warp ${warp}`, reqLevel: 0, zen: 0 };
-    await warpAndWait(spot);
+  const deadline = autoSeconds > 0 ? Date.now() + autoSeconds * 1000 : 0;
+  const total: LoopResult = { kills: 0, totalExpGained: 0, potionsDrunk: 0, statPointsSpent: 0, skillsUsed: 0, resets: 0, deaths: 0 };
+  const backoff = new Backoff();
+  let first = true;
+  let sessions = 0;
+  while (true) {
+    const t0 = Date.now();
+    let alreadyConnected = false;
+    try {
+      sessions++;
+      const r = await session(first, deadline);
+      for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
+    } catch (e) {
+      if (e instanceof LoginError && FATAL_LOGIN.has(e.result)) {
+        console.error(`${e.message}: no reintento.`);
+        closeSockets();
+        process.exit(1);
+      }
+      alreadyConnected = e instanceof LoginError && e.result === LoginResponseLoginResultEnum.AccountAlreadyConnected;
+      log(`Sesión #${sessions} terminó con error: ${(e as Error).message}`);
+    }
+    first = false;
+    closeSockets();
+    if (deadline && Date.now() >= deadline) break;
+    const wait = backoff.next(Date.now() - t0, alreadyConnected);
+    if (deadline && Date.now() + wait >= deadline) break;
+    log(`Reconecto en ${Math.round(wait / 1000)} s (sesión #${sessions} duró ${Math.round((Date.now() - t0) / 1000)} s).`);
+    await sleep(wait);
   }
-  const moveTo = args.get('--move');
-  if (moveTo) await moveToMap(moveTo);
-  // Damos un par de segundos a que lleguen skill list, inventario y NPCs
-  // en scope antes de que el loop empiece a decidir.
-  await sleep(2000);
-  const r = await autonomousLoop(autoSeconds);
+
   console.log(`\n=== Resumen ===`);
-  console.log(`Duración: ${autoSeconds}s, sin GUI, ritmo humano.`);
-  console.log(`Kills: ${r.kills}  Exp: ${r.totalExpGained}  Pociones: ${r.potionsDrunk}`);
-  console.log(`Puntos repartidos: ${r.statPointsSpent}  Skills usadas: ${r.skillsUsed}  Resets: ${r.resets}  Muertes: ${r.deaths}`);
+  console.log(`Duración: ${autoSeconds}s, ${sessions} sesión(es), sin GUI, ritmo humano.`);
+  console.log(`Kills: ${total.kills}  Exp: ${total.totalExpGained}  Pociones: ${total.potionsDrunk}`);
+  console.log(`Puntos repartidos: ${total.statPointsSpent}  Skills usadas: ${total.skillsUsed}  Resets: ${total.resets}  Muertes: ${total.deaths}`);
   console.log(`Stats finales: ${STAT_ORDER.map((s) => `${s}=${world.stats[s]}`).join(' ')}`);
   console.log(`Skills conocidos: ${[...world.skills.values()].map((s) => `${s.number}(lv${s.level})`).join(', ') || 'ninguno'}`);
-  console.log(`Desconectado por el server: ${kicked ? 'SÍ' : 'NO'}`);
-  gsSocket?.close();
+  closeSockets();
   process.exit(0);
 }
 

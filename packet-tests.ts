@@ -15,6 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
+import { Backoff, RECONNECT, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -183,6 +184,38 @@ ok('buy req: code=0x32 slot=7',
 const closeReq = CloseNpcRequestPacket.createPacket();
 ok('close req: len=3', closeReq.buffer.byteLength === 3,
    { head: bytes(closeReq.buffer) });
+
+// --- Party: rechazar invitaciones (protocol097.ts) ------------------------------
+{
+  const req = Uint8Array.from([0xc1, 0x05, 0x40, 0x81, 0x23]);
+  ok('PartyRequest: id del que invita, BE en el byte 3 (sin el bit alto)', parsePartyRequest(req) === 0x0123);
+  ok('PartyRequest corto: null', parsePartyRequest(Uint8Array.from([0xc1, 0x04, 0x40, 0x01])) === null);
+  ok('rechazo: C1 06 41 00 <id BE>', buildPartyDecline(0x0123).join() === [0xc1, 0x06, 0x41, 0x00, 0x01, 0x23].join());
+}
+
+// --- ItemDropRemoved y excelentes --------------------------------------------------
+{
+  const rem = Uint8Array.from([0xc2, 0x00, 0x09, 0x21, 0x02, 0x80, 0x10, 0x00, 0x22]);
+  ok('ItemDropRemoved: count @4, ids BE de a 2 bytes', parseItemDropRemoved(rem).join() === '16,34', parseItemDropRemoved(rem));
+  ok('ItemDropRemoved truncado: no lee fuera', parseItemDropRemoved(Uint8Array.from([0xc2, 0, 6, 0x21, 5, 0])).length === 0);
+  const item = new Uint8Array(12);
+  ok('ítem común: no excelente', !isExcellentItemData(item));
+  item[3] = 0x80; // bit alto: no es opción excelente
+  ok('bit 7 del byte 3 no cuenta', !isExcellentItemData(item));
+  item[3] = 0x21;
+  ok('opciones excelentes en los 6 bits bajos del byte 3', isExcellentItemData(item));
+}
+
+// --- Reconexión con backoff --------------------------------------------------------
+{
+  const b = new Backoff();
+  const w = [b.next(1000), b.next(1000), b.next(1000)];
+  ok('backoff exponencial desde 5 s', w.join() === '5000,10000,20000', w);
+  for (let i = 0; i < 20; i++) b.next(1000);
+  ok('con tope', b.next(1000) === RECONNECT.MAX_MS);
+  ok('una sesión sana vuelve al primer escalón', b.next(RECONNECT.HEALTHY_MS) === RECONNECT.BASE_MS);
+  ok('cuenta todavía conectada: espera más', new Backoff().next(0, true) === RECONNECT.ALREADY_CONNECTED_MS);
+}
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);
 process.exit(fails ? 1 : 0);

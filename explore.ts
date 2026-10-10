@@ -31,8 +31,15 @@ export const EXPLORE = {
   WALK_TIMEOUT_MS: 60_000,
   // Qué tan lejos del centro del pueblo se ponen las salidas.
   EXIT_RADIUS: 55,
-  // Sin ningún monstruo en todo el mapa durante esto = el mapa no rinde.
-  DRY_MAP_MS: 2 * 60_000,
+  // Sin ningún monstruo en todo el mapa durante esto = el mapa no rinde (90 s,
+  // `giveUpMapMs` del agente web).
+  DRY_MAP_MS: 90_000,
+  // Spots calientes solo si están a <= esto (agente web `hotMaxDist`): Devias
+  // 1-4 son el MISMO mapa con entradas lejanas; sin este tope cruzaba todo el
+  // mapa sin pelear. Lo lejano lo cubre la memoria de campamentos (camp.ts).
+  HOT_MAX_DIST: 30,
+  // Con correa (camp.ts, Devias): las salidas se ponen a este radio de la llegada.
+  LEASH_EXIT_RADIUS: 18,
 } as const;
 export type ExploreParams = typeof EXPLORE;
 
@@ -126,14 +133,16 @@ export class HotSpotGrid {
     return this.cells.get(this.key(map, cx, cy));
   }
 
-  // La celda con más exp del mapa que no esté "vacía" recientemente.
+  // La celda con más exp del mapa que no esté "vacía" recientemente (y que
+  // cumpla `accept`, p.ej. distancia máxima y correa).
   // Desempate: la más cercana a (fromX, fromY).
-  pick(map: number, now: number, fromX = 0, fromY = 0): HotCell | null {
+  pick(map: number, now: number, fromX = 0, fromY = 0, accept?: (x: number, y: number) => boolean): HotCell | null {
     let best: HotCell | null = null;
     let bestDist = Infinity;
     for (const c of this.cells.values()) {
       if (c.map !== map || now - c.emptyAt < this.p.EMPTY_COOLDOWN_MS) continue;
       const ctr = this.center(c);
+      if (accept && !accept(ctr.x, ctr.y)) continue;
       const d = chebyshev(fromX, fromY, ctr.x, ctr.y);
       if (!best || c.exp > best.exp || (c.exp === best.exp && d < bestDist)) {
         best = c;
@@ -175,7 +184,7 @@ const clamp = (v: number) => Math.max(8, Math.min(247, Math.round(v)));
  * salida (o a `prefDir`, o hacia el medio del mapa si el centro está lejos de
  * él) y alternando vecinas: así se barre en abanico y no se cruza el mapa.
  */
-export function exitTargets(map: number, center: Point, prefDir: number | null = null, p: Pick<ExploreParams, 'EXIT_RADIUS'> = EXPLORE): Point[] {
+export function exitTargets(map: number, center: Point, prefDir: number | null = null, p: { EXIT_RADIUS: number } = EXPLORE): Point[] {
   const out: Point[] = [];
   const first = FIRST_EXITS[map];
   if (first) out.push(first);
@@ -238,6 +247,8 @@ export class Explorer {
   private goal: ExploreGoal | null = null;
   private lastMonsterAt = 0;
   private mapSince = 0;
+  // Correa (camp.ts): en Devias, todo a <= r de la llegada del último warp.
+  private leash: { x: number; y: number; r: number } | null = null;
   // Eventos de la última llamada (para loguear en el bot).
   events: ExploreEvent[] = [];
 
@@ -262,7 +273,7 @@ export class Explorer {
   enterMap(map: number, x: number, y: number, now: number) {
     this.map = map;
     this.center = TOWN_CENTERS[map] ?? { x, y };
-    this.exits = exitTargets(map, this.center, this.prefDir, this.p);
+    this.exits = this.computeExits();
     this.exitIdx = 0;
     this.goal = null;
     this.mapSince = now;
@@ -273,6 +284,27 @@ export class Explorer {
   onExp(map: number, x: number, y: number, exp: number, now: number) {
     this.hot.record(map, x, y, exp);
     this.sawMonster(now);
+  }
+
+  /**
+   * Fija (o saca) la correa. Con correa, las salidas se recalculan alrededor
+   * de la llegada (a LEASH_EXIT_RADIUS, empezando "arriba" = (-x, +y)) y los
+   * spots calientes fuera de ella no se eligen.
+   */
+  setLeash(leash: { x: number; y: number; r: number } | null) {
+    const same = leash && this.leash && leash.x === this.leash.x && leash.y === this.leash.y && leash.r === this.leash.r;
+    if (same || (!leash && !this.leash)) return;
+    this.leash = leash;
+    if (this.map == null) return;
+    this.exits = this.computeExits();
+    this.exitIdx = 0;
+    this.goal = null;
+  }
+
+  private computeExits(): Point[] {
+    const lz = this.leash;
+    if (lz) return exitTargets(-1, { x: lz.x, y: lz.y }, 6, { EXIT_RADIUS: Math.min(this.p.LEASH_EXIT_RADIUS, lz.r - 3) });
+    return exitTargets(this.map!, this.center, this.prefDir, this.p);
   }
 
   // Hay al menos un monstruo atacable en scope.
@@ -332,7 +364,9 @@ export class Explorer {
   }
 
   private nextGoal(map: number, x: number, y: number, now: number): ExploreGoal {
-    const cell = this.hot.pick(map, now, x, y);
+    const lz = this.leash;
+    const cell = this.hot.pick(map, now, x, y, (cx, cy) =>
+      chebyshev(x, y, cx, cy) <= this.p.HOT_MAX_DIST && (!lz || chebyshev(lz.x, lz.y, cx, cy) <= lz.r));
     if (cell) {
       const c = this.hot.center(cell);
       return { kind: 'hot', x: c.x, y: c.y, cx: cell.cx, cy: cell.cy, since: now, arrivedAt: null };

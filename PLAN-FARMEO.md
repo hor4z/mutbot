@@ -109,6 +109,16 @@ La exp de un ciclo está ~90% arriba del 255. El presupuesto sale de eso:
 ## 7. Robustez (para correr 24 h)
 
 1. **Bot sin navegador** con reconexión, reanudación de ciclo y watchdog.
+   - **Portado al headless, sin probar en vivo:** reconexión con backoff y
+     reanudación desde el estado real (ver AGENTS.md, "Port del agente web"),
+     más todo lo del agente web: exp por segundo, ruta fija por tramo, correa
+     en Devias, zona de abajo en Arenas (default (91,13): el headless no tiene
+     grilla de caminables), campamentos con vara por promedio móvil, pelea y
+     skill en el camino, memoria de campamentos persistente, curiosidad,
+     Twisting Slash fijo, `planStats`, rechazo de party, loot valioso, registro
+     de tramos con proyección resets/día y hambre.
+   - Falta: watchdog (proceso vivo sin exp N min → reiniciar) y la prueba en
+     vivo con una cuenta que no esté abierta en el navegador.
 2. Agente web: auto-retomar desde selección de personaje (hecho), detectar
    pestaña colgada, memoria acotada (sin capturas grandes).
 3. Alertas: si en 5 min no subió exp, si murió 2 veces, si el ciclo pasa de

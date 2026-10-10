@@ -8,7 +8,8 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  LEARN, ROUTE, SpotMeter, aggregate, chooseSpot, chooseRouteSpot, routeScores, eligibleSpots, formatSpotTable, activeDryExclusions,
+  LEARN, ROUTE, SpotMeter, aggregate, chooseSpot, chooseRouteSpot, chooseFixedRoute, routeTier, routeScores, eligibleSpots, formatSpotTable, activeDryExclusions,
+  CROWDED_SPOT_MS,
   loadLearning, saveLearningChar, parseLearning, sampleWeight,
   type Spot, type SpotSample,
 } from './learning';
@@ -181,6 +182,17 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
     ok('save/load: spots calientes y exp/segundos por tipo (descarta celdas mal formadas)',
        farm.hot?.length === 1 && farm.hot[0].exp === 12345 && farm.types?.expByType[14] === 900 && farm.types.killSecByType[14] === 2.5, farm);
 
+    await saveLearningChar(path, 'Camps', {
+      resets: 2, samples: [],
+      camps: [{ map: 2, x: 90, y: 40, rate: 3e6, n: 4, level: 70 }, { map: 2, x: 'mal', y: 1, rate: 1, n: 1, level: 1 } as any],
+      cycles: { cur: { start: 1000, marks: { 20: 1.5, 50: 3 } }, done: [{ start: 0, end: 900000, min: 15, marks: { 400: 14.8 } }] },
+      tierRef: { t20: 4e6, t300: 'x' as any },
+    });
+    const camps = (await loadLearning(path)).data.chars.Camps;
+    ok('save/load: memoria de campamentos (descarta mal formados)', camps.camps?.length === 1 && camps.camps[0].rate === 3e6 && camps.camps[0].level === 70, camps.camps);
+    ok('save/load: ciclos (en curso y cerrados) y referencia por tramo',
+       camps.cycles?.cur?.start === 1000 && camps.cycles.cur.marks[50] === 3 && camps.cycles.done[0].min === 15 && camps.tierRef?.t20 === 4e6 && camps.tierRef.t300 === undefined, camps);
+
     const many = Array.from({ length: LEARN.MAX_SAMPLES + 10 }, (_, i) => sample(13, 1, i));
     await saveLearningChar(path, 'Big', { resets: 0, samples: many });
     const big = (await loadLearning(path)).data.chars.Big.samples;
@@ -248,6 +260,65 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
   ok('routeScores: exp/min del reset actual, ignora tramos < 2 min y otros resets', sc.get(5) === 1000 && !sc.has(6) && !sc.has(7), [...sc]);
   const sc2 = routeScores([sample(5, 1, 1000, { level: 30, reset: 1 }), sample(5, 1, 1000, { level: 38, reset: 1 })], 38, 1);
   ok('routeScores: el umbral de 2 min es tiempo real, no ponderado por nivel', sc2.has(5), [...sc2]);
+}
+
+// --- Ruta fija por tramo (chooseFixedRoute) ------------------------------------
+{
+  const RS: Spot[] = [
+    { index: 2, name: 'Lorencia', reqLevel: 10, zen: 0, map: 0 },
+    { index: 6, name: 'Devias 3', reqLevel: 20, zen: 0, map: 2 },
+    { index: 7, name: 'Devias 4', reqLevel: 20, zen: 0, map: 2 },
+    { index: 5, name: 'Devias 2', reqLevel: 20, zen: 0, map: 2 },
+    { index: 4, name: 'Devias 1', reqLevel: 20, zen: 0, map: 2 },
+    { index: 1, name: 'Arena', reqLevel: 50, zen: 0 },
+    { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0, map: 83 },
+    { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0, map: 84 },
+    { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0, map: 85 },
+  ];
+  const sp = (i: number) => RS.find((s) => s.index === i)!;
+  const base = { spots: RS, allowed: null, currentMap: -1, mapDead: false, crowded: false, crowdedAt: new Map<number, number>(), now: 10 * MIN };
+  const go = (o: Partial<Parameters<typeof chooseFixedRoute>[0]> & { level: number; current: Spot | null }) => chooseFixedRoute({ ...base, ...o });
+
+  ok('tramos: <20 Lorencia, 20-99 Devias, 100/200/300 Arenas 2/3/4',
+     routeTier(5).warps.join() === '2' && routeTier(19).warps.join() === '2' && routeTier(20).warps.join() === '6,7,5' && routeTier(99).warps.join() === '6,7,5' &&
+     routeTier(100).warps.join() === '24' && routeTier(250).warps.join() === '25' && routeTier(399).warps.join() === '26');
+  let c = go({ level: 15, current: null, currentMap: 0 });
+  ok('nivel < 20 parado en Lorencia: adopta sin warpear', c.reason === 'adopt' && c.spot?.index === 2 && !c.warp, c);
+  c = go({ level: 5, current: null, currentMap: 3 });
+  ok('nivel < 10 fuera de Lorencia: no puede warpear, se queda', !c.warp, c);
+  c = go({ level: 20, current: sp(2) });
+  ok('cruza el 20: Devias 3 (la preferida), nunca Devias 1', c.reason === 'new-tier' && c.spot?.index === 6 && c.warp, c);
+  c = go({ level: 60, current: sp(7) });
+  ok('en Devias 4 a nivel 60, sin nada raro: se queda (no prueba otros mapas)', c.reason === 'stay' && !c.warp, c);
+  c = go({ level: 60, current: null, currentMap: 2 });
+  ok('reconecta en Devias (mapa 2): adopta', c.reason === 'adopt' && c.spot?.map === 2 && !c.warp, c);
+  c = go({ level: 60, current: null, prefer: 7 });
+  ok('tras morir: vuelve a la misma entrada', c.reason === 'start' && c.spot?.index === 7 && c.warp, c);
+  c = go({ level: 60, current: sp(6), mapDead: true });
+  ok('mapa vacío: otra entrada del tramo', c.reason === 'dry' && c.spot?.index === 7, c);
+  c = go({ level: 60, current: sp(6), crowded: true });
+  ok('competencia: otra entrada del tramo', c.reason === 'crowd' && c.spot?.index === 7, c);
+  const crowdedAt = new Map([[7, 9 * MIN], [5, 8 * MIN]]);
+  c = go({ level: 60, current: sp(6), crowded: true, crowdedAt });
+  ok('todas las Devias llenas hace poco (50-99): plan B Arena 1', c.reason === 'crowd' && c.spot?.index === 1, c);
+  c = go({ level: 40, current: sp(6), crowded: true, crowdedAt });
+  ok('todas llenas pero nivel < 50: se queda', !c.warp && c.spot?.index === 6, c);
+  c = go({ level: 60, current: sp(6), crowded: true, crowdedAt: new Map([[7, 10 * MIN - CROWDED_SPOT_MS - 1], [5, 8 * MIN]]) });
+  ok('una entrada llena hace > 5 min vuelve a servir', c.spot?.index === 7, c);
+  c = go({ level: 70, current: sp(1) });
+  ok('en el plan B (Arena 1) a nivel 70: se queda', c.reason === 'stay' && !c.warp, c);
+  c = go({ level: 100, current: sp(1) });
+  ok('cruza el 100 desde Arena 1: Arena 2', c.reason === 'new-tier' && c.spot?.index === 24, c);
+  c = go({ level: 150, current: sp(24), mapDead: true });
+  ok('Arena 2 vacía: no hay otra entrada, se queda', !c.warp && c.spot?.index === 24, c);
+  c = go({ level: 200, current: sp(24) });
+  ok('cruza el 200: Arena 3', c.spot?.index === 25 && c.warp, c);
+  c = go({ level: 300, current: sp(25) });
+  ok('cruza el 300: Arena 4', c.spot?.index === 26 && c.warp, c);
+  c = go({ level: 320, current: null, currentMap: 85 });
+  ok('reconecta en Arena 4: adopta', c.reason === 'adopt' && c.spot?.index === 26, c);
+  c = go({ level: 60, current: sp(6), allowed: new Set([6, 5]), crowded: true });
+  ok('--spots limita la ruta', c.spot?.index === 5, c);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE APRENDIZAJE PASARON' : `\n${fails} TEST(S) DE APRENDIZAJE FALLARON`);
