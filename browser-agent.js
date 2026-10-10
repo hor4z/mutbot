@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -50,6 +50,10 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       crowdRivals: 2, crowdMs: 10000, campDistDecay: 12,
+      // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
+      // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
+      // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
+      densityWeight: 0.02, exploreRoundMs: 60000, exploreFightRadius: 6,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
@@ -233,6 +237,8 @@
       ai.cycles = ai.cycles ?? []; if (cycleMin) ai.cycles.push(Math.round(cycleMin));
       ai.cycleStart = Date.now();
       // Lo que rinde cada mapa se conserva: Arena 1 no sirve en ningún ciclo.
+      // La ronda exploratoria dura un ciclo: se apaga al resetear (se prende a mano o al pedirla).
+      ai.mapEnteredAt = {}; ai.exploreRound = !!ai.exploreRoundNext; ai.exploreRoundNext = false;
       ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
@@ -332,6 +338,27 @@
     // Repartir puntos sin frenar el juego (antes se perdía ~1/3 del tiempo acá).
     if (pd.points >= ai.cfg.statBatch && !ai.distributing) { ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }
   }, 5000);
+  ai.mapEnteredAt = {};
+  const exploring = (w) => ai.exploreRound && Date.now() - (ai.mapEnteredAt[w.mapIndex] ??= Date.now()) < ai.cfg.exploreRoundMs;
+  const campPick = ai.pickTarget, campGoal = ai.nextGoal;
+  ai.pickTarget = (w, P, c) => (exploring(w) ? ai.freePick(w, P, { ...c, scan: c.exploreFightRadius }) : campPick(w, P, c));
+  ai.nextGoal = (P, w) => {
+    if (!exploring(w)) return campGoal(P, w);
+    const vis = (ai.visited[w.mapIndex] ??= {});
+    let best = null, bs = -1e9;
+    for (let k = 0; k < 100; k++) {
+      const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 30;
+      const x = Math.round(P.x + Math.cos(a) * r), z = Math.round(P.z + Math.sin(a) * r);
+      if (!walkable(w, x, z)) continue;
+      const sc = -(vis[cell({ x, z })] ?? 0) * 10 + Math.random() * 3;
+      if (sc > bs) { bs = sc; best = { x, z, kind: 'ronda' }; }
+    }
+    return best ?? campGoal(P, w);
+  };
+  ai.densityTimer = setInterval(() => {
+    const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
+    for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying && hpOf(e) > 0) ai.noteHot(w.mapIndex, e.transform.pos, ai.valueOf(e) * ai.cfg.densityWeight);
+  }, 3000);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
