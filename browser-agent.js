@@ -384,11 +384,14 @@
       const ref = ai.tierRef[tierKey];
       const rivalsNear = rivalsPos(w).filter((q) => dist(q, P) <= 12).length;
       // Desde nivel 20 (antes solo existe Lorencia) y con al menos 45 s en el lugar.
-      const starving = pd.level >= 20 && now - ai.lastWarp > 45000 && rivalsNear >= 1 && recentRate < (ref ? ref * 0.25 : 5e6);
+      // Con todo lleno, saltar cada 50 s entre Devias 3/4/2 empeoró el ciclo 6: como mucho un
+      // salto por hambre cada 2 min, ≥2 jugadores y ≥60 s en el lugar.
+      const starving = pd.level >= 20 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && rivalsNear >= 2 && recentRate < (ref ? ref * 0.25 : 5e6);
       const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (crowdedSpot && now - ai.lastWarp > 15000) {
         ai.crowdedAt = { ...(ai.crowdedAt ?? {}), [ai.spot]: now }; ai.crowdLeaves = [];
+        if (starving) ai.lastHungerWarp = now;
         const fresh = eligible.filter((s) => s[2] === tier && s[0] !== ai.spot && now - (ai.crowdedAt?.[s[0]] ?? 0) > 300000);
         const fb = c.crowdFallback.find((f) => pd.level >= f[2] && pd.level < 100);
         const to = fresh[0] ?? (fb && fb[0] !== ai.spot ? fb : null);
