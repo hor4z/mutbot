@@ -38,6 +38,7 @@
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
+  if (window.__hunt?.pollTimer) window.clearInterval(window.__hunt.pollTimer);
   const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, start: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
@@ -72,6 +73,15 @@
     }
     return b;
   };
+  // Avisos de los buscadores (headless-bot.ts --scout → POST /gold en el servidor local): cada 2 s.
+  h.reports = [];
+  const pollGold = () => fetch('http://127.0.0.1:8788/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me) : []; }).catch(() => {});
+  const reportGoal = (P, w) => {
+    const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }) })).sort((a, b) => a.d - b.d)[0];
+    if (!near || near.d < 4) return null;
+    if (h.lastReport !== near.id) { h.lastReport = near.id; ai.L(`HUNTER: ${near.from} vio ${near.name || 'un dorado'} en (${near.x},${near.y}) a ${near.d} tiles: voy`); }
+    return { x: near.x, z: near.y, kind: 'hunter:aviso' };
+  };
   // Próxima celda: primero donde ya aparecieron dorados (más vistas, más cerca), después el resto.
   const nextCell = (P, w) => {
     h.visited.add(cellOf(P.x, P.z));
@@ -98,7 +108,7 @@
       return ip(w, P, c);
     };
     const ng = ai.nextGoal;
-    ai.nextGoal = (P, w) => (h.on && w.mapIndex === h.map ? nextCell(P, w) : null) ?? ng(P, w);
+    ai.nextGoal = (P, w) => (h.on && w.mapIndex === h.map ? reportGoal(P, w) ?? nextCell(P, w) : null) ?? ng(P, w);
     ai.huntWrapped = true;
   }
 
@@ -126,6 +136,15 @@
   };
   h.history = () => hunts.slice(-10);
 
+  // Cada 2 s: leer avisos; si hay uno nuevo y no estamos peleando un dorado, ir ya (no esperar a
+  // terminar de caminar hacia la celda actual).
+  h.pollTimer = window.setInterval(() => {
+    if (!h.on) return; pollGold();
+    const w = W(), pe = w?.playerEntity; if (!pe || (ai.target && isGold(ai.target))) return;
+    const g = reportGoal(pe.transform.pos, w);
+    if (g && (ai.explore?.kind !== 'hunter:aviso' || dist(ai.explore, g) > 4)) { ai.explore = g; ai.moveTo(pe, g); }
+  }, 2000);
+  (window.__mubotTimers ??= []).push(h.pollTimer);
   // Cada 5 s: arrancar sola con la invasión y cortar cuando no queda nada que cazar.
   h.timer = window.setInterval(() => {
     if (!ai.on || ai.busy || S.uiState !== 5) return;
