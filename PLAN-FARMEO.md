@@ -160,3 +160,20 @@ Pedidas por el usuario el 2026-10-10. Van después del criterio de §9.
 7. **Reset antes del 400** si el server lo permite: averiguar reglas (nivel, puntos,
    zen, grand reset). Del 350 al 400 se va casi la mitad de la exp del ciclo.
 8. **Benchmark** con el ranking público (`/api/ranking`): techo realista de resets/día.
+
+## 11. Roadmap: equipo (2026-10-10)
+
+Horaz tiene **4 slots vacíos**: mascota, collar y los dos anillos (además de los guantes).
+
+| Prioridad | Mejora | Por qué | Cómo |
+|---|---|---|---|
+| 1 | **Imp (13/1)** en mascota | +30% de daño en 0.97: kill más rápido | mercado / NPC |
+| 2 | Collar excelente (daño % / vel. ataque) | más daño y más skills por minuto | mercado / drops |
+| 3 | 2 anillos excelentes | aguante en Arena 4 | mercado / drops |
+| 4 | Guantes 10/1 | set completo + defensa | loot (activo) / mercado |
+| 5 | Arma izquierda +7 → +9 | el DK pega con las dos manos | 2 Bless + 1-2 Soul (sin riesgo de destrucción) |
+| 6 | Alas 12/5 +9 → +10 | más daño y absorción | Chaos + Bless + Soul (riesgo) |
+| 7 | Alas nivel 3 | salto grande de daño | alas 2 + ancient + Chaos + 5 Bless + 5 Soul |
+| 8 | Frutas | puntos de stat extra | Creation + Life |
+
+Recetas en `MANUAL-CHAOS.md`. Comprar o arriesgar ítems: siempre con confirmación del usuario.

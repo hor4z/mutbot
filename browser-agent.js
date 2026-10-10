@@ -58,6 +58,10 @@
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
       // Solo en Devias (mapa 2). En Arena los buenos están ADENTRO, lejos de la llegada.
       leashDist: 25, leashMaps: [2],
+      // Campamento de arranque por mapa: en Lorencia los esqueletos de la cripta (salida
+      // de arriba). Sin esto, el tope de hotMaxDist la descartaba (queda a ~100 tiles del
+      // punto de aparición) y daba vueltas cerca del pueblo sin monstruos.
+      startCamp: { 0: { x: 132, z: 200 } },
       // Arenas (83/84/85 = Arena 2/3/4): la zona de abajo y por fuera en pantalla (+x, -z)
       // está llena de monstruos de mucha exp (125/126/127 dan ~1.6M en <2 s a nivel 240).
       // El usuario la señaló; al llegar se va directo ahí.
@@ -208,6 +212,8 @@
     const now = Date.now();
     // En el campamento: quedarse esperando el respawn, nunca salir a cruzar el mapa.
     if (ai.camp && ai.camp.map === w.mapIndex) return { x: ai.camp.x, z: ai.camp.z, kind: 'camp' };
+    const sc = ai.cfg.startCamp[w.mapIndex];
+    if (sc && dist(sc, P) > 10) { ai.camp = { ...sc, map: w.mapIndex, since: now, lastSeen: now }; return { ...sc, kind: 'camp' }; }
     // Spots conocidos solo si están cerca (hotMaxDist): Devias 1-4 son el MISMO mapa con
     // entradas en puntas opuestas; sin este tope cruzaba todo el mapa sin pelear.
     const h = Object.values(ai.hot[w.mapIndex] ?? {}).filter((c) => now - c.emptyAt > 90000 && dist(c, P) > 4 && dist(c, P) <= ai.cfg.hotMaxDist).sort((a, b) => b.n - a.n)[0];
