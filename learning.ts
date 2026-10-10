@@ -387,7 +387,13 @@ export function routeScores(samples: SpotSample[], level: number, reset: number,
 export function chooseRouteSpot(inp: RouteInput, p: RouteParams = ROUTE): RouteChoice {
   const { current, scores } = inp;
   const exclude = inp.exclude ?? new Set<number>();
-  const eligible = eligibleSpots(inp.spots, inp.level, inp.allowed).filter((sp) => !exclude.has(sp.index));
+  // Desde nivel 100, solo spots acordes: reqLevel >= nivel/2, o el más alto habilitado.
+  // Sin esto, a nivel 367 "probar uno sin medir" mandó al agente web a Devias 2.
+  const allowedNow = eligibleSpots(inp.spots, inp.level, inp.allowed);
+  const topReq = Math.max(0, ...allowedNow.map((sp) => sp.reqLevel));
+  const eligible = allowedNow
+    .filter((sp) => inp.level < 100 || sp.reqLevel >= inp.level * 0.5 || sp.reqLevel === topReq)
+    .filter((sp) => !exclude.has(sp.index));
   const curRate = current && inp.stayMs > 0 ? inp.stayExp / (inp.stayMs / 60_000) : 0;
   const bestKnown = Math.max(0, ...scores.values());
   const tier = eligible.length ? eligible[0].reqLevel : inp.tierSeen;

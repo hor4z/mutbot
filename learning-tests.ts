@@ -231,6 +231,11 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
   ok('ruta: mapa seco → cambia aunque no hayan pasado 2 min', c.spot != null && c.spot.index !== 1 && c.reason === 'dry', c);
   c = chooseRouteSpot({ ...rb, level: 60, current: sp(1), allowed: new Set([1]), stayMs: 1 * MIN, stayExp: 0, tierSeen: 50, exclude: new Set([1]) });
   ok('ruta: seco y sin alternativa → none', c.reason === 'none', c);
+  // Caso real (agente web, nivel 367): Arena 4 rendía la mitad que Arena 3 y "probar
+  // uno sin medir" lo mandó a Devias 2. Desde nivel 100 solo cuentan spots acordes.
+  c = chooseRouteSpot({ ...rb, level: 367, current: sp(26), stayMs: ROUTE.EVAL_MS, stayExp: 2 * 53_000_000, tierSeen: 300,
+    scores: new Map([[1, 33], [24, 16_000_000], [25, 107_000_000]]) });
+  ok('ruta: nivel 367, Arena 4 rinde poco → Arena 3, nunca Devias', c.spot?.index === 25 && c.reason === 'poor', c);
 
   // Puntajes: solo el ciclo de reset actual, y solo con >= EVAL_MS medidos.
   const sc = routeScores([
