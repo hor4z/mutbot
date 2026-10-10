@@ -232,9 +232,9 @@
       const poor = now - cp.since > c.campEvalMs && rate < ref * c.campMinFrac;
       // Mejor afuera (usuario: "afuera gana más, no lo entiendo"): en los corrales de Arena 4 hacía
       // ~314M/min con la zona de abajo medida en ~405M. Si un spot conocido del mapa rinde
-      // >= campUpgrade × lo de acá, ir para allá (aunque acá no sea "pobre").
+      // >= campUpgrade × lo de acá (más cuanto más lejos: +1 cada 60 tiles), ir para allá.
       const bestMem = (ai.campHist?.[map] ?? []).filter((h) => Math.abs((h.level ?? lvl) - lvl) < 100 && dist(h, cp) > 6).sort((a, b) => b.rate - a.rate)[0];
-      if (!poor && now - cp.since > c.campEvalMs && bestMem && bestMem.rate >= rate * c.campUpgrade) {
+      if (!poor && now - cp.since > c.campEvalMs && bestMem && bestMem.rate >= rate * c.campUpgrade * (1 + dist(bestMem, cp) / 60)) {
         L(`hay algo mejor: (${bestMem.x},${bestMem.z}) ~${Math.round(bestMem.rate / 1e6)}M contra ${Math.round(rate / 1e6)}M acá`);
         ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }];
         ai.camp = { x: bestMem.x, z: bestMem.z, map, since: now, lastSeen: now, known: true }; ai.explore = null; return ai.freePick(w, P, { ...c, scan: c.enRouteScan });
@@ -427,8 +427,9 @@
         // se quedaba con un campamento flojo de la entrada (34M/min en Arena 2) sin comparar.
         const dz = ai.cfg.preferDownMaps.includes(w.mapIndex) ? ai.downZone(w) : null;
         const dzMeasured = !dz || (ai.campHist[w.mapIndex] ?? []).some((k) => dist(k, dz) <= 15 && !k.seed);
-        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && k.rate >= (ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0) * 0.3 && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate - a.rate)[0];
+        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && k.rate >= (ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0) * 0.3 && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate / (1 + dist(b, p0) / 40) - a.rate / (1 + dist(a, p0) / 40))[0];
         // (un "mejor spot" que rindió < 30% de lo normal del tramo no cuenta: en Devias 4 iba a uno de ~0M/min)
+        // Pesa la caminata (a 40 tiles vale la mitad): cruzaba media Arena 4 por un spot apenas mejor.
         const dir = known ? null : ai.cfg.arrivalSpotDir[w.mapIndex];
         if (known) { ai.camp = { x: known.x, z: known.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now(), known: true }; L(`voy al mejor spot aprendido (${known.x},${known.z}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`); }
         // 2) Si no conoce nada: la regla del usuario para ese mapa como primera apuesta.
@@ -740,11 +741,15 @@
       if (mins > 0.75) {
         const rate = expSince(lastCamp.since) / mins, list = (ai.campHist[lastCamp.map] ??= []);
         const near = list.find((c) => dist(c, lastCamp) <= 4);
-        if (near) { near.rate = near.rate * 0.6 + rate * 0.4; near.n++; near.level = S.playerData.level; } else list.push({ x: lastCamp.x, z: lastCamp.z, rate, n: 1, level: S.playerData.level });
+        const lvlC = lastCamp.lvl0 ?? S.playerData.level;
+        if (near) { near.rate = near.rate * 0.6 + rate * 0.4; near.n++; near.level = lvlC; } else list.push({ x: lastCamp.x, z: lastCamp.z, rate, n: 1, level: lvlC });
         list.sort((a, b) => b.rate - a.rate); list.length = Math.min(list.length, 20);
         try { localStorage.setItem(CAMPS_KEY, JSON.stringify(ai.campHist)); } catch {}
       }
     }
+    // Nivel del campamento = el de cuando se empezó a usar: guardarlo al dejarlo anotaba "nivel 10"
+    // si en el medio hubo reset, y después la memoria lo descartaba (el spot de 871M en Arena 4).
+    if (cur && cur.lvl0 == null) cur.lvl0 = S.playerData.level;
     lastCamp = cur;
     if (!cur && !ai.target && ai.on && !ai.busy && !ai.cfg.roam) {
       const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
