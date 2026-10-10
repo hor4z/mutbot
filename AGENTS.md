@@ -817,3 +817,14 @@ el estado real del server, que es más confiable que cualquier reimplementación
 packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
 camino corto. No se usa ahora porque no acepta control externo: las decisiones
 quedan fijas en el C#.
+## Separar dúo y cacería del farmeo (2026-10-10)
+
+- `duo.js` y `hunter.js` son opcionales y están en pausa. `browser-agent.js` y `tuner.js` no dependen de ellos.
+- Los ciclos jugados en dúo o cazando llevan `tag` en `mubot-cycles:<pj>` y quedan fuera de
+  `__ai.soloCycles()`. Lo mismo vale para el log de ciclos de `PLAN-FARMEO.md`.
+- **Reinstalar `browser-agent.js` desconecta el autoajuste:** `tuner.js` queda colgado del objeto
+  `__ai` viejo. Hay que volver a cargar `tuner.js` después. Si no, el agente arranca con los valores
+  por defecto: Horaz "se puso tonto" al perder `roam=1` y `skillMinMp=0.05`.
+- Los experimentos del autoajuste corridos en dúo (6:30–6:52 PM) adoptaron `roam=1` (+11 %) y
+  `skillMinMp=0.05` (+37 %). Se mantienen porque Horaz farmeaba a su manera. El experimento
+  `campRadius` que quedó a medias se descartó.

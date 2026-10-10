@@ -699,7 +699,10 @@
     }
     for (const m of MARKS) if (lvl >= m && ai.cur.marks[m] == null && S.uiState === 5) { ai.cur.marks[m] = +((Date.now() - ai.cur.start) / 60000).toFixed(1); if (m >= 100) L(`tramo: nivel ${m} al minuto ${ai.cur.marks[m]}`); }
   }, 2000);
-  ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks }));
+  // Ciclos con `tag` (dúo, cacería) no son del farmeo solo: se muestran pero no cuentan para
+  // medir la mejora (usuario: "que nada de dúo o modo hunter afecte nuestra mejora de farmeo").
+  ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks, ...(c.tag ? { tag: c.tag } : {}) }));
+  ai.soloCycles = () => ai.cycleLog.filter((c) => !c.tag);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();

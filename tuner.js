@@ -39,7 +39,9 @@
   const t = (ai.tuner = { history: saved.history ?? [], exp: saved.exp ?? null, timer: null });
   const expSince = (a, b) => ai.expLog.filter((x) => x.t >= a && x.t < b).reduce((s, x) => s + x.added, 0);
   const pick = (o) => Object.fromEntries(Object.keys(SPACE).map((k) => [k, o[k]]));
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ best: pick(ai.cfg), history: t.history.slice(-200), exp: t.exp })); } catch {} };
+  // best = lo adoptado: si hay un experimento a medias, su parámetro se guarda con el valor de
+  // partida (se guardaba el brazo B: campRadius 7 quedó como "best" sin haber ganado nada).
+  const save = () => { try { const best = pick(ai.cfg); if (t.exp) best[t.exp.key] = t.exp.from; localStorage.setItem(KEY, JSON.stringify({ best, history: t.history.slice(-200), exp: t.exp })); } catch {} };
   const propose = () => {
     // La primera prueba: acampar vs recorrer (la duda del usuario).
     // Primero las dos dudas grandes de dinámica: ancla vs perseguir, y acampar vs recorrer.
