@@ -59,7 +59,9 @@
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
       crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
-      anchor: 0, anchorRadius: 4, anchorWaitMs: 6000, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      // Ancla con radio 7 y 3 s (usuario: "era un buen spot pero tenía que matar alrededor un poco";
+      // con 4 tiles y 6 s se quedaba demasiado estático).
+      anchor: 1, anchorRadius: 7, anchorWaitMs: 3000, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".

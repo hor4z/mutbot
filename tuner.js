@@ -30,6 +30,8 @@
     roam: { min: 0, max: 1, step: 1 },
     // 0 = perseguir objetivos en todo el campamento, 1 = ancla (esperar que se acerquen)
     anchor: { min: 0, max: 1, step: 1 },
+    // radio del ancla: cuánto limpia alrededor del centro sin dejar el spot
+    anchorRadius: { min: 4, max: 10, step: 2 },
   };
   // 90 s: con ventanas de 3 min un experimento (12 min) no entraba en el tramo alto de un
   // ciclo (~7 min) y el reset lo cancelaba siempre: en 8 ciclos no terminó ninguno.

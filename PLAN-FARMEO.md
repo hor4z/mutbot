@@ -276,10 +276,11 @@ entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda p
 
 ## Autoajuste: lo que el usuario descartó mirando la pantalla (2026-10-10)
 
-- **Ancla (`anchor=1`): descartada.** Se quedaba quieto esperando en un campamento sin monstruos a
-  15 tiles. En la medición ganaba poco (117M contra 109M/min) y el usuario lo vio "demasiado
-  estático". Queda en el historial del tuner como no adoptada y no se vuelve a probar.
-- **Recorrida (`roam=1`): se vuelve a probar en limpio.** Se había adoptado durante el dúo. En lugares
-  llenos iba y venía entre dos puntos calientes (76 % caminando). La causa era que borraba el
-  destino al encontrar un monstruo; eso ya está arreglado.
+- **Ancla: adoptada con radio 7 y 3 s de espera.** Con radio 4 y 6 s se quedaba quieto esperando
+  en un campamento sin monstruos a 15 tiles: "demasiado estático". El usuario: "era un buen spot
+  pero tenía que matar alrededor un poco". El radio del ancla (`anchorRadius`, 4-10) quedó en el
+  espacio del autoajuste.
+- **Recorrida (`roam=1`): descartada.** El usuario vio que en los recorridos grandes pierde exp,
+  aun con el arreglo del destino. Ninguna de las dos se vuelve a probar sola: quedan en el
+  historial del tuner.
 - El reset exige nivel 400 (lo contestó el server). La mejora sale solo de llegar antes a 400.
