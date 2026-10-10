@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -50,7 +50,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
-      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30,
+      crowdRivals: 2, crowdMs: 10000, campDistDecay: 12, hotMaxDist: 30, lootRadius: 12,
       // Densidad: cada 3 s, lo que se ve suma densityWeight × valor a la grilla caliente.
       // Ronda exploratoria (ai.exploreRound): los primeros exploreRoundMs en cada mapa,
       // recorrer lo menos visitado y pelear solo a <= exploreFightRadius.
@@ -263,12 +263,15 @@
       const runMin = run ? (now - run.start) / 60000 : 0;
       const kpm = run && runMin > 0 ? ai.expLog.filter((x) => x.t >= run.start).reduce((a, x) => a + x.added, 0) / runMin : 0;
       if (run && runMin * 60000 >= c.evalMs) ai.spotScore[run.spot] = kpm;
-      const bestKnown = Math.max(0, ...Object.values(ai.spotScore));
-      // Solo mapas acordes al nivel (reqLevel >= nivel/2, o el más alto habilitado):
-      // sin esto, a nivel 367 "probar uno sin medir" lo mandó a Devias 2.
+      // Desde nivel 100, solo mapas acordes (reqLevel >= nivel/2, o el más alto habilitado):
+      // sin esto, a nivel 367 "probar uno sin medir" lo mandó a Devias 2. Antes del 100
+      // Devias sigue valiendo (Arena 1 rinde casi nada).
       const allowed = c.spots.filter((s) => s[2] <= pd.level);
       const topReq = Math.max(0, ...allowed.map((s) => s[2]));
-      const eligible = allowed.filter((s) => s[2] >= pd.level * 0.5 || s[2] === topReq);
+      const eligible = allowed.filter((s) => pd.level < 100 || s[2] >= pd.level * 0.5 || s[2] === topReq);
+      // Comparar solo contra mapas elegibles AHORA: los puntajes se conservan entre resets
+      // y Arena a nivel 300 (100M exp/min) hacía ver "pobre" a Devias a nivel 40.
+      const bestKnown = Math.max(0, ...eligible.map((s) => ai.spotScore[s[0]] ?? 0));
       const tier = Math.max(...eligible.map((s) => s[2]));
       const newTier = tier > ai.tierSeen;
       const mapDead = now - ai.mapNoMonsterSince > c.giveUpMapMs;
@@ -378,6 +381,29 @@
   ai.deaths = old?.deaths ?? 0;
   let wasDead = false;
   ai.deathTimer = setInterval(() => { const dead = S.uiState === 5 && S.playerData.currentHP <= 0; if (dead && !wasDead) { ai.deaths++; L(`MUERTE #${ai.deaths} en mapa ${W().mapIndex}`); } wasDead = dead; }, 300);
+  // Loot valioso: cajas (Box of Kundun 14/11), joyas (Bless 14/13, Soul 14/14,
+  // Life 14/16, Creation 14/22, Guardian 14/31, Chaos 12/15) e ítems excelentes.
+  // El zen y el equipo común no se levantan. Mientras levanta, pausa la pelea.
+  ai.isValuable = (di) => {
+    if (!di || di.isMoney) return false;
+    if (di.item?.isExcellent) return true;
+    return (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) || (di.group === 12 && di.num === 15);
+  };
+  ai.lootCount = old?.lootCount ?? 0;
+  ai.looter = setInterval(() => {
+    const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || S.sceneLoading || ai.busy) return;
+    const P = pe.transform.pos, now = Date.now();
+    if (ai.looting) {
+      const e = w.getByNetId(ai.looting.id);
+      if (!e || !e.droppedItem || now - ai.looting.at > 8000) { if (!e || !e.droppedItem) { ai.lootCount++; L(`levanté ${ai.looting.what}`); } ai.looting = null; ai.on = true; }
+      else if (w.pickupTarget !== e) w.pickupTarget = e;
+      return;
+    }
+    if (!ai.on) return;
+    let best = null, bd = 1e9;
+    for (const e of w.byNetId.values()) { if (!e.droppedItem || !ai.isValuable(e.droppedItem)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.lootRadius && d < bd) { bd = d; best = e; } }
+    if (best) { const di = best.droppedItem; ai.looting = { id: best.netId, at: now, what: `${di.group}/${di.num}${di.item?.isExcellent ? ' exc' : ''}` }; ai.on = false; w.attackTarget = null; w.castRequest = null; w.pickupTarget = best; L(`voy a levantar ${ai.looting.what} a ${bd} tiles`); }
+  }, 300);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
