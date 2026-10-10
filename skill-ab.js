@@ -22,6 +22,8 @@
   }, 50);
   const ab = (ai.skillAB = { arms: [41, 42, 'alt'], idx: prev?.idx ?? 0, winStart: Date.now(), windows: prev?.windows ?? [], WINDOW: 120000, done: prev?.done ?? null });
   const apply = (arm) => { if (arm === 'alt') ai.rot.on = true; else { ai.rot.on = false; ai.cfg.skill = arm; } };
+  // El usuario descartó Rageful Blow (42): "es lento, perdemos tiempo". Queda Twisting Slash.
+  ab.done ??= { best: 41, by: 'usuario: Rageful Blow es lento' };
   if (ab.done) { apply(ab.done.best); return `ya decidido: ${ab.done.best}`; }
   ab.timer = setInterval(() => {
     const now = Date.now(), lvl = S.playerData.level ?? 0;
