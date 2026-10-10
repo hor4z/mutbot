@@ -39,7 +39,7 @@
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
   if (window.__hunt?.pollTimer) window.clearInterval(window.__hunt.pollTimer);
-  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, start: null, timer: null });
+  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
   if (!window.__invHooked) {
@@ -114,7 +114,7 @@
 
   h.start = (map = bestMap()) => {
     if (map == null || !MAPS[map]) { ai.L('HUNTER: no hay mapa con dorados al alcance'); return false; }
-    Object.assign(h, { on: true, map, start: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
+    Object.assign(h, { on: true, map, startedAt: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
     h.visited.clear();
     h.saved = { spots: ai.cfg.spots, leash: ai.cfg.leashMaps, roam: ai.cfg.roam };
     ai.cfg.spots = [[MAPS[map].warp, `cacería ${MAPS[map].name}`, 0]];
@@ -127,8 +127,8 @@
   };
   h.stop = (why = 'a mano') => {
     if (!h.on) return;
-    const min = (Date.now() - h.start) / 60000, kills = h.seen.size - (h.golds0 ?? 0);
-    hunts.push({ at: h.start, map: h.map, min: +min.toFixed(1), kills, lvl0: h.lvl0, lvl1: S.playerData.level, why }); jset(`mubot-hunts:${me}`, hunts.slice(-50));
+    const min = (Date.now() - h.startedAt) / 60000, kills = h.seen.size - (h.golds0 ?? 0);
+    hunts.push({ at: h.startedAt, map: h.map, min: +min.toFixed(1), kills, lvl0: h.lvl0, lvl1: S.playerData.level, why }); jset(`mubot-hunts:${me}`, hunts.slice(-50));
     h.on = false;
     if (h.saved) { ai.cfg.spots = h.saved.spots; ai.cfg.leashMaps = h.saved.leash; ai.cfg.roam = h.saved.roam; h.saved = null; }
     ai.lastWarp = 0; ai.tierSeen = 0; ai.camp = null; ai.explore = null;
@@ -150,7 +150,7 @@
     if (!ai.on || ai.busy || S.uiState !== 5) return;
     const inv = window.__invasion, active = inv?.status === 1 && Date.now() - inv.at < 120000, lvl = S.playerData.level;
     if (h.on) {
-      const why = !active ? 'terminó la invasión' : aliveIn(h.map) === 0 ? `no quedan dorados en ${MAPS[h.map].name}` : (Date.now() - h.start) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
+      const why = !active ? 'terminó la invasión' : aliveIn(h.map) === 0 ? `no quedan dorados en ${MAPS[h.map].name}` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
       if (why) h.stop(why);
       return;
     }
