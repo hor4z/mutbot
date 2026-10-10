@@ -236,3 +236,22 @@ Pregunta del usuario: ¿se gana más en dúo? Horaz espera a Melu para resetear
 resetea al mismo tiempo (`follower`). Desde ahí se mide el ciclo completo del dúo con
 `__ai.cycles` en las dos pestañas, contra los ciclos solo de Horaz (11–12 min).
 Melu atrae monstruos con Evil Spirit (`__pullSkill = 9`) y Horaz los toma con el giro.
+
+## Roadmap: dúo y modo cazador (en pausa, 2026-10-10)
+
+El usuario los dejó para después; ahora sigue Horaz solo (`browser-agent.js` sin `duo.js`).
+
+**Dúo** (`duo.js`), lo que quedó probado:
+- Melu subió de 13 a 400 y reseteó junto con Horaz. El ciclo dúo vs solo no llegó a medirse.
+- Murió sola cuando Horaz se alejó mientras ella lanzaba Evil Spirit. Ya está cubierto:
+  el líder la espera a más de 8 tiles (con 4 quedaban en bucle) y ella atrae solo con el líder quieto.
+- Pendiente: medir un ciclo completo y comparar con Horaz solo (11–12 min).
+
+**Modo cazador** (`hunter.js`), invasión dorada:
+- La búsqueda a ciegas con uno solo no sirvió. Devias es enorme y la vista es de ~15-20 tiles.
+  El widget mostraba "Noria" con los dragones en Devias, y otros jugadores los matan rápido.
+- Siguiente versión, idea del usuario: en dúo, dividir el mapa. Cada uno recorre una mitad
+  y el que ve un dorado lo publica (`mubot:gold`): el líder va directo y el otro vuelve con él.
+- Anotar dónde aparecen los dorados por mapa (`mubot:goldSpots`) e ir primero ahí.
+- Detectar el inicio de la invasión por el aviso del chat ("¡El Dragón Dorado está invadiendo!").
+- Mientras caza, pelear los comunes a <= 3 tiles: si los ignora, lo rodean.
