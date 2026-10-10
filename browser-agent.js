@@ -405,7 +405,8 @@
       ai.resets++; ai.spot = W()?.mapIndex === 0 ? 2 : null; ai.spotRun = ai.spot ? { spot: 2, start: Date.now(), kills0: ai.kills } : null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
       // La regla de hambre mide 45 s hacia atrás con la vara del tramo: recién reseteado medía el
       // final del ciclo anterior contra Arena 4 y mandaba a Noria al instante. 2 min de gracia.
-      ai.lastHungerWarp = Date.now();
+      // (1 min, no 2: con la cripta vacía tardaba 1,7 min en llegar a 20; la exp de 45 s ya es la nueva)
+      ai.lastHungerWarp = Date.now() - 60000;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }
@@ -427,7 +428,7 @@
         // se quedaba con un campamento flojo de la entrada (34M/min en Arena 2) sin comparar.
         const dz = ai.cfg.preferDownMaps.includes(w.mapIndex) ? ai.downZone(w) : null;
         const dzMeasured = !dz || (ai.campHist[w.mapIndex] ?? []).some((k) => dist(k, dz) <= 15 && !k.seed);
-        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && k.rate >= (ai.tierRef?.[`t${ai.tierSeen ?? 0}`] ?? 0) * 0.3 && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate / (1 + dist(b, p0) / 40) - a.rate / (1 + dist(a, p0) / 40))[0];
+        const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && k.rate >= (ai.tierRef?.[`t${ai.cfg.spots.find((sp) => sp[0] === ai.spot)?.[2] ?? ai.tierSeen ?? 0}`] ?? 0) * 0.3 && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate / (1 + dist(b, p0) / 40) - a.rate / (1 + dist(a, p0) / 40))[0];
         // (un "mejor spot" que rindió < 30% de lo normal del tramo no cuenta: en Devias 4 iba a uno de ~0M/min)
         // Pesa la caminata (a 40 tiles vale la mitad): cruzaba media Arena 4 por un spot apenas mejor.
         const dir = known ? null : ai.cfg.arrivalSpotDir[w.mapIndex];
