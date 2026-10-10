@@ -199,6 +199,8 @@ const base = { spots: SPOTS, level: 150, reset: 0, allowed: null, dwellMs: Infin
     { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
     { index: 1, name: 'Arena', reqLevel: 50, zen: 0 },
     { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0 },
+    { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0 },
+    { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0 },
   ];
   const sp = (i: number) => ROUTE_SPOTS.find((s) => s.index === i)!;
   const rb = { spots: ROUTE_SPOTS, allowed: null, stayMs: 0, stayExp: 0, scores: new Map<number, number>(), tierSeen: 0 };
