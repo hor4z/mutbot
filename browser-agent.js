@@ -607,19 +607,22 @@
     if (di.group === 10 && di.num === 1) return true;
     return (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) || (di.group === 12 && di.num === 15);
   };
-  ai.lootCount = old?.lootCount ?? 0;
+  ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {
     const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || S.sceneLoading || ai.busy) return;
     const P = pe.transform.pos, now = Date.now();
     if (ai.looting) {
       const e = w.getByNetId(ai.looting.id);
-      if (!e || !e.droppedItem || now - ai.looting.at > 8000) { if (!e || !e.droppedItem) { ai.lootCount++; L(`levanté ${ai.looting.what}`); } ai.looting = null; ai.on = true; }
-      else if (w.pickupTarget !== e) w.pickupTarget = e;
+      if (!e || !e.droppedItem) { ai.lootCount++; ai.lootFails = 0; L(`levanté ${ai.looting.what}`); ai.looting = null; ai.on = true; return; }
+      // Sigue en el piso a los 8 s: no se pudo (inventario lleno u otro dueño). No reintentar ese
+      // drop; dos fallos seguidos = inventario lleno, no levantar por 10 min (pasaba en loop).
+      if (now - ai.looting.at > 8000) { ai.lootSkip.add(ai.looting.id); ai.lootFails++; ai.looting = null; ai.on = true; if (ai.lootFails >= 2) { ai.lootOffUntil = now + 600000; ai.lootFails = 0; L('inventario lleno: dejo de levantar por 10 min'); } return; }
+      if (w.pickupTarget !== e) w.pickupTarget = e;
       return;
     }
-    if (!ai.on) return;
+    if (!ai.on || now < ai.lootOffUntil) return;
     let best = null, bd = 1e9;
-    for (const e of w.byNetId.values()) { if (!e.droppedItem || !ai.isValuable(e.droppedItem)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.lootRadius && d < bd) { bd = d; best = e; } }
+    for (const e of w.byNetId.values()) { if (!e.droppedItem || ai.lootSkip.has(e.netId) || !ai.isValuable(e.droppedItem)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.lootRadius && d < bd) { bd = d; best = e; } }
     if (best) { const di = best.droppedItem; ai.looting = { id: best.netId, at: now, what: `${di.group}/${di.num}${di.item?.isExcellent ? ' exc' : ''}` }; ai.on = false; w.attackTarget = null; w.castRequest = null; w.pickupTarget = best; L(`voy a levantar ${ai.looting.what} a ${bd} tiles`); }
   }, 300);
   // Memoria de campamentos: al dejar uno se guarda posición + exp/min real (persiste
