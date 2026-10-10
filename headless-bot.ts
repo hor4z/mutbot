@@ -1621,7 +1621,7 @@ const WARP_SPOTS: Spot[] = [
   { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500 },
   { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
   { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
-  { index: 1, name: 'Arena', reqLevel: 50, zen: 0 },
+  // Arena 1 (warp 1) fuera: monstruos flojos y dispersos, ~0 exp/min medido jugando.
   { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0 },
   { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0 },
   { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0 },
