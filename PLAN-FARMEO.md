@@ -217,3 +217,10 @@ Ciclo 6: borrar la memoria de campamentos de Arenas (aprendida con la medición 
 
 Siguiente (ciclo 4): reset sin warp ni reparto previo, sin warp a Lorencia tras el reset.
 Tramo que decide: 300→400 (7,1 min, ~48% del ciclo).
+
+## 14. Descartado por ahora: party con un mago propio
+
+2026-10-10: el server corta la segunda conexión si se entra con otra cuenta desde la
+misma red/equipo (regla anti-multicliente). Sin cambiar esa regla del server (decisión
+del admin, afecta a todos), no hay party propio ni bot paralelo con otra cuenta desde
+esta máquina. No se intenta esquivar con VPN/proxys.
