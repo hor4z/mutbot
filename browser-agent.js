@@ -97,7 +97,9 @@
       // en warps y cargas de lo que ganaba (el usuario lo vio en pantalla).
       fixedRoute: true,
       // Plan B si todas las Devias están llenas de gente (nivel 50-99): Arena 1.
-      crowdFallback: [[1, 'Arena', 50]],
+      // Noria (warp 3, nivel 10): plan B del arranque cuando la cripta de Lorencia está llena
+      // (6 jugadores, 0 exp a nivel 13). No entra en la ruta: solo por competencia.
+      crowdFallback: [[1, 'Arena', 50], [3, 'Noria', 10]],
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -463,10 +465,10 @@
       if (now - ai.lastWarp > 60000 && recentRate > 0) ai.tierRef[tierKey] = ai.tierRef[tierKey] == null ? recentRate : ai.tierRef[tierKey] * 0.95 + recentRate * 0.05;
       const ref = ai.tierRef[tierKey];
       const rivalsNear = rivalsPos(w).filter((q) => dist(q, P) <= 12).length;
-      // Desde nivel 20 (antes solo existe Lorencia) y con al menos 45 s en el lugar.
+      // Desde nivel 10 (en Lorencia el plan B es Noria) y con al menos 45 s en el lugar.
       // Con todo lleno, saltar cada 50 s entre Devias 3/4/2 empeoró el ciclo 6: como mucho un
       // salto por hambre cada 2 min, ≥2 jugadores y ≥60 s en el lugar.
-      const starving = pd.level >= 20 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && rivalsNear >= 2 && recentRate < (ref ? ref * 0.25 : 5e6);
+      const starving = pd.level >= 10 && now - ai.lastWarp > 60000 && now - (ai.lastHungerWarp ?? 0) > 120000 && rivalsNear >= 2 && recentRate < (ref ? ref * 0.25 : 5e6);
       const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (crowdedSpot && now - ai.lastWarp > 15000) {
