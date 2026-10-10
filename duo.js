@@ -33,8 +33,9 @@
     // Proteger al seguidor: primero los monstruos a <= 3 tiles de él (en Arena 1 se le
     // pegaron 7 de golpe en la entrada).
     if (!ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(followerName); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 3 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
-    // Arena 1 sirve para el dúo (seguidor 50-99), aunque el solo la descarte.
-    if (!all.some((s) => s[0] === 1)) all.splice(Math.max(0, all.findIndex((s) => s[0] === 24)), 0, [1, 'Arena', 50]);
+    // Arena 1 NO: también para el dúo rinde casi nada (dragoncitos/arañas). Medido: Melu
+    // subió 26→66 en Devias y ~0 en Arena 1. Devias hasta que el seguidor llegue a 100.
+    { const i = all.findIndex((s) => s[0] === 1); if (i >= 0) all.splice(i, 1); }
     let invitedAt = 0;
     every(() => {
       const f = read(followerName); const w = W(); const pe = w?.playerEntity; if (!f || !pe || f.map !== w.mapIndex) return;
