@@ -78,8 +78,9 @@
       // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
       const canEnter = h.spot != null && (REQ[h.spot] ?? 0) <= pd.level;
       if (w.mapIndex !== h.map) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter) S.warpCommandRequest(h.spot); else if (w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
-      // Lo más pegado posible (usuario): a 1 tile, revisando 4 veces por segundo.
-      if (dist(pe.transform.pos, h) > 1) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
+      // En el MISMO tile que el líder ("debajo de su espada", usuario), revisando 4 veces por segundo.
+      const P0 = pe.transform.pos;
+      if (Math.round(P0.x) !== h.x || Math.round(P0.z) !== h.z) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
     }, 250);
     every(async () => { if (S.uiState !== 5 || ai.distributing || (S.playerData.points ?? 0) < 10) return; ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }, 5000);
     return `seguidor: ${me} sigue a ${leaderName} sin atacar`;
