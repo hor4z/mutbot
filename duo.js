@@ -83,6 +83,21 @@
     return `seguidor: ${me} sigue a ${leaderName} sin atacar`;
   };
 
-  window.__duo = { leader, follower, stop };
+  // Para el líder que farmea a su manera (sin correa ni tope de mapas): solo publicar su
+  // posición e invitar al compañero cuando lo tenga cerca, hasta que el server confirme la party.
+  const partyWith = (name) => {
+    publish(S.playerData.name);
+    window.__partyWith = name; window.__inParty = false;
+    if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
+    let last = 0;
+    every(() => {
+      const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || window.__inParty || Date.now() - last < 60000) return;
+      const ent = (w.playersQuery?.entities ?? []).find((e) => !e.localPlayer && String(e.objectNameInWorld ?? '').trim() === name);
+      if (!ent || dist(pe.transform.pos, ent.transform.pos) > 12) return;
+      last = Date.now(); const id = ent.netId & 0x7fff; S.sendToGS(new DataView(Uint8Array.from([0xc1, 0x05, 0x40, id >> 8, id & 0xff]).buffer));
+    }, 1500);
+    return `party automática con ${name}`;
+  };
+  window.__duo = { leader, follower, partyWith, stop };
   return 'modo dúo cargado: __duo.leader(nombre) / __duo.follower(nombre)';
 })();
