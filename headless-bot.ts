@@ -142,9 +142,11 @@ for (let i = 0; i < argv.length; i++) {
 const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
 const CS_HOST = args.get('--cs-host') ?? '127.0.0.1';
 const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
-const USERNAME = args.get('--user') ?? 'test1';
-const PASSWORD = args.get('--pass') ?? 'test1';
-const CHAR_NAME = args.get('--char') ?? 'test1Dk';
+// Credenciales: mejor en .env (Bun lo carga solo, está en .gitignore) que en
+// la línea de comandos, donde quedan en el historial del shell.
+const USERNAME = args.get('--user') ?? process.env.MUBOT_USER ?? 'test1';
+const PASSWORD = args.get('--pass') ?? process.env.MUBOT_PASS ?? 'test1';
+const CHAR_NAME = args.get('--char') ?? process.env.MUBOT_CHAR ?? 'test1Dk';
 const ALLOW_REMOTE = args.has('--allow-remote');
 // El mundo de mu.mormon.garden está configurado con el perfil de cliente 0.97d
 // (V097D), NO season6. Estos son sus bytes de versión y serial: el server valida
