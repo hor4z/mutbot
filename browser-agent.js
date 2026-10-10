@@ -250,7 +250,9 @@
       let n = 0; for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e) && ai.killSecOf(e) <= c.maxKillSec && dist(e.transform.pos, P) <= 8) n++;
       // En Arenas, yendo a la zona de abajo, solo cortar el viaje por un grupo grande: con 3
       // se quedaba siempre en la entrada (~60M/min en Arena 3) y la zona de abajo nunca se medía.
-      const stopAt = c.preferDownMaps.includes(map) && cp.toDownZone ? c.clusterStopDown : c.clusterStop;
+      // Yendo a un spot que ya rindió (aprendido o conocido) el umbral es el alto, como a la zona de
+      // abajo: con 3 se quedaba en la entrada de Arena 4 (3 bichos flojos) en vez de bajar a ~405M/min.
+      const stopAt = c.preferDownMaps.includes(map) && (cp.toDownZone || cp.known) ? c.clusterStopDown : c.clusterStop;
       if (n >= stopAt) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
       else { const near = ai.freePick(w, P, { ...c, scan: c.enRouteScan }); if (near) return near; }
     }
@@ -409,7 +411,7 @@
         const dzMeasured = !dz || (ai.campHist[w.mapIndex] ?? []).some((k) => dist(k, dz) <= 15 && !k.seed);
         const known = !dzMeasured ? null : (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate - a.rate)[0];
         const dir = known ? null : ai.cfg.arrivalSpotDir[w.mapIndex];
-        if (known) { ai.camp = { x: known.x, z: known.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy al mejor spot aprendido (${known.x},${known.z}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`); }
+        if (known) { ai.camp = { x: known.x, z: known.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now(), known: true }; L(`voy al mejor spot aprendido (${known.x},${known.z}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`); }
         // 2) Si no conoce nada: la regla del usuario para ese mapa como primera apuesta.
         if (dir) {
           let g = null;
@@ -723,7 +725,7 @@
       const P = w.playerEntity.transform.pos, lvl = S.playerData.level;
       const cands = (ai.campHist[w.mapIndex] ?? []).filter((c) => (!ai.arrival || !ai.cfg.leashMaps.includes(w.mapIndex) || dist(c, ai.arrival) <= ai.cfg.leashDist) && dist(c, P) <= ai.cfg.campMemDist && Math.abs((c.level ?? lvl) - lvl) < 150 && !ai.leftCamps.some((l) => l.map === w.mapIndex && Date.now() - l.at < 60000 && dist(l, c) <= 4));
       cands.sort((a, b) => b.rate / (1 + dist(b, P) / 12) - a.rate / (1 + dist(a, P) / 12));
-      if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
+      if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now(), known: true }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
     }
   }, 1000);
   // Ranking de spots aprendidos, para que el usuario vea qué aprendió.
