@@ -37,7 +37,7 @@
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
   const SCREEN = { up: [-1, 1], right: [1, 1], down: [1, -1], left: [-1, -1] };
   const ai = (window.__ai = {
-    on: true, busy: false, log: old?.log ?? [], samples: old?.samples ?? [], kills: old?.kills ?? 0, resets: old?.resets ?? 0,
+    on: true, busy: false, log: [...(old?.log ?? [])], // copia: lo que quede colgado de copias viejas no ensucia este log samples: old?.samples ?? [], kills: old?.kills ?? 0, resets: old?.resets ?? 0,
     t0: Date.now(), lastPotion: 0, lastWarp: old?.lastWarp ?? 0, spot: old?.spot ?? null,
     // Reinstalar no debe hacerlo abandonar el spot en el que está.
     spotScore: old?.spotScore ?? saved.spotScore ?? {}, spotRun: old?.spotRun ?? null, tierSeen: old?.tierSeen ?? 0,
