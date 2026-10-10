@@ -48,6 +48,8 @@
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
+      // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
+      crowdRivals: 2, crowdMs: 10000,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
@@ -144,7 +146,10 @@
       if (now - cp.since > c.campEvalMs) ai.campBest[map] = Math.max(ai.campBest[map] ?? 0, rate);
       const poor = now - cp.since > c.campEvalMs && rate < (ai.campBest[map] ?? 0) * c.campMinFrac;
       const empty = now - cp.lastSeen > c.campEmptyMs;
-      if (poor || empty) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
+      const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
+      if (rivalsHere >= c.crowdRivals) cp.crowdSince ??= now; else cp.crowdSince = null;
+      const crowded = cp.crowdSince && now - cp.crowdSince > c.crowdMs;
+      if (poor || empty || crowded) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
     }
     if (!ai.camp) {
       const found = ai.findCamp(w, P);
