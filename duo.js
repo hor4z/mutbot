@@ -19,6 +19,7 @@
   const read = (name) => { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); return v && Date.now() - v.at < 20000 ? v : null; } catch { return null; } };
   const timers = (window.__duoTimers ??= []);
   const every = (fn, ms) => { const id = window.setInterval(fn, ms); timers.push(id); (window.__mubotTimers ??= []).push(id); return id; };
+  // 250 ms: el seguidor va pegado al líder y necesita su posición casi en tiempo real.
   const publish = (name) => every(() => { const pe = W()?.playerEntity; if (!pe || S.uiState !== 5) return; const P = pe.transform.pos; try { localStorage.setItem('mubot:follow:' + name, JSON.stringify({ x: Math.round(P.x), z: Math.round(P.z), map: W().mapIndex, spot: window.__ai?.spot, level: S.playerData.level, at: Date.now() })); } catch {} }, 1000);
   // Nivel mínimo de cada warp (lista del cliente, perfil v097d).
   const REQ = { 2: 10, 3: 10, 4: 20, 5: 20, 6: 20, 7: 20, 1: 50, 24: 100, 25: 200, 26: 300 };
@@ -77,8 +78,9 @@
       // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
       const canEnter = h.spot != null && (REQ[h.spot] ?? 0) <= pd.level;
       if (w.mapIndex !== h.map) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter) S.warpCommandRequest(h.spot); else if (w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
-      if (dist(pe.transform.pos, h) > 2) { const m = pe.playerMoveTo; m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; }
-    }, 400);
+      // Lo más pegado posible (usuario): a 1 tile, revisando 4 veces por segundo.
+      if (dist(pe.transform.pos, h) > 1) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
+    }, 250);
     every(async () => { if (S.uiState !== 5 || ai.distributing || (S.playerData.points ?? 0) < 10) return; ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }, 5000);
     return `seguidor: ${me} sigue a ${leaderName} sin atacar`;
   };
