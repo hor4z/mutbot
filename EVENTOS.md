@@ -109,4 +109,6 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
    mandar `C1 05 90 <n-1> FF` apenas se abre la ventana (1 min).
 3. Medir la exp ganada adentro contra farmear el mismo tiempo. Si no gana, no entrar.
 4. Invasión dorada: a los :50 elegir el mapa con más vivos al alcance (paquete 0xFD) y cazar.
-   Prioridad: los mapas con poca gente (Noria).
+   Prioridad: los mapas con poca gente (Noria). **Cortar apenas el 0xFD diga que en ese mapa no
+   quedan vivos** (o la invasión pase a "derrotada"): Horaz siguió barriendo las esquinas de Noria
+   con 1 dorado vivo en todo el server. Primera cacería real: nivel 18 → 90 en 5 min y 2 Box of Luck.

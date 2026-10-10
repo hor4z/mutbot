@@ -59,6 +59,9 @@ export function startStatusServer(opts: { port: number }): StatusServer {
   }
 
   const server = Bun.serve<WsData>({
+    // Solo esta máquina: sin hostname Bun escucha en todas las interfaces y cualquiera en la red
+    // podía ver la telemetría (y, con el canal de órdenes, manejar el bot).
+    hostname: '127.0.0.1',
     port: opts.port,
     fetch(req, srv) {
       if (srv.upgrade(req, { data: {} })) return;
