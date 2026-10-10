@@ -1608,7 +1608,7 @@ async function moveToMap(mapName: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 // Mapas de farmeo: la RUTA del usuario (la que sigue el agente web, que es el
 // que sube rápido), con índices del menú de warp del cliente (perfil v097d):
-//   Lorencia (2) → Devias 2/3/4 (5, 6, 7) → Arena (1, nivel 50) → Arena 2 (24,
+//   Lorencia (2) → Devias 3/4 (6, 7), si no Devias 2 (5) → Arena (1, nivel 50) → Arena 2 (24,
 //   nivel 100) → Arena 3 (25, nivel 200) → Arena 4 (26, nivel 300).
 // Devias 1 (warp 4) NO va: el usuario confirmó jugando que no sirve. Noria,
 // Dungeon, Lost Tower, Atlans, etc. tampoco: no están en su ruta.
@@ -1617,9 +1617,10 @@ async function moveToMap(mapName: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 const WARP_SPOTS: Spot[] = [
   { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000 },
-  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
+  // Orden = preferencia entre spots del mismo nivel: Devias 3/4 antes que la 2.
   { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500 },
   { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500 },
+  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000 },
   { index: 1, name: 'Arena', reqLevel: 50, zen: 0 },
   { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0 },
   { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0 },
