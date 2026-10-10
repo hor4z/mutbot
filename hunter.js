@@ -22,7 +22,9 @@
         for (const e of w.byNetId.values()) if (isGold(e)) { const d = dist(P, e.transform.pos); if (d < bd) { bd = d; b = e; } }
         if (b) { if (!h.seen.has(b.netId)) { h.seen.add(b.netId); ai.L(`HUNTER: ${String(b.objectNameInWorld).trim()} a ${bd} tiles`); } return b; }
       }
-      return ip(w, P, c);
+      // Cazando no se frena por monstruos comunes: solo los que le bloquean el paso (<= 2 tiles).
+      const t = ip(w, P, c);
+      return !h.on || !t || dist(P, t.transform.pos) <= 2 ? t : null;
     };
     const ng = ai.nextGoal;
     ai.nextGoal = (P, w) => {
