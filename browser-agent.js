@@ -251,7 +251,11 @@
       const kpm = run && runMin > 0 ? ai.expLog.filter((x) => x.t >= run.start).reduce((a, x) => a + x.added, 0) / runMin : 0;
       if (run && runMin * 60000 >= c.evalMs) ai.spotScore[run.spot] = kpm;
       const bestKnown = Math.max(0, ...Object.values(ai.spotScore));
-      const eligible = c.spots.filter((s) => s[2] <= pd.level);
+      // Solo mapas acordes al nivel (reqLevel >= nivel/2, o el más alto habilitado):
+      // sin esto, a nivel 367 "probar uno sin medir" lo mandó a Devias 2.
+      const allowed = c.spots.filter((s) => s[2] <= pd.level);
+      const topReq = Math.max(0, ...allowed.map((s) => s[2]));
+      const eligible = allowed.filter((s) => s[2] >= pd.level * 0.5 || s[2] === topReq);
       const tier = Math.max(...eligible.map((s) => s[2]));
       const newTier = tier > ai.tierSeen;
       const mapDead = now - ai.mapNoMonsterSince > c.giveUpMapMs;
