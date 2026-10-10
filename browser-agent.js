@@ -266,7 +266,9 @@
       // Desde nivel 100, solo mapas acordes (reqLevel >= nivel/2, o el más alto habilitado):
       // sin esto, a nivel 367 "probar uno sin medir" lo mandó a Devias 2. Antes del 100
       // Devias sigue valiendo (Arena 1 rinde casi nada).
-      const allowed = c.spots.filter((s) => s[2] <= pd.level);
+      // Lorencia solo para arrancar (< 20): sin medir, "probar lo no medido" lo mandaba
+      // de vuelta a cazar dragones a nivel 79.
+      const allowed = c.spots.filter((s) => s[2] <= pd.level && !(s[0] === 2 && pd.level >= 20));
       const topReq = Math.max(0, ...allowed.map((s) => s[2]));
       const eligible = allowed.filter((s) => pd.level < 100 || s[2] >= pd.level * 0.5 || s[2] === topReq);
       // Comparar solo contra mapas elegibles AHORA: los puntajes se conservan entre resets
