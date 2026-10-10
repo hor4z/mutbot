@@ -378,8 +378,8 @@
       if (now - ai.lastWarp > 60000 && recentRate > 0) ai.tierRef[tierKey] = ai.tierRef[tierKey] == null ? recentRate : ai.tierRef[tierKey] * 0.95 + recentRate * 0.05;
       const ref = ai.tierRef[tierKey];
       const rivalsNear = rivalsPos(w).filter((q) => dist(q, P) <= 12).length;
-      const starving = now - ai.lastWarp > 45000 && rivalsNear >= 1 && recentRate < (ref ? ref * 0.25 : 5e6);
-      if (starving) L(`casi sin exp (${Math.round(recentRate / 1e6)}M/min) con ${rivalsNear} jugador(es) cerca: cambio de lugar`);
+      // Desde nivel 20 (antes solo existe Lorencia) y con al menos 45 s en el lugar.
+      const starving = pd.level >= 20 && now - ai.lastWarp > 45000 && rivalsNear >= 1 && recentRate < (ref ? ref * 0.25 : 5e6);
       const crowdedSpot = starving || (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
       if (crowdedSpot && now - ai.lastWarp > 15000) {
@@ -390,7 +390,7 @@
         if (to) {
           ai.lastWarp = now; ai.spot = to[0]; ai.target = null; w.attackTarget = null; ai.explore = null; ai.camp = null; ai.mapNoMonsterSince = ai.lastMonster = now; ai.scoutIdx = 0;
           ai.spotRun = { spot: to[0], start: now + 8000, kills0: ai.kills }; ai.arrival = null; ai.arrivalPending = now;
-          S.warpCommandRequest(to[0]); L(`warp → ${to[1]} (mucha competencia)`); return;
+          S.warpCommandRequest(to[0]); L(`warp → ${to[1]} (${starving ? `casi sin exp: ${Math.round(recentRate / 1e6)}M/min con ${rivalsNear} jugador(es) cerca` : 'mucha competencia'})`); return;
         }
       }
       if (now - ai.lastWarp > 15000 && eligible.length && (!run || newTier || mapDead || poor)) {
