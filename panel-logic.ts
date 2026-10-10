@@ -270,8 +270,14 @@ export function scoutBand(sector: number, sectors: number, size = 256): ScoutBan
 }
 
 /** Corte del buscador: igual que la cacería (0 vivos en el mapa, invasión terminada) pero a los 20 min. */
+/** Con 5 o menos vivos en el mapa no se busca ni se sigue buscando (usuario, 2026-10-10). */
+export const SCOUT_MIN_ALIVE = 5;
 export function shouldStopScout(inp: { invasion: Invasion | null; map: number; since: number; now: number }): string | null {
-  return shouldStopHunt({ ...inp, maxMs: SCOUT_MAX_MS });
+  const why = shouldStopHunt({ ...inp, maxMs: SCOUT_MAX_MS });
+  if (why) return why;
+  const inv = inp.invasion;
+  if (inv && inv.at >= inp.since) { const alive = inv.maps.find((m) => m.map === inp.map)?.alive ?? 0; if (alive <= SCOUT_MIN_ALIVE) return `quedan ${alive} dorados en ${mapName(inp.map)}: no vale la pena`; }
+  return null;
 }
 
 export type GoldSighting = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };

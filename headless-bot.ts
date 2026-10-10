@@ -76,7 +76,7 @@ import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
 import {
-  EVENT_KEYS, GoldReporter, HUNT_MAPS, HuntExplorer, SCOUT_GOLD_URL, buildOpeningStateRequest, chooseHuntMap, countTickets,
+  EVENT_KEYS, GoldReporter, HUNT_MAPS, HuntExplorer, SCOUT_GOLD_URL, SCOUT_MIN_ALIVE, buildOpeningStateRequest, chooseHuntMap, countTickets,
   goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout, toPanelCycle,
   validateWarp, type GoldGone, type GoldSighting, type HuntMap,
 } from './panel-logic';
@@ -2575,10 +2575,10 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const nowS = Date.now();
       if (invasion?.status !== 'active') scoutArmed = true;
       else if (scoutArmed) {
-        scoutArmed = false;
+        // Solo si vale la pena (usuario: "si quedan pocos vivos no tiene sentido buscar, ej. 5"):
+        // se sigue mirando cada tick hasta que haya más de SCOUT_MIN_ALIVE en un mapa al alcance.
         const ch = chooseHuntMap({ invasion, level: world.level });
-        if (ch.ok && (ch.alive ?? 0) > 0) startScout(ch.hunt, SCOUT_SECTOR, SCOUT_SECTORS, `invasión activa (${ch.alive} vivos en ${ch.hunt.name})`);
-        else panelLog(`Buscador: invasión activa pero no salgo (${ch.ok ? `0 vivos en ${ch.hunt.name}` : ch.msg}).`);
+        if (ch.ok && (ch.alive ?? 0) > SCOUT_MIN_ALIVE) { scoutArmed = false; startScout(ch.hunt, SCOUT_SECTOR, SCOUT_SECTORS, `invasión activa (${ch.alive} vivos en ${ch.hunt.name})`); }
       }
       if (!scouting && world.map !== 0 && scoutHomeTries < 3 && nowS >= scoutHomeNextAt && world.hp > 0) {
         scoutHomeTries++;

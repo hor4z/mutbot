@@ -34,13 +34,17 @@
   const jset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   // Mapa → warp y nivel mínimo: los de la invasión que Horaz puede entrar a nivel bajo.
   const MAPS = { 0: { warp: 2, lvl: 0, name: 'Lorencia' }, 3: { warp: 3, lvl: 10, name: 'Noria' }, 2: { warp: 6, lvl: 20, name: 'Devias' } };
-  const CFG = { huntMaxLevel: 250, huntStopLevel: 300, huntMinAlive: 3, huntMaxMin: 15 };
+  // Práctica de búsqueda en cada invasión, a cualquier nivel (usuario: "entrenar la búsqueda para ir
+  // teniendo referencias, aunque no mejore los tiempos"). Con 5 o menos vivos no se busca.
+  // huntBand: Horaz barre la mitad este (x >= 128); la oeste la barre Melu (headless --scout, franja 1/2)
+  // y avisa por /gold. Los dorados avisados se persiguen en cualquier mitad.
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 6, huntStopAlive: 5, huntMaxMin: 15, huntBand: [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
   if (window.__hunt?.pollTimer) window.clearInterval(window.__hunt.pollTimer);
   if (window.__hunt?.lingerTimer) window.clearInterval(window.__hunt.lingerTimer);
-  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? false, map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
+  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? jget(`mubot-hunt-auto:${me}`, false), map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
   if (!window.__invHooked) {
@@ -61,7 +65,8 @@
     const kpm = past.length ? past.reduce((a, x) => a + x.kills / x.min, 0) / past.length : ({ 3: 1, 0: 0.6, 2: 0.4 })[map] ?? 0.5;
     return aliveIn(map) * (0.5 + kpm);
   };
-  const bestMap = () => Object.keys(MAPS).map(Number).filter((m) => S.playerData.level >= MAPS[m].lvl && aliveIn(m) >= CFG.huntMinAlive).sort((a, b) => mapScore(b) - mapScore(a))[0];
+  // Mismo criterio que el buscador (más vivos al alcance) para que los dos vayan al mismo mapa.
+  const bestMap = () => Object.keys(MAPS).map(Number).filter((m) => S.playerData.level >= MAPS[m].lvl && aliveIn(m) >= CFG.huntMinAlive).sort((a, b) => aliveIn(b) - aliveIn(a) || mapScore(b) - mapScore(a))[0];
 
   // Dorado a la vista: atacarlo primero y recordar dónde estaba.
   const sighting = (w, P) => {
@@ -87,11 +92,12 @@
   const nextCell = (P, w) => {
     h.visited.add(cellOf(P.x, P.z));
     const walk = (x, z) => { for (let r = 0; r < 10; r++) for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r]]) if (w.isWalkable(x + dx, z + dz)) return { x: x + dx, z: z + dz }; return null; };
-    const known = Object.entries(gold[w.mapIndex] ?? {}).filter(([k]) => !h.visited.has(k)).map(([k, n]) => { const [cx, cz] = k.split(',').map(Number); return { n, p: walk(cx * 25 + 12, cz * 25 + 12) }; }).filter((x) => x.p);
+    const inBand = (x) => x >= CFG.huntBand[0] && x < CFG.huntBand[1];
+    const known = Object.entries(gold[w.mapIndex] ?? {}).filter(([k]) => !h.visited.has(k) && inBand(Number(k.split(',')[0]) * 25 + 12)).map(([k, n]) => { const [cx, cz] = k.split(',').map(Number); return { n, p: walk(cx * 25 + 12, cz * 25 + 12) }; }).filter((x) => x.p);
     if (known.length) { known.sort((a, b) => b.n / (1 + dist(b.p, P) / 40) - a.n / (1 + dist(a.p, P) / 40)); return { ...known[0].p, kind: 'hunter:conocido' }; }
     let best = null, bd = 1e9;
     for (let x = 12; x < 250; x += 25) for (let z = 12; z < 250; z += 25) {
-      if (h.visited.has(cellOf(x, z))) continue;
+      if (h.visited.has(cellOf(x, z)) || !inBand(x)) continue;
       const p = walk(x, z); if (!p) { h.visited.add(cellOf(x, z)); continue; }
       const d = dist(P, p); if (d < bd) { bd = d; best = p; }
     }
@@ -136,6 +142,7 @@
     ai.L(`HUNTER: fin (${why}): ${min.toFixed(1)} min, ${kills} dorados vistos, nivel ${h.lvl0} → ${S.playerData.level}`);
   };
   h.history = () => hunts.slice(-10);
+  h.setAuto = (v) => { h.auto = !!v; jset(`mubot-hunt-auto:${me}`, h.auto); return h.auto; };
 
   // Cada 2 s: leer avisos; si hay uno nuevo y no estamos peleando un dorado, ir ya (no esperar a
   // terminar de caminar hacia la celda actual).
@@ -158,7 +165,7 @@
     if (!ai.on || ai.busy || S.uiState !== 5) return;
     const inv = window.__invasion, active = inv?.status === 1 && Date.now() - inv.at < 120000, lvl = S.playerData.level;
     if (h.on) {
-      const why = !active ? 'terminó la invasión' : aliveIn(h.map) === 0 ? `no quedan dorados en ${MAPS[h.map].name}` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
+      const why = !active ? 'terminó la invasión' : aliveIn(h.map) <= CFG.huntStopAlive ? `quedan ${aliveIn(h.map)} en ${MAPS[h.map].name}: no vale la pena` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
       if (why) h.stop(why);
       return;
     }

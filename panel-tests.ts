@@ -214,7 +214,8 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     ({ ...parseInvasion(Uint8Array.from([0xc1, 7 + maps.length * 3, 0xfd, status, 0, 0, maps.length, ...maps.flatMap(([m, a]) => [m, a >> 8, a & 0xff])]), at)! });
   ok('buscador: 20 min, no 15', shouldStopScout({ invasion: null, map: 3, since, now: since + HUNT_MAX_MS }) === null &&
     shouldStopScout({ invasion: null, map: 3, since, now: since + SCOUT_MAX_MS }) !== null);
-  ok('buscador: quedan vivos → sigue', shouldStopScout({ invasion: inv(1, [[3, 2]], since + 1), map: 3, since, now: since + 2 }) === null);
+  ok('buscador: más de 5 vivos → sigue', shouldStopScout({ invasion: inv(1, [[3, 6]], since + 1), map: 3, since, now: since + 2 }) === null);
+  ok('buscador: 5 o menos vivos → corta (no vale la pena)', shouldStopScout({ invasion: inv(1, [[3, 5]], since + 1), map: 3, since, now: since + 2 }) !== null);
   ok('buscador: 0 vivos en el mapa → corta', shouldStopScout({ invasion: inv(1, [[3, 0], [2, 4]], since + 1), map: 3, since, now: since + 2 }) !== null);
   ok('buscador: invasión terminada (status != 1) → corta', shouldStopScout({ invasion: inv(0, [], since + 1), map: 3, since, now: since + 2 }) !== null &&
     shouldStopScout({ invasion: inv(2, [], since + 1), map: 3, since, now: since + 2 }) !== null);
