@@ -403,6 +403,9 @@
       ai.mapEnteredAt = {}; ai.exploreRound = !!ai.exploreRoundNext; ai.exploreRoundNext = false;
       // Tras el reset aparece en Lorencia: marcarlo como spot actual evita un warp inútil.
       ai.resets++; ai.spot = W()?.mapIndex === 0 ? 2 : null; ai.spotRun = ai.spot ? { spot: 2, start: Date.now(), kills0: ai.kills } : null; ai.tierSeen = 0; ai.campBest = {}; ai.camp = null; ai.lastWarp = 0;
+      // La regla de hambre mide 45 s hacia atrás con la vara del tramo: recién reseteado medía el
+      // final del ciclo anterior contra Arena 4 y mandaba a Noria al instante. 2 min de gracia.
+      ai.lastHungerWarp = Date.now();
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }
