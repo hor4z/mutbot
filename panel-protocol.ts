@@ -10,7 +10,7 @@
  */
 
 /** Qué está haciendo el bot, en una palabra (para el panel y el log). */
-export type BotMode = 'farm' | 'hunt' | 'paused' | 'resetting' | 'connecting' | 'dead';
+export type BotMode = 'farm' | 'hunt' | 'scout' | 'paused' | 'resetting' | 'connecting' | 'dead';
 
 export type MapName = string; // "Lorencia", "Devias", "Arena 4", ... (o "mapa N")
 
@@ -88,10 +88,15 @@ export type PanelCommand =
   | { cmd: 'farm' }
   /** cazar dorados; sin map = el mapa con más vivos al alcance según 0xFD */
   | { cmd: 'hunt'; map?: number }
+  /**
+   * buscar dorados SIN pelear y avisarlos por HTTP (otro personaje los mata).
+   * map: como `hunt`; sector/sectors: franja vertical (por x) que recorre, default 1 de 2.
+   */
+  | { cmd: 'scout'; map?: number; sector?: number; sectors?: number }
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
   | { cmd: 'warp'; warp: number };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'scout'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -106,6 +111,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
   pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'],
+  scout: ['cmd', 'map', 'sector', 'sectors'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {
@@ -115,6 +121,13 @@ export function isPanelCommand(v: unknown): v is PanelCommand {
   const allowed = COMMAND_KEYS[c.cmd as (typeof PANEL_COMMANDS)[number]];
   if (Object.keys(c).some((k) => !allowed.includes(k))) return false;
   if (c.cmd === 'warp') return Number.isInteger(c.warp) && (c.warp as number) >= 0 && (c.warp as number) < 256;
-  if (c.cmd === 'hunt') return c.map === undefined || (Number.isInteger(c.map) && (c.map as number) >= 0 && (c.map as number) < 256);
+  const isMap = (m: unknown) => m === undefined || (Number.isInteger(m) && (m as number) >= 0 && (m as number) < 256);
+  if (c.cmd === 'hunt') return isMap(c.map);
+  if (c.cmd === 'scout') {
+    const sectors = c.sectors === undefined ? 2 : c.sectors;
+    if (!Number.isInteger(sectors) || (sectors as number) < 1 || (sectors as number) > 16) return false;
+    const sector = c.sector === undefined ? 1 : c.sector;
+    return isMap(c.map) && Number.isInteger(sector) && (sector as number) >= 1 && (sector as number) <= (sectors as number);
+  }
   return true;
 }

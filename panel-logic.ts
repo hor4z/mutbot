@@ -196,7 +196,20 @@ export class HuntExplorer {
   readonly visited = new Set<string>();
   goal: { x: number; y: number; key: string; since: number } | null = null;
 
-  constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256) {}
+  /** `band`: solo las celdas cuyo centro cae en [minX, maxX) (franja del buscador). */
+  constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256, readonly band: ScoutBand | null = null) {}
+
+  /** Columnas (x de los centros) que se recorren: todas, o las de la franja (al menos una). */
+  columns(): number[] {
+    const half = Math.floor(this.cell / 2);
+    const all: number[] = [];
+    for (let cx = half; cx < this.size; cx += this.cell) all.push(cx);
+    const b = this.band;
+    if (!b) return all;
+    const inBand = all.filter((cx) => cx >= b.minX && cx < b.maxX);
+    // Franja más angosta que una celda: su medio, para no quedarse sin destino.
+    return inBand.length ? inBand : [Math.floor((b.minX + b.maxX) / 2)];
+  }
 
   private key(x: number, y: number) {
     return `${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`;
@@ -218,7 +231,7 @@ export class HuntExplorer {
     const half = Math.floor(this.cell / 2);
     let best: { x: number; y: number; key: string } | null = null;
     let bd = Infinity;
-    for (let cx = half; cx < this.size; cx += this.cell) {
+    for (const cx of this.columns()) {
       for (let cy = half; cy < this.size; cy += this.cell) {
         const k = this.key(cx, cy);
         if (this.visited.has(k)) continue;
@@ -237,6 +250,71 @@ export class HuntExplorer {
     }
     this.goal = { ...best, since: now };
     return this.goal;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Buscador (orden `scout`, --scout): recorre una franja vertical del mapa sin
+// pelear y avisa por HTTP cada dorado que ve, para que otro personaje lo mate.
+// ---------------------------------------------------------------------------
+export type ScoutBand = { minX: number; maxX: number };
+export const SCOUT_MAX_MS = 20 * 60_000;
+export const SCOUT_RESEND_MS = 2_000;
+export const SCOUT_GOLD_URL = 'http://127.0.0.1:8788/gold';
+
+/** Franja `sector` (1..sectors) de las `sectors` franjas verticales (por x) del mapa. */
+export function scoutBand(sector: number, sectors: number, size = 256): ScoutBand {
+  const n = Math.max(1, Math.floor(sectors));
+  const k = Math.min(Math.max(1, Math.floor(sector)), n);
+  return { minX: Math.floor(((k - 1) * size) / n), maxX: Math.floor((k * size) / n) };
+}
+
+/** Corte del buscador: igual que la cacería (0 vivos en el mapa, invasión terminada) pero a los 20 min. */
+export function shouldStopScout(inp: { invasion: Invasion | null; map: number; since: number; now: number }): string | null {
+  return shouldStopHunt({ ...inp, maxMs: SCOUT_MAX_MS });
+}
+
+export type GoldSighting = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };
+export type GoldGone = { from: string; map: number; id: number; gone: true; at: number };
+export type GoldSeen = { id: number; x: number; y: number; name: string };
+
+export const goldSighting = (from: string, map: number, g: GoldSeen, at: number): GoldSighting =>
+  ({ from, map, x: g.x, y: g.y, name: g.name, id: g.id, at });
+export const goldGone = (from: string, map: number, id: number, at: number): GoldGone => ({ from, map, id, gone: true, at });
+
+/**
+ * Qué avisar en cada tick: un dorado nuevo en scope se avisa ya; uno que se
+ * movió, como mucho cada SCOUT_RESEND_MS por id (si se movió durante la
+ * espera, sale la última posición cuando se cumple); uno que ya no está en
+ * scope (murió o se fue), `gone`. Cambiar de mapa = todos `gone`.
+ */
+export class GoldReporter {
+  private sent = new Map<number, { at: number; x: number; y: number; map: number }>();
+
+  constructor(readonly from: string, readonly resendMs = SCOUT_RESEND_MS) {}
+
+  update(map: number, golds: readonly GoldSeen[], now: number): { payload: GoldSighting | GoldGone; isNew: boolean }[] {
+    const out: { payload: GoldSighting | GoldGone; isNew: boolean }[] = [];
+    const here = new Set(golds.map((g) => g.id));
+    for (const [id, s] of this.sent) {
+      if (here.has(id) && s.map === map) continue;
+      out.push({ payload: goldGone(this.from, s.map, id, now), isNew: false });
+      this.sent.delete(id);
+    }
+    for (const g of golds) {
+      const s = this.sent.get(g.id);
+      if (s && ((s.x === g.x && s.y === g.y) || now - s.at < this.resendMs)) continue;
+      out.push({ payload: goldSighting(this.from, map, g, now), isNew: !s });
+      this.sent.set(g.id, { at: now, x: g.x, y: g.y, map });
+    }
+    return out;
+  }
+
+  /** Al terminar: `gone` de todo lo que estaba avisado. */
+  clear(now: number): GoldGone[] {
+    const out = [...this.sent].map(([id, s]) => goldGone(this.from, s.map, id, now));
+    this.sent.clear();
+    return out;
   }
 }
 

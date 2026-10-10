@@ -59,7 +59,7 @@ pasó una vez y costó tres intentos de debugging.
 | `headless-bot.ts` | El bot. Login, mundo, loop autónomo, economía, capa de decisión. |
 | `ws-server.ts` | Server del panel detrás de `--ws-port` (solo 127.0.0.1): WebSocket de estado + órdenes de lista cerrada, `panel.html` y `/assets/`. Ver "Panel externo". |
 | `panel-protocol.ts` | Contrato bot ↔ panel (tipos, `PANEL_COMMANDS`, `isPanelCommand`). |
-| `panel-logic.ts` | Lado bot del panel en lógica pura: 0x91, 0xFD, tickets, ciclos, cacería de dorados. |
+| `panel-logic.ts` | Lado bot del panel en lógica pura: 0x91, 0xFD, tickets, ciclos, cacería y buscador de dorados. |
 | `panel-tests.ts` | Tests offline de `panel-logic.ts`, `isPanelCommand` y la parte pura de `ws-server.ts`. |
 | `packet-tests.ts` | Tests offline de parsers y builders. Sin red. |
 | `learning.ts` | Capa de aprendizaje (lógica pura): medición por spot, bandit UCB1, persistencia. |
@@ -858,7 +858,7 @@ cacería), `command-result`, y los viejos `state`/`decision`.
 - `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
   (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
   primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).
-- `mode` (`farm`/`hunt`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
+- `mode` (`farm`/`hunt`/`scout`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
   (frase corta que pone el loop).
 - `exp.perMin1`/`perMin5` del `ExpLog`; `cycle`/`cycles`/`resetsPerDay` del
   `CycleLog` (1440 / promedio de los últimos 5 ciclos sin tag).
@@ -874,7 +874,7 @@ cacería), `command-result`, y los viejos `state`/`decision`.
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 5 órdenes **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 6 órdenes **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
@@ -903,6 +903,50 @@ el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
 server real: falta confirmar que el server contesta 0x91 a esta pregunta, el
 layout del 0xFD, el `classId` y el nivel del ítem en 0.97d, y una cacería
 completa.
+
+### Buscador (scout)
+
+Un personaje (Melu, DW) **nunca pelea**: recorre una franja del mapa y avisa por
+HTTP cada dorado que ve, para que otro (Horaz, en el navegador) lo vaya a matar.
+
+```bash
+bun --env-file=.env.melu run headless-bot.ts --allow-remote --proxy wss://mu.mormon.garden/ws \
+  --cs-host mu.mormon.garden --cs-port 44405 --auto-seconds 0 --ws-port 8787 \
+  --scout --scout-sector 1 --scout-sectors 2
+```
+
+- `--scout`: arranca en pausa (pociones sí), vuelve a Lorencia (warp 2, hasta 3
+  intentos) y espera. Cuando llega un 0xFD con estado 1 sale solo a buscar, una
+  vez por invasión, al mapa con más vivos (`chooseHuntMap`: Lorencia, Noria,
+  Devias). En toda la corrida **no farmea ni pelea**: `resume`, `warp` y `hunt`
+  se rechazan y `farm` solo termina la búsqueda y deja la pausa.
+- Orden del panel: `{ cmd: 'scout', map?, sector?, sectors? }` (default franja
+  1 de 2, `sectors` 1-16). `farm` o `pause` la terminan.
+- Franjas: el mapa de 256 se parte en `sectors` franjas verticales por x
+  (`scoutBand`); recorre solo las celdas de 25 tiles cuyo centro cae en la suya
+  (`HuntExplorer` con `band`), la más cercana primero, celda visitada al llegar
+  o a los 45 s; terminada la franja, otra vuelta.
+- Sin golpes ni skills (ni `castOnTheWay`), sin loot, sin reset. Con HP < 50 %
+  y sin pociones camina 5 tiles en sentido contrario al monstruo más cercano (≤ 6).
+- **Corta sola y queda en pausa** (no farmea): 0xFD posterior al inicio con 0
+  vivos en ese mapa, invasión no activa, o 20 min (`shouldStopScout`).
+- `doing`: `buscando dorados en Noria (franja 2/2)`.
+
+**Contrato `/gold`:** `POST http://127.0.0.1:8788/gold`, JSON, timeout 1,5 s,
+errores ignorados (el receptor puede no estar):
+
+```ts
+{ from: 'Melu', map: 3, x: 140, y: 60, name: 'Golden Goblin', id: 77, at: 1760000000000 } // visto / se movió
+{ from: 'Melu', map: 3, id: 77, gone: true, at: 1760000000000 }                            // murió o salió del scope
+```
+
+Un dorado nuevo se avisa ya (y una línea en el log); si se mueve, como mucho
+cada 2 s por id con la última posición (`GoldReporter`). Al cambiar de mapa o
+terminar, `gone` de todos los avisados. `id` es el id de objeto del server.
+
+**Sin verificar en vivo:** probado offline (`panel-tests.ts`: franjas, payload,
+reintentos/`gone`, corte, `isPanelCommand`) y `tsc`; no corrió contra el server
+ni contra un receptor `/gold` real.
 
 ## Separar dúo y cacería del farmeo (2026-10-10)
 

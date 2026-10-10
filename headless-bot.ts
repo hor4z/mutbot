@@ -76,8 +76,9 @@ import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
 import {
-  EVENT_KEYS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldenTypes, mapName,
-  parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt, toPanelCycle, validateWarp, type HuntMap,
+  EVENT_KEYS, GoldReporter, HUNT_MAPS, HuntExplorer, SCOUT_GOLD_URL, buildOpeningStateRequest, chooseHuntMap, countTickets,
+  goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout, toPanelCycle,
+  validateWarp, type GoldGone, type GoldSighting, type HuntMap,
 } from './panel-logic';
 import type { BotMode, EventKey, EventTimer, Invasion, PanelCommand, PanelState } from './panel-protocol';
 import {
@@ -2050,11 +2051,29 @@ async function doResetSteps(): Promise<boolean> {
 // estado que se manda cada 1 s. Todo sale de lo que el bot ya trackea de los
 // packets: funciona igual sin navegador.
 // ---------------------------------------------------------------------------
+// Buscador (--scout): el bot espera en Lorencia en pausa y sale a buscar dorados
+// (sin pelear nunca) cuando un 0xFD dice que hay invasión. En toda la corrida no farmea.
+const SCOUT_ONLY = args.has('--scout');
+const SCOUT_SECTORS = Math.min(Math.max(parseInt(args.get('--scout-sectors') ?? '2') || 2, 1), 16);
+const SCOUT_SECTOR = Math.min(Math.max(parseInt(args.get('--scout-sector') ?? '1') || 1, 1), SCOUT_SECTORS);
 // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
-let paused = false;
+let paused = SCOUT_ONLY;
 // Cacería de dorados (orden `hunt`). null = farmeo normal.
 type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number> };
 let hunting: HuntState | null = null;
+// Buscador (orden `scout`): recorre su franja del mapa sin pelear y avisa los dorados por HTTP.
+type ScoutState = {
+  hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number;
+  explorer: HuntExplorer; reporter: GoldReporter; sector: number; sectors: number;
+};
+let scouting: ScoutState | null = null;
+// --scout: arranca solo con la invasión, una vez por invasión (se rearma cuando el 0xFD deja de decir activa).
+let scoutArmed = true;
+// --scout: intentos de volver a Lorencia a esperar.
+let scoutHomeTries = 0;
+let scoutHomeNextAt = 0;
+// Con HP bajo y sin pociones el buscador se aleja del monstruo más cercano a esta distancia.
+const SCOUT_FLEE_RANGE = 6;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
 const HUNT_NORMAL_RANGE = 3;
 // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
@@ -2093,8 +2112,52 @@ function currentMode(): BotMode {
   if (!inGameAt || kicked) return 'connecting';
   if (resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
+  if (scouting) return 'scout';
   if (paused) return 'paused';
   return hunting ? 'hunt' : 'farm';
+}
+
+// Avisos del buscador: POST con timeout corto; si el receptor no está, se ignora.
+function publishGold(p: GoldSighting | GoldGone) {
+  try {
+    void fetch(SCOUT_GOLD_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(p),
+      signal: AbortSignal.timeout(1500),
+    }).catch(() => {});
+  } catch {
+    // fetch tiró sincrónico: tampoco importa.
+  }
+}
+
+function startScout(hunt: HuntMap, sector: number, sectors: number, why: string) {
+  if (hunting) stopHunt('empieza la búsqueda');
+  scouting = {
+    hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0,
+    explorer: new HuntExplorer(undefined, undefined, 256, scoutBand(sector, sectors)),
+    reporter: new GoldReporter(charName), sector, sectors,
+  };
+  pinnedSpot = null;
+  pendingWarp = null;
+  paused = false;
+  retarget = true;
+  goalPoint = null;
+  panelLog(`Buscador: ${why}; busco dorados en ${hunt.name} (franja ${sector}/${sectors}) sin pelear, aviso a ${SCOUT_GOLD_URL}.`);
+}
+
+// Termina la búsqueda: queda en pausa (decide el usuario), nunca vuelve a farmear solo.
+function stopScout(reason: string) {
+  if (!scouting) return;
+  const s = scouting;
+  scouting = null;
+  for (const p of s.reporter.clear(Date.now())) publishGold(p);
+  paused = true;
+  retarget = true;
+  goalPoint = null;
+  currentSpot = null;
+  scoutHomeTries = 0;
+  panelLog(`Búsqueda en ${s.hunt.name} terminada (${reason}): quedo en pausa.`);
 }
 
 function stopHunt(reason: string) {
@@ -2114,15 +2177,27 @@ function stopHunt(reason: string) {
 function runPanelCommand(c: PanelCommand): CommandResult {
   switch (c.cmd) {
     case 'pause':
+      if (scouting) {
+        stopScout('orden pause del panel');
+        return { ok: true, msg: 'búsqueda terminada, en pausa' };
+      }
       if (paused) return { ok: true, msg: 'ya estaba en pausa' };
       paused = true;
       retarget = true;
       return { ok: true, msg: 'en pausa: no camino, no peleo ni warpeo (las pociones siguen)' };
     case 'resume':
       if (!paused) return { ok: true, msg: 'no estaba en pausa' };
+      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo: espero la invasión (o mandá scout)' };
       paused = false;
       return { ok: true, msg: `sigo: ${hunting ? `cazando en ${hunting.hunt.name}` : 'farmeo normal'}` };
     case 'farm': {
+      if (SCOUT_ONLY) {
+        const had = !!scouting;
+        stopScout('orden farm del panel');
+        paused = true;
+        return { ok: true, msg: `${had ? 'búsqueda terminada; ' : ''}con --scout no farmeo: quedo en pausa esperando la invasión` };
+      }
+      if (scouting) stopScout('orden farm del panel');
       const was = [hunting && 'cacería cancelada', pinnedSpot && `spot fijo (${pinnedSpot.name}) liberado`, paused && 'pausa levantada'].filter(Boolean);
       if (hunting) stopHunt('orden del panel');
       pinnedSpot = null;
@@ -2133,6 +2208,8 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'warp': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo ni fijo spots' };
+      if (scouting) stopScout('orden warp del panel');
       const spots = WARP_SPOTS.filter((sp) => !ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index));
       const v = validateWarp(c.warp, world.level, spots);
       if (!v.ok) return { ok: false, msg: v.msg };
@@ -2145,15 +2222,30 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'hunt': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no peleo: mandá scout' };
       const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
       if (!ch.ok) return { ok: false, msg: ch.msg };
       if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
+      if (scouting) stopScout('orden hunt del panel');
       hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
       pinnedSpot = null;
       pendingWarp = null;
       paused = false;
       retarget = true;
       return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
+    }
+    case 'scout': {
+      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
+      if (!ch.ok) return { ok: false, msg: ch.msg };
+      if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
+      const sectors = c.sectors ?? 2;
+      const sector = c.sector ?? 1;
+      if (scouting) stopScout('nueva orden scout');
+      startScout(ch.hunt, sector, sectors, 'orden del panel');
+      scoutArmed = false;
+      return { ok: true, msg: `busco dorados en ${ch.hunt.name} (franja ${sector}/${sectors}) sin pelear; corto a los 20 min o cuando no queden` };
     }
   }
 }
@@ -2210,7 +2302,7 @@ function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: inGameAt ? lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: scouting ? `búsqueda ${scouting.hunt.name}` : hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,
@@ -2478,6 +2570,29 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       target = null;
       looting = null;
     }
+    // --scout: arrancar sola la búsqueda con la invasión; mientras, esperar en Lorencia.
+    if (SCOUT_ONLY && !scouting && !resetting) {
+      const nowS = Date.now();
+      if (invasion?.status !== 'active') scoutArmed = true;
+      else if (scoutArmed) {
+        scoutArmed = false;
+        const ch = chooseHuntMap({ invasion, level: world.level });
+        if (ch.ok && (ch.alive ?? 0) > 0) startScout(ch.hunt, SCOUT_SECTOR, SCOUT_SECTORS, `invasión activa (${ch.alive} vivos en ${ch.hunt.name})`);
+        else panelLog(`Buscador: invasión activa pero no salgo (${ch.ok ? `0 vivos en ${ch.hunt.name}` : ch.msg}).`);
+      }
+      if (!scouting && world.map !== 0 && scoutHomeTries < 3 && nowS >= scoutHomeNextAt && world.hp > 0) {
+        scoutHomeTries++;
+        scoutHomeNextAt = nowS + WARP_COOLDOWN_MS;
+        const lor = HUNT_MAPS[0];
+        doing = 'volviendo a Lorencia a esperar la invasión';
+        const spot: Spot = { index: lor.warp, name: 'Lorencia (espera)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
+        if (await decide({ kind: 'travel', what: 'warp a Lorencia a esperar la invasión (--scout)', detail: { warp: lor.warp, map: lor.map, reason: 'scout' } })) {
+          await warpAndWait(spot, false);
+        }
+        continue;
+      }
+      if (!scouting) doing = 'esperando la invasión en Lorencia (--scout)';
+    }
     // En pausa no se hace nada más (las pociones de arriba siguen).
     if (paused) {
       phase = 'wait';
@@ -2493,6 +2608,72 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
       }
       target = null;
+      continue;
+    }
+    // Buscador: nunca pelea (ni golpe ni skill), ni resetea, ni levanta loot.
+    // Corta solo (queda en pausa) con 0 vivos en el mapa, invasión terminada o 20 min.
+    if (scouting) {
+      const sc = scouting;
+      const nowS = Date.now();
+      const stop = shouldStopScout({ invasion, map: sc.hunt.map, since: sc.since, now: nowS });
+      if (stop) {
+        stopScout(stop);
+        target = null;
+        continue;
+      }
+      target = null;
+      looting = null;
+      if (world.map !== sc.hunt.map) {
+        for (const { payload } of sc.reporter.update(world.map, [], nowS)) publishGold(payload);
+        if (nowS < sc.nextWarpAt) {
+          await sleep(500);
+          continue;
+        }
+        if (sc.warpTries >= 3) {
+          stopScout(`no pude llegar a ${sc.hunt.name}`);
+          continue;
+        }
+        sc.warpTries++;
+        sc.nextWarpAt = nowS + WARP_COOLDOWN_MS;
+        doing = `viajando a ${sc.hunt.name} a buscar dorados`;
+        const spot: Spot = { index: sc.hunt.warp, name: `búsqueda ${sc.hunt.name}`, reqLevel: sc.hunt.reqLevel, zen: 0, map: sc.hunt.map };
+        if (await decide({ kind: 'travel', what: `warp a ${sc.hunt.name} para buscar dorados`, detail: { warp: sc.hunt.warp, map: sc.hunt.map, reason: 'scout' } })) {
+          await warpAndWait(spot, false);
+        }
+        continue;
+      }
+      // Avisar los dorados en scope (nuevos, movidos, idos).
+      const golds = [...npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) }));
+      for (const { payload, isNew } of sc.reporter.update(world.map, golds, nowS)) {
+        publishGold(payload);
+        if (isNew && 'x' in payload) panelLog(`Buscador: ${payload.name} en ${sc.hunt.name} (${payload.x},${payload.y}), id ${payload.id}.`);
+      }
+      phase = 'walk';
+      // HP bajo y sin pociones: alejarse del monstruo más cercano (nunca quedarse peleando).
+      if (world.maxHp > 0 && world.hp / world.maxHp < 0.5 && !haveHealingPotions()) {
+        let near: ScopedNpc | null = null;
+        let nd = Infinity;
+        for (const n of npcs.values()) {
+          const d = chebyshev(world.x, world.y, n.x, n.y);
+          if (d < nd) {
+            nd = d;
+            near = n;
+          }
+        }
+        if (near && nd <= SCOUT_FLEE_RANGE) {
+          const dx = world.x - near.x || 1;
+          const dy = world.y - near.y;
+          const fx = Math.min(255, Math.max(0, world.x + Math.sign(dx) * 5));
+          const fy = Math.min(255, Math.max(0, world.y + Math.sign(dy) * 5));
+          doing = `buscando dorados en ${sc.hunt.name}: me alejo de ${monsterName(near.type)} (HP bajo, sin pociones)`;
+          await walkTowards(fx, fy);
+          continue;
+        }
+      }
+      const g = sc.explorer.next(world.x, world.y, nowS);
+      goalPoint = [g.x, g.y];
+      doing = `buscando dorados en ${sc.hunt.name} (franja ${sc.sector}/${sc.sectors})`;
+      await walkTowards(g.x, g.y);
       continue;
     }
     // Cacería: cortar a tiempo (0xFD dice 0 vivos, derrotada, 15 min) y llegar al mapa.
