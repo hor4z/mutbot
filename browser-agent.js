@@ -524,6 +524,24 @@
     });
     window.__partyDeclineHooked = true;
   }
+  // Rechazar no alcanza: el cartel de la invitación queda abierto y frena los controles
+  // unos segundos (usuario: "se queda como colgado cuando le dan party"). Se cierra con su
+  // botón Cancel apenas aparece.
+  window.__closePartyDialog = () => {
+    const msg = [...document.querySelectorAll('body *')].find((el) => el.childElementCount === 0 && /offer to join their party|invita.*grupo/i.test(el.textContent || '') && el.offsetParent !== null);
+    if (!msg) return false;
+    let box = msg;
+    for (let i = 0; i < 6 && box; i++) {
+      const c = [...box.querySelectorAll('*')].find((b) => /^\s*cancel(ar)?\s*$/i.test(b.textContent || '') && b.offsetParent !== null);
+      if (c) { for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) c.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true })); return true; }
+      box = box.parentElement;
+    }
+    return false;
+  };
+  if (!window.__partyCloseHooked) {
+    __eventBus.on('PartyRequest', () => { let tries = 0; const t = window.setInterval(() => { if (window.__closePartyDialog() || ++tries > 20) window.clearInterval(t); }, 150); });
+    window.__partyCloseHooked = true;
+  }
   ai.densityTimer = setInterval(() => {
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
     for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying && hpOf(e) > 0) ai.noteHot(w.mapIndex, e.transform.pos, ai.valueOf(e) * ai.cfg.densityWeight);
