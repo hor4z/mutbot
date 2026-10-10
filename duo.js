@@ -76,8 +76,11 @@
       const h = read(leaderName); if (!h) return;
       // Si el líder está en un mapa que el seguidor no puede entrar (nivel), esperar en
       // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
-      const canEnter = h.spot != null && (REQ[h.spot] ?? 0) <= pd.level;
-      if (w.mapIndex !== h.map) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter) S.warpCommandRequest(h.spot); else if (w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
+      // window.__followMaxReq: tope de mapa por seguridad (Melu murió 5 veces en Arena 3 sin
+      // guantes/botas/Mana Shield; Arena 4 es peor). Con 200 sigue hasta Arena 3.
+      const req = REQ[h.spot] ?? 0;
+      const canEnter = h.spot != null && req <= pd.level && req <= (window.__followMaxReq ?? 999);
+      if (w.mapIndex !== h.map || !canEnter) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter && w.mapIndex !== h.map) S.warpCommandRequest(h.spot); else if (!canEnter && w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
       // En el MISMO tile que el líder ("debajo de su espada", usuario), revisando 4 veces por segundo.
       const P0 = pe.transform.pos;
       if (Math.round(P0.x) !== h.x || Math.round(P0.z) !== h.z) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
