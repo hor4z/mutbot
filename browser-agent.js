@@ -84,6 +84,8 @@
       // mapa se queda sin monstruos. Probar mapas "a ver si rinden más" costaba más
       // en warps y cargas de lo que ganaba (el usuario lo vio en pantalla).
       fixedRoute: true,
+      // Plan B si todas las Devias están llenas de gente (nivel 50-99): Arena 1.
+      crowdFallback: [[1, 'Arena', 50]],
       home: { 0: { x: 135, z: 128 } },
       scoutOrder: ['up', 'right', 'left', 'down'],
     },
@@ -183,6 +185,7 @@
       const rivalsHere = rivalsPos(w).filter((q) => dist(q, cp) <= c.campRadius + 2).length;
       if (rivalsHere >= c.crowdRivals) cp.crowdSince ??= now; else cp.crowdSince = null;
       const crowded = cp.crowdSince && now - cp.crowdSince > c.crowdMs;
+      if (crowded) { ai.crowdLeaves = [...(ai.crowdLeaves ?? []).filter((t) => now - t < 120000), now]; }
       if (poor || empty || crowded) { L(`dejo el campamento (${cp.x},${cp.z}): ${poor ? `rinde ${Math.round(rate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos'}`); ai.leftCamps = [...ai.leftCamps.slice(-6), { ...cp, at: now }]; ai.camp = null; }
     }
     if (!ai.camp && ai.arrivalPending) return ai.freePick(w, P, { ...c, scan: 6 });
@@ -328,7 +331,22 @@
       const tier = Math.max(...eligible.map((s) => s[2]));
       const newTier = tier > ai.tierSeen;
       const mapDead = now - ai.mapNoMonsterSince > c.giveUpMapMs;
+      // Competencia: 2 campamentos abandonados por gente en 2 min = spot lleno. Pasar a otra
+      // entrada del mismo tramo (Devias 2/3/4); si todas estuvieron llenas hace poco y el
+      // nivel lo permite, plan B (Arena 1). Pedido del usuario.
+      const crowdedSpot = (ai.crowdLeaves ?? []).filter((t) => now - t < 120000).length >= 2;
       const poor = !c.fixedRoute && run && now - run.start >= c.evalMs && (kpm === 0 || kpm < bestKnown * c.minFracOfBest);
+      if (crowdedSpot && now - ai.lastWarp > 15000) {
+        ai.crowdedAt = { ...(ai.crowdedAt ?? {}), [ai.spot]: now }; ai.crowdLeaves = [];
+        const fresh = eligible.filter((s) => s[2] === tier && s[0] !== ai.spot && now - (ai.crowdedAt?.[s[0]] ?? 0) > 300000);
+        const fb = c.crowdFallback.find((f) => pd.level >= f[2] && pd.level < 100);
+        const to = fresh[0] ?? (fb && fb[0] !== ai.spot ? fb : null);
+        if (to) {
+          ai.lastWarp = now; ai.spot = to[0]; ai.target = null; w.attackTarget = null; ai.explore = null; ai.camp = null; ai.mapNoMonsterSince = ai.lastMonster = now; ai.scoutIdx = 0;
+          ai.spotRun = { spot: to[0], start: now + 8000, kills0: ai.kills }; ai.arrival = null; ai.arrivalPending = now;
+          S.warpCommandRequest(to[0]); L(`warp → ${to[1]} (mucha competencia)`); return;
+        }
+      }
       if (now - ai.lastWarp > 15000 && eligible.length && (!run || newTier || mapDead || poor)) {
         ai.tierSeen = tier;
         const others = eligible.filter((s) => s[0] !== ai.spot);
