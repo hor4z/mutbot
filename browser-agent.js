@@ -41,7 +41,6 @@
       resetLevel: 400, statBatch: 50, build: [['str', 50], ['ene', 33], ['vit', 17]],
       // Ruta del usuario: Lorencia → Devias 2/3/4 (Devias 1 no sirve) → Arena 1-4.
       spots: [[2, 'Lorencia', 10], [5, 'Devias 2', 20], [6, 'Devias 3', 20], [7, 'Devias 4', 20], [1, 'Arena', 50], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]],
-      // Un spot que tras evalMs rinde menos de minKpm kills/min se abandona.
       // Spot = exp/min. Tras evalMs, si rinde menos que minFracOfBest del mejor conocido, se cambia.
       evalMs: 120000, minFracOfBest: 0.5, respawnWaitMs: 30000,
       home: { 0: { x: 135, z: 128 } },
@@ -58,10 +57,8 @@
   const walkable = (w, x, z) => x > 3 && z > 3 && x < 252 && z < 252 && w.isWalkable(x, z);
   ai.moveTo = (pe, p) => { const m = pe.playerMoveTo; m.point.x = p.x; m.point.y = p.z; m.handled = false; m.sendToServer = true; };
   const cell = (p) => `${Math.floor(p.x / 12)},${Math.floor(p.z / 12)}`;
-  // n = suma de vida máxima de lo visto ahí: un spot vale por lo que rinde, no por cuántos bichos tiene.
+  // n = exp acumulada en la celda: un spot vale por lo que rinde, no por cuántos bichos tiene.
   ai.noteHot = (map, p, value = 1) => { const h = (ai.hot[map] ??= {}); const c = (h[cell(p)] ??= { x: Math.round(p.x), z: Math.round(p.z), n: 0, emptyAt: 0 }); c.n += value; c.emptyAt = 0; };
-  // Valor de un monstruo = su vida máxima (el cliente no expone nivel ni exp).
-  // En Arena la entrada tiene bichos de 30-60 HP que no rinden; adentro, 120-220+.
   // Lo que importa es la exp por kill para MI nivel: se aprende de experienceGained
   // ({added, killedNetId}; kills grandes llegan partidos en tramos de 65535).
   // Sin dato todavía, la vida máxima sirve de estimación.
@@ -152,7 +149,7 @@
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
       if (pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
       if (pd.currentMP / pd.maxMP < c.mpPot && now - ai.lastPotion > 900) { const s = potionSlot(4, 6); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; return; } }
-      // Spots: medir kills/min del actual y cambiar si no conviene.
+      // Spots: medir exp/min del actual y cambiar si no conviene.
       const run = ai.spotRun;
       const runMin = run ? (now - run.start) / 60000 : 0;
       const kpm = run && runMin > 0 ? ai.expLog.filter((x) => x.t >= run.start).reduce((a, x) => a + x.added, 0) / runMin : 0;
