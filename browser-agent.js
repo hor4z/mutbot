@@ -420,6 +420,19 @@
     if (best) { ai.netInfo.set(best.netId, { type: best.npcType, x: best.transform.pos.x, z: best.transform.pos.z }); return best; }
     return plannedPick(w, P, c);
   };
+  // Invitaciones a party: rechazar siempre (pedido del usuario). PartyRequest trae el
+  // id del que invita en el byte 3 (BE); la respuesta es PartyInviteResponse C1 06 41
+  // <aceptado=0> <id BE>. Un respiro humano antes de contestar.
+  if (!window.__partyDeclineHooked) {
+    __eventBus.on('PartyRequest', (raw) => {
+      try {
+        const dv = raw instanceof DataView ? raw : new DataView(raw.buffer ?? raw);
+        const id = dv.getUint16(3, false) & 0x7fff;
+        setTimeout(() => { S.sendToGS(new DataView(Uint8Array.from([0xc1, 0x06, 0x41, 0x00, id >> 8, id & 0xff]).buffer)); window.__ai?.L?.(`party rechazada (de #${id})`); }, 600 + Math.random() * 900);
+      } catch (e) { window.__ai?.L?.('error al rechazar party: ' + e.message); }
+    });
+    window.__partyDeclineHooked = true;
+  }
   ai.densityTimer = setInterval(() => {
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
     for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying && hpOf(e) > 0) ai.noteHot(w.mapIndex, e.transform.pos, ai.valueOf(e) * ai.cfg.densityWeight);
