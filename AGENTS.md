@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts + panel-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -57,7 +57,10 @@ pasó una vez y costó tres intentos de debugging.
 | Archivo | Qué es |
 |---|---|
 | `headless-bot.ts` | El bot. Login, mundo, loop autónomo, economía, capa de decisión. |
-| `ws-server.ts` | Telemetría por WebSocket (solo lectura), detrás de `--ws-port`. |
+| `ws-server.ts` | Server del panel detrás de `--ws-port` (solo 127.0.0.1): WebSocket de estado + órdenes de lista cerrada, `panel.html` y `/assets/`. Ver "Panel externo". |
+| `panel-protocol.ts` | Contrato bot ↔ panel (tipos, `PANEL_COMMANDS`, `isPanelCommand`). |
+| `panel-logic.ts` | Lado bot del panel en lógica pura: 0x91, 0xFD, tickets, ciclos, cacería de dorados. |
+| `panel-tests.ts` | Tests offline de `panel-logic.ts`, `isPanelCommand` y la parte pura de `ws-server.ts`. |
 | `packet-tests.ts` | Tests offline de parsers y builders. Sin red. |
 | `learning.ts` | Capa de aprendizaje (lógica pura): medición por spot, bandit UCB1, persistencia. |
 | `learning-tests.ts` | Tests offline de `learning.ts` (usa un dir temporal, sin red). |
@@ -121,13 +124,11 @@ corrida larga solo quedaba la última decisión). Ahora usa `appendFile` de
 `node:fs/promises` — mismo JSON, mismo fail-safe, pero appendea de verdad.
 
 **Telemetría por WebSocket (`--ws-port`, `ws-server.ts`):** si se pasa, el bot
-levanta un WebSocket de **solo lectura** que manda `hello`/`history` al
-conectar, y después `state` (snapshot de `world`, ~1/seg) y `decision` (cada
-vez que `decide()` corre). Probado contra el server local: `hello`/`history`/
-`state` llegan bien a un cliente de prueba. **No tiene canal de control**
-(aprobar/rechazar desde afuera) — `decisionHandler` sigue aprobando todo por
-defecto, sin cambios. Conectar un control real (que una UI apruebe/rechace
-`autoOk:false` en vivo) queda pendiente, ver la sección de abajo.
+levanta un WebSocket que manda `hello`/`history` al conectar, y después `state`
+(snapshot de `world`, ~1/seg), `panel-state` y `decision` (cada vez que
+`decide()` corre). Acepta solo las órdenes de lista cerrada del panel (ver
+"Panel externo"); **no** hay canal para aprobar/rechazar decisiones: el
+`decisionHandler` sigue aprobando todo por defecto. Eso queda pendiente.
 
 **Loop autónomo — exploración (`explore.ts`, portado de un agente que juega
 bien dentro del cliente web):**
@@ -745,7 +746,7 @@ Estas están **verificadas como problemas**, no como sospechas:
   por su cuenta.
 - **No hay inversión de master skill points**, que era parte del objetivo original.
   Falta definir el build y los requisitos.
-- **El inventario no trackea cantidad.** Solo `slot/group/num`, así que no puede
+- **El inventario no trackea cantidad.** Solo `slot/group/num` (y nivel/excelente para el panel), así que no puede
   razonar sobre stack sizes ni decidir bien qué guardar.
 
 ## Orden sugerido para retomar
@@ -823,6 +824,86 @@ el estado real del server, que es más confiable que cualquier reimplementación
 packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
 camino corto. No se usa ahora porque no acepta control externo: las decisiones
 quedan fijas en el C#.
+## Panel externo
+
+`panel.html` (lo mantiene otra persona; no se toca desde el bot) se conecta al
+WebSocket del bot y **todo lo saca del protocolo del juego**: anda igual sin
+navegador ni cliente web. El contrato está en `panel-protocol.ts`, la lógica pura
+en `panel-logic.ts` y el server en `ws-server.ts`.
+
+```bash
+# credenciales por env (MUBOT_USER / MUBOT_PASS / MUBOT_CHAR, de .env), nunca en el código
+bun run bot --auto-seconds 0 --ws-port 8787
+# otra cuenta: su propio archivo de env (está en .gitignore)
+bun --env-file=.env.melu run headless-bot.ts --auto-seconds 0 --ws-port 8788
+```
+
+Abrir `http://127.0.0.1:8787/panel`. **Solo 127.0.0.1**: el server no escucha en
+otras interfaces y rechaza (403) un WebSocket cuyo `Origin` no sea
+`http://127.0.0.1:<puerto>` o `http://localhost:<puerto>` (sin esto, cualquier
+página abierta en el navegador podía mandarle órdenes al bot). Clientes sin
+`Origin` (un script local) se aceptan. No exponerlo con ngrok ni similares.
+
+**HTTP (mismo puerto, solo GET):** `/` y `/panel` sirven `panel.html` de la raíz
+(404 si no está). `/assets/<path>` sirve modelos y texturas para el 3D desde
+`MU_ASSETS` (default `~/self/mu/public/game-assets`): solo `.glb .jpg .png .webp
+.OZT .tga .ozj` (sin importar mayúsculas), `Cache-Control: max-age=3600`, la
+ruta se resuelve y tiene que quedar adentro del directorio (path traversal → 404).
+
+**WebSocket, bot → panel:** `hello` (`botVersion`, `commands`), `history`
+(decisiones), `panel-state` (cada 1 s), `log` (órdenes, cambios de modo,
+cacería), `command-result`, y los viejos `state`/`decision`.
+
+`panel-state` sale de lo que el bot ya trackea:
+- `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
+  (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
+  primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).
+- `mode` (`farm`/`hunt`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
+  (frase corta que pone el loop).
+- `exp.perMin1`/`perMin5` del `ExpLog`; `cycle`/`cycles`/`resetsPerDay` del
+  `CycleLog` (1440 / promedio de los últimos 5 ciclos sin tag).
+- `events`: el bot pregunta `C1 05 91 <tipo> 01` (1 DS, 2 BC, 4 CC) al entrar al
+  mundo y después cada ~60 s por evento, **nunca más de una pregunta cada 5 s**,
+  y parsea la respuesta (`MiniGameOpeningState`). Solo con `--ws-port`.
+- `invasion`: el 0xFD propio del server. No está en `packets/routes.ts`:
+  `net/socket.ts` emite todo code desconocido como `'UnroutedPacket'` (crudo) y
+  el bot lo parsea (ver EVENTOS.md). `nextAt` = próximo hh:50 local.
+- `tickets` (14/19 +N, 13/18 +N, 13/29, 14/11), `equipment` (slots 0-11 con
+  nivel y excelente; el inventario ahora guarda el +N del ítem), `trail`
+  (60 posiciones, una cada 2 s, se borra al cambiar de mapa), `camp` (punto al
+  que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
+
+**Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
+acepta solo las 5 órdenes **con sus campos exactos** (un campo de más = rechazo);
+mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
+`command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
+el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
+- `pause` / `resume`: en pausa el loop no camina, no pelea, no warpea ni
+  resetea; las pociones siguen.
+- `farm`: vuelve a la ruta normal (cancela la cacería, suelta el spot fijo y la pausa).
+- `warp {warp}`: solo índices de `WARP_SPOTS` (y de `--spots` si se pasó), con
+  su nivel; viaja con `warpTo` y el spot **queda fijo** (ni la ruta ni el
+  hambre lo cambian; si muere vuelve ahí) hasta `farm`.
+- `hunt {map?}`: cacería de dorados. Mapa pedido o el de más vivos según el
+  último 0xFD al que pueda entrar: Lorencia (warp 2), Noria (3, nivel 10),
+  Devias (6, nivel 20). Warpea (sin medir para el aprendizaje), recorre el mapa en
+  celdas de 25 tiles (la sin visitar más cercana; **el headless no tiene la
+  grilla de caminables**, así que una celda a la que no llega en 45 s se da por
+  visitada), ataca siempre al dorado más cercano en scope (nombre con
+  "Gold"/"Golden" en `data/monsters.json`) y a los comunes solo a ≤ 3 tiles. La
+  Box of Luck la levanta el loot de siempre. **Corta sola** cuando un 0xFD
+  posterior al inicio dice 0 vivos en ese mapa (o el mapa ya no figura), la
+  invasión pasa a derrotada, o a los 15 min; vuelve a farmear. Cazando no resetea.
+- **Bug arreglado de paso:** los dorados grandes (Golden Dragon, Titan, Soldier,
+  Vepar...) tienen `Move` > 50 y el filtro de `MONSTER_TYPE_NUMBERS` los
+  descartaba: el bot no los veía. Ahora se suman aparte (`GOLDEN_TYPES`).
+
+**Sin verificar en vivo:** todo lo de arriba está probado offline
+(`panel-tests.ts`) y el server HTTP/WS con un cliente local, pero no contra el
+server real: falta confirmar que el server contesta 0x91 a esta pregunta, el
+layout del 0xFD, el `classId` y el nivel del ítem en 0.97d, y una cacería
+completa.
+
 ## Separar dúo y cacería del farmeo (2026-10-10)
 
 - `duo.js` y `hunter.js` son opcionales y están en pausa. `browser-agent.js` y `tuner.js` no dependen de ellos.

@@ -54,6 +54,8 @@ export type PanelState = {
   doing: string;
   char: {
     name: string; cls?: string; level: number; resets: number | null;
+    /** número de clase crudo del protocolo: bits 3-7 del primer byte de apariencia de CharacterList */
+    classId?: number;
     hp: [number, number]; mp: [number, number];
     stats: { str: number; agi: number; vit: number; ene: number; cmd?: number };
     points: number; zen: number | null;
@@ -69,7 +71,15 @@ export type PanelState = {
   /** tickets de eventos en el inventario, ej. { "Devil's Invitation +4": 1 } */
   tickets: Record<string, number>;
   nearby: { monsters: number; players: number };
+  /** slots de equipo 0-11 ocupados (del inventario que trackea el bot) */
+  equipment?: EquippedItem[];
+  /** últimas ~60 posiciones (una cada 2 s), solo del mapa actual */
+  trail?: [number, number][];
+  /** campamento / punto al que va el bot ahora, si tiene uno */
+  camp?: [number, number] | null;
 };
+
+export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean };
 
 /** Órdenes que acepta el bot. Cualquier otra se rechaza. */
 export type PanelCommand =
@@ -93,10 +103,17 @@ export type PanelServerMessage =
 /** Mensaje panel → bot. */
 export type PanelClientMessage = { type: 'command'; id: number; command: PanelCommand };
 
+// Campos permitidos por orden: una orden con campos de más se rechaza entera.
+const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'],
+};
+
 export function isPanelCommand(v: unknown): v is PanelCommand {
-  if (!v || typeof v !== 'object') return false;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const c = v as Record<string, unknown>;
-  if (!PANEL_COMMANDS.includes(c.cmd as never)) return false;
+  if (typeof c.cmd !== 'string' || !PANEL_COMMANDS.includes(c.cmd as never)) return false;
+  const allowed = COMMAND_KEYS[c.cmd as (typeof PANEL_COMMANDS)[number]];
+  if (Object.keys(c).some((k) => !allowed.includes(k))) return false;
   if (c.cmd === 'warp') return Number.isInteger(c.warp) && (c.warp as number) >= 0 && (c.warp as number) < 256;
   if (c.cmd === 'hunt') return c.map === undefined || (Number.isInteger(c.map) && (c.map as number) >= 0 && (c.map as number) < 256);
   return true;

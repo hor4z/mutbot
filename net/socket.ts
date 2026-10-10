@@ -8,8 +8,9 @@
  * del evento que emite tiene que ser idéntico al del cliente: varias trampas de
  * AGENTS.md dependen de eso (codes compartidos, eventos "con otro nombre").
  *
- * Diferencia: un code que no está en la tabla se descarta con un log, en vez de
- * tirar una excepción dentro del handler de mensajes.
+ * Diferencia: un code que no está en la tabla se emite crudo como
+ * 'UnroutedPacket' y se descarta con un log (salvo 0xFD, que es esperado), en
+ * vez de tirar una excepción dentro del handler de mensajes.
  */
 import { EventBus } from './eventBus';
 import { SimpleModulusDecryptor } from './encryption';
@@ -78,6 +79,13 @@ export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
     const pDef = routesByCode[packetCode]?.find(p => p.SubCode == null || p.SubCode === subCode);
 
     if (!pDef) {
+      // Packets propios del server que la tabla no conoce (ej. 0xFD, invasión
+      // dorada): se emiten crudos como 'UnroutedPacket' para quien los quiera.
+      EventBus.emit('UnroutedPacket', packet);
+      if (packetCode === 0xfd) {
+        removePacketAndGoNext(length);
+        return;
+      }
       console.error(`${LOG_PREFIX}no packet: 0x` + byteToString(packetCode));
       removePacketAndGoNext(length);
       return;

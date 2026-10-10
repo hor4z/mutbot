@@ -56,8 +56,9 @@
  * Control / UI:
  *   --decision-log r.jsonl  appendea cada decisión como JSONL (una por línea)
  *                           para que una UI pueda tail-earla.
- *   --ws-port 8787          telemetría por WebSocket (solo lectura, ver
- *                           ws-server.ts): estado + decisiones en vivo.
+ *   --ws-port 8787          panel en http://127.0.0.1:8787/panel (ver
+ *                           ws-server.ts y AGENTS.md, "Panel externo"): estado
+ *                           cada 1 s, decisiones y órdenes de lista cerrada.
  */
 import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -73,7 +74,12 @@ import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
 import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
-import { startStatusServer, type StatusServer } from './ws-server';
+import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
+import {
+  EVENT_KEYS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldenTypes, mapName,
+  parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt, toPanelCycle, validateWarp, type HuntMap,
+} from './panel-logic';
+import type { BotMode, EventKey, EventTimer, Invasion, PanelCommand, PanelState } from './panel-protocol';
 import {
   SimpleModulusEncryptor,
   Xor32Encryptor,
@@ -138,6 +144,7 @@ import itemsData from './data/items.json';
 // atacan. Antes de este filtro el bot atacaba a Amy y no lograba ninguna kill.
 type MonsterRow = {
   Numb: number;
+  Name: string;
   Move: number;
   AttType: number;
   HP: number;
@@ -151,11 +158,18 @@ type MonsterRow = {
 // aplica isMonsterType() (explore.ts): fuera de 200-299 (NPC de pueblo/servicio
 // del 0.97) Y (en este set O TypeNumber >= 300, los custom de este server, ej.
 // 690/692, que monsters.json no tiene).
-const MONSTER_TYPE_NUMBERS = new Set(
-  (monstersData as MonsterRow[])
+//
+// Los dorados de la invasión (Golden Dragon Move 88, Golden Titan 77, ...) se
+// pasan del tope de Move: sin sumarlos aparte el bot no los veía nunca.
+const GOLDEN_TYPES = goldenTypes(monstersData as MonsterRow[]);
+const MONSTER_TYPE_NUMBERS = new Set([
+  ...(monstersData as MonsterRow[])
     .filter((m) => m.AttType !== 0 && m.Move > 0 && m.Move <= 50 && m.HP > 0)
     .map((m) => m.Numb),
-);
+  ...GOLDEN_TYPES,
+]);
+// Nombre por TypeNumber (para el panel y los logs de la cacería).
+const MONSTER_NAMES = new Map<number, string>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Name]));
 
 // Vida máxima por TypeNumber. El cliente web la lee del attributeSystem del
 // monstruo (`maxHealth`); en el protocolo headless no llega en ningún packet
@@ -256,7 +270,7 @@ type StatName = 'str' | 'agi' | 'vit' | 'ene';
 const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
 const STAT_INDEX: Record<StatName, number> = { str: 0, agi: 1, vit: 2, ene: 3 };
 
-type ItemSlot = { slot: number; group: number; num: number };
+type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean };
 type SkillInfo = { index: number; number: number; level: number };
 
 const world = {
@@ -285,6 +299,8 @@ const world = {
   masterLevel: 0,
   masterLevelUpPoints: 0,
   masterSeen: false,
+  // Clase cruda del CharacterList (ver parseCharacterList097); null = no se sabe.
+  classId: null as number | null,
 };
 
 // Servidor de telemetría opcional (--ws-port). Solo lectura: ver ws-server.ts.
@@ -466,7 +482,7 @@ function toBytes(data: any): Uint8Array {
 function parseCharacterList097(raw: any) {
   const bytes = toBytes(raw);
   const count = bytes[4];
-  const out: Array<{ SlotIndex: number; Name: string; Level: number }> = [];
+  const out: Array<{ SlotIndex: number; Name: string; Level: number; ClassId: number | null }> = [];
 
   for (let i = 0; i < count; i++) {
     const base = CHAR_LIST_097_HEADER + i * CHAR_DATA_097_LENGTH;
@@ -477,6 +493,10 @@ function parseCharacterList097(raw: any) {
       SlotIndex: bytes[base],
       Name: new TextDecoder().decode(nul === -1 ? nameBytes : nameBytes.subarray(0, nul)),
       Level: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(base + 12, true),
+      // Apariencia desde [15] (slot 1 + nombre 10 + 1 + nivel 2 + estado 1): la
+      // clase va en los 5 bits altos del primer byte, como deserializeAppearance
+      // del cliente (GetByteValue(b, 5, 3)). SIN VERIFICAR en 0.97d: es solo para el panel.
+      ClassId: (bytes[base + 15] >> 3) & 0x1f,
     });
   }
   return out;
@@ -514,10 +534,13 @@ function parseCharacterInformation097(raw: any) {
 // OpenMU para estos packets): byte[0] = num, byte[5] nibble alto = group.
 const ITEM_DATA_LENGTH = 12;
 
-function parseItemData097(itemData: Uint8Array): { group: number; num: number } {
+// Nivel del ítem (+N): bits 3-6 del byte 1 (LevelMask 0x78 del itemSerializer).
+function parseItemData097(itemData: Uint8Array): { group: number; num: number; level: number; excellent: boolean } {
   return {
     num: itemData[0],
     group: (itemData[5] & 0xf0) >> 4,
+    level: (itemData[1] & 0x78) >> 3,
+    excellent: isExcellentItemData(itemData),
   };
 }
 
@@ -530,8 +553,8 @@ function parseInventory097(raw: any): ItemSlot[] {
   for (let i = 0; i < count; i++) {
     const base = 6 + i * (1 + ITEM_DATA_LENGTH);
     if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
-    const { group, num } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
-    out.push({ slot: bytes[base], group, num });
+    const { group, num, level, excellent } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
+    out.push({ slot: bytes[base], group, num, level, excellent });
   }
   return out;
 }
@@ -558,8 +581,8 @@ function parseStoreItemList097(raw: any): ShopItem[] {
 function parseItemAdded097(raw: any): ItemSlot | null {
   const bytes = toBytes(raw);
   if (bytes.length < 4 + ITEM_DATA_LENGTH) return null;
-  const { group, num } = parseItemData097(bytes.subarray(4, 4 + ITEM_DATA_LENGTH));
-  return { slot: bytes[3], group, num };
+  const { group, num, level, excellent } = parseItemData097(bytes.subarray(4, 4 + ITEM_DATA_LENGTH));
+  return { slot: bytes[3], group, num, level, excellent };
 }
 
 // SkillListUpdate (F3/11): count en byte 4 (0xFE = agregó una, 0xFF = quitó una).
@@ -861,6 +884,7 @@ async function selectCharacter(charListBytes: any) {
     mana: info.mana,
     maxMana: info.maxMana,
     level: target.Level ?? world.level,
+    classId: target.ClassId ?? null,
     levelUpPoints: info.levelUpPoints,
     stats: { str: info.str, agi: info.agi, vit: info.vit, ene: info.ene },
   });
@@ -870,6 +894,11 @@ async function selectCharacter(charListBytes: any) {
   // Retomar desde el estado real: si ya está en el mapa del tramo, la ruta lo
   // adopta sin warpear (chooseFixedRoute, 'adopt').
   canAdopt = true;
+  lastMoney = info.money;
+  inGameAt = Date.now();
+  charName = target.Name;
+  // El panel pregunta las aperturas de eventos (0x91) apenas entra al mundo.
+  scheduleEventPolls(inGameAt);
   onMapArrival();
   return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
 }
@@ -1058,7 +1087,11 @@ type DecisionKind =
   | 'stat'        // subir un punto de atributo
   | 'skill'       // usar una skill
   | 'travel'      // viajar a otro mapa
-  | 'engage';     // pelear a un objetivo
+  | 'engage'      // pelear a un objetivo
+  // Solo registro (no piden veredicto, ver logDecision): órdenes del panel y
+  // cambios de modo. Una pausa no puede quedar rechazada por el handler.
+  | 'command'     // orden recibida del panel (panel-protocol.ts)
+  | 'mode';       // cambio de modo (farm/hunt/paused/...)
 
 type Decision = {
   kind: DecisionKind;
@@ -1080,8 +1113,8 @@ export function setDecisionHandler(h: (d: Decision) => Verdict | Promise<Verdict
 // Propone una decisión y devuelve si se puede actuar. Nunca lanza: si el
 // handler falla, la decisión se rechaza (fail-safe: no gastamos recursos sin
 // permiso).
-async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promise<boolean> {
-  const full: Decision = { autoOk: true, ...d };
+// Escribe una decisión al JSONL y al WebSocket, sin pedir veredicto.
+async function logDecision(full: Decision): Promise<void> {
   const entry = { seq: ++decisionSeq, at: new Date().toISOString(), ...full };
   if (decisionLogPath) {
     // appendFile (no Bun.write: ese sobrescribe el archivo entero en cada llamada,
@@ -1090,6 +1123,11 @@ async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promi
     await appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
   }
   statusServer?.broadcastDecision(entry);
+}
+
+async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promise<boolean> {
+  const full: Decision = { autoOk: true, ...d };
+  await logDecision(full);
   let verdict: Verdict;
   try {
     verdict = await decisionHandler(full);
@@ -1849,6 +1887,14 @@ type SpotSignals = { mapDead?: boolean; crowded?: boolean };
 async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
   if (now - lastWarpAt < WARP_COOLDOWN_MS) return false;
+  // Spot fijado por la orden `warp` del panel: ni la ruta ni el bandit lo
+  // cambian hasta la orden `farm`. Si murió o lo sacaron, vuelve ahí.
+  if (pinnedSpot) {
+    if (currentSpot?.index === pinnedSpot.index) return false;
+    const pin = pinnedSpot;
+    if (!(await decide({ kind: 'travel', what: `volver al spot fijado por el panel: ${pin.name} (${zenTxt(pin)})`, detail: { warp: pin.index, reason: 'panel' } }))) return false;
+    return warpAndWait(pin);
+  }
   let best: Spot | undefined | null;
   let what: string;
   let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
@@ -1938,6 +1984,16 @@ async function doReset(): Promise<boolean> {
     autoOk: false,
   });
   if (!ok) return false;
+  resetting = true;
+  try {
+    return await doResetSteps();
+  } finally {
+    resetting = false;
+  }
+}
+
+async function doResetSteps(): Promise<boolean> {
+  doing = `reseteando en nivel ${world.level}`;
   await investStatPoints(true);
   // Lo medido hasta acá es del reset viejo: cortarlo antes de ir a Lorencia
   // (el viaje a resetear no es farmeo y no se mide).
@@ -1958,6 +2014,7 @@ async function doReset(): Promise<boolean> {
     return false;
   }
   log('Reset hecho. Vuelvo a entrar con el personaje.');
+  inGameAt = 0;
   world.npcs.clear();
   world.townNpcs.clear();
   currentSpot = null;
@@ -1982,6 +2039,231 @@ async function doReset(): Promise<boolean> {
   await sleep(2500);
   await investStatPoints(true);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Panel (panel-protocol.ts, ws-server.ts): modo, órdenes de lista cerrada y el
+// estado que se manda cada 1 s. Todo sale de lo que el bot ya trackea de los
+// packets: funciona igual sin navegador.
+// ---------------------------------------------------------------------------
+// Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
+let paused = false;
+// Cacería de dorados (orden `hunt`). null = farmeo normal.
+type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number> };
+let hunting: HuntState | null = null;
+// Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
+const HUNT_NORMAL_RANGE = 3;
+// Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
+let pendingWarp: Spot | null = null;
+let pinnedSpot: Spot | null = null;
+let resetting = false;
+// 0 = fuera del mundo (conectando, en la selección de personaje).
+let inGameAt = 0;
+let charName = CHAR_NAME;
+// El loop descarta su objetivo en el próximo tick (cambio de modo).
+let retarget = false;
+// Frase corta de lo que hace ahora (la pone el loop).
+let doing = 'conectando';
+// Punto al que va ahora (campamento, salida, celda de la cacería).
+let goalPoint: [number, number] | null = null;
+// Última invasión (0xFD) y aperturas de eventos (0x91).
+let invasion: Invasion | null = null;
+const eventTimers = new Map<EventKey, EventTimer>();
+const nextEventPollAt = new Map<EventKey, number>();
+// Rastro para el minimapa: una posición cada 2 s, solo del mapa actual.
+const TRAIL_MAX = 60;
+const trail: [number, number][] = [];
+let trailMap = -1;
+let lastTrailAt = 0;
+
+const isGolden = (n: ScopedNpc) => GOLDEN_TYPES.has(n.type);
+const monsterName = (type: number) => MONSTER_NAMES.get(type) ?? `tipo ${type}`;
+
+// Log a consola y al panel.
+function panelLog(text: string) {
+  log(text);
+  statusServer?.broadcastLog(text);
+}
+
+function currentMode(): BotMode {
+  if (!inGameAt || kicked) return 'connecting';
+  if (resetting) return 'resetting';
+  if (world.maxHp > 0 && world.hp <= 0) return 'dead';
+  if (paused) return 'paused';
+  return hunting ? 'hunt' : 'farm';
+}
+
+function stopHunt(reason: string) {
+  if (!hunting) return;
+  const h = hunting;
+  hunting = null;
+  retarget = true;
+  goalPoint = null;
+  // El spot de la cacería no es de la ruta: que la ruta fija decida (adopta el
+  // mapa si es el del tramo, si no warpea).
+  endStint();
+  currentSpot = null;
+  canAdopt = true;
+  panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
+}
+
+function runPanelCommand(c: PanelCommand): CommandResult {
+  switch (c.cmd) {
+    case 'pause':
+      if (paused) return { ok: true, msg: 'ya estaba en pausa' };
+      paused = true;
+      retarget = true;
+      return { ok: true, msg: 'en pausa: no camino, no peleo ni warpeo (las pociones siguen)' };
+    case 'resume':
+      if (!paused) return { ok: true, msg: 'no estaba en pausa' };
+      paused = false;
+      return { ok: true, msg: `sigo: ${hunting ? `cazando en ${hunting.hunt.name}` : 'farmeo normal'}` };
+    case 'farm': {
+      const was = [hunting && 'cacería cancelada', pinnedSpot && `spot fijo (${pinnedSpot.name}) liberado`, paused && 'pausa levantada'].filter(Boolean);
+      if (hunting) stopHunt('orden del panel');
+      pinnedSpot = null;
+      pendingWarp = null;
+      paused = false;
+      return { ok: true, msg: `farmeo normal por la ruta${was.length ? ` (${was.join(', ')})` : ''}` };
+    }
+    case 'warp': {
+      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      const spots = WARP_SPOTS.filter((sp) => !ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index));
+      const v = validateWarp(c.warp, world.level, spots);
+      if (!v.ok) return { ok: false, msg: v.msg };
+      if (hunting) stopHunt('orden warp del panel');
+      paused = false;
+      pendingWarp = v.spot;
+      pinnedSpot = v.spot;
+      return { ok: true, msg: `voy a ${v.spot.name} (warp ${v.spot.index}); queda fijo hasta la orden farm` };
+    }
+    case 'hunt': {
+      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
+      if (!ch.ok) return { ok: false, msg: ch.msg };
+      if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
+      hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
+      pinnedSpot = null;
+      pendingWarp = null;
+      paused = false;
+      retarget = true;
+      return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
+    }
+  }
+}
+
+async function handlePanelCommand(c: PanelCommand): Promise<CommandResult> {
+  const r = runPanelCommand(c);
+  panelLog(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`);
+  await logDecision({ kind: 'command', what: `${c.cmd}: ${r.msg}`, detail: { command: c, ok: r.ok }, autoOk: true });
+  return r;
+}
+
+// Cambios de modo: se detectan en el tick de 1 s del panel (cubre todo: órdenes,
+// muerte, reset, reconexión) y van al log del panel y al de decisiones.
+let lastMode: BotMode | null = null;
+function noteModeChange() {
+  const m = currentMode();
+  if (m === lastMode) return;
+  const from = lastMode;
+  lastMode = m;
+  if (from == null) return;
+  panelLog(`Modo: ${from} → ${m}.`);
+  void logDecision({ kind: 'mode', what: `${from} → ${m}`, detail: { from, to: m }, autoOk: true });
+}
+
+function updateTrail(now: number) {
+  if (world.map !== trailMap) {
+    trail.length = 0;
+    trailMap = world.map;
+  }
+  if (now - lastTrailAt < 2000) return;
+  lastTrailAt = now;
+  trail.push([world.x, world.y]);
+  if (trail.length > TRAIL_MAX) trail.shift();
+}
+
+function buildPanelState(now: number): PanelState {
+  const cycles = cycleLog.done.slice(-20).map((c) => toPanelCycle(c));
+  const equipment = [...world.inventory.values()]
+    .filter((it) => it.slot >= 0 && it.slot <= 11)
+    .sort((a, b) => a.slot - b.slot)
+    .map((it) => ({ slot: it.slot, group: it.group, num: it.num, level: it.level ?? 0, excellent: !!it.excellent }));
+  return {
+    at: now,
+    mode: currentMode(),
+    doing: paused ? 'en pausa' : doing,
+    char: {
+      name: charName,
+      level: world.level,
+      resets: LEARN_ENABLED ? learning.resets : null,
+      ...(world.classId != null ? { classId: world.classId } : {}),
+      hp: [world.hp, world.maxHp],
+      mp: [world.mana, world.maxMana],
+      stats: { ...world.stats },
+      points: world.levelUpPoints,
+      zen: inGameAt ? lastMoney : null,
+    },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
+    exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
+    cycle: toPanelCycle(cycleLog.cur, true),
+    cycles,
+    resetsPerDay: resetsPerDay(cycles),
+    events: EVENT_KEYS.map((k) => eventTimers.get(k)).filter((t): t is EventTimer => !!t),
+    invasion,
+    tickets: countTickets(world.inventory.values()),
+    nearby: {
+      monsters: [...world.npcs.values()].filter((n) => chebyshev(n.x, n.y, world.x, world.y) <= 10).length,
+      players: world.players.size,
+    },
+    equipment,
+    trail: trail.map(([x, y]) => [x, y] as [number, number]),
+    camp: goalPoint,
+  };
+}
+
+// Aperturas de eventos (0x91): una pregunta por evento cada ~60 s, nunca más
+// de una cada EVENT_POLL_TICK_MS (ritmo humano; el cliente pregunta cada 30 s
+// a 5 min). Al entrar al mundo se preguntan las tres, espaciadas.
+const EVENT_POLL_EVERY_MS = 60_000;
+const EVENT_POLL_TICK_MS = 5_000;
+function scheduleEventPolls(now: number) {
+  for (const k of EVENT_KEYS) nextEventPollAt.set(k, now + 3000);
+}
+function pollEvents() {
+  if (!statusServer || kicked || !inGameAt || resetting) return;
+  const now = Date.now();
+  let due: EventKey | null = null;
+  for (const k of EVENT_KEYS) {
+    const at = nextEventPollAt.get(k) ?? 0;
+    if (at <= now && (due == null || at < (nextEventPollAt.get(due) ?? 0))) due = k;
+  }
+  if (!due) return;
+  nextEventPollAt.set(due, now + EVENT_POLL_EVERY_MS);
+  sendToGS(new DataView(buildOpeningStateRequest(due).buffer));
+}
+
+// Listeners de los packets que solo usa el panel (una vez, con trackWorld).
+function trackPanelPackets() {
+  EventBus.on('MiniGameOpeningState', (raw: any) => {
+    const t = parseOpeningState(toBytes(raw), Date.now());
+    if (t) eventTimers.set(t.key, t);
+  });
+  // 0xFD (invasión dorada) es propio del server: no está en packets/routes.ts y
+  // net/socket.ts lo emite crudo como 'UnroutedPacket'.
+  EventBus.on('UnroutedPacket', (raw: any) => {
+    const b = toBytes(raw);
+    if (b[0] !== 0xc1 || b[2] !== 0xfd) return;
+    const inv = parseInvasion(b, Date.now());
+    if (!inv) return;
+    const prev = invasion;
+    invasion = inv;
+    if (!prev || prev.status !== inv.status || prev.total !== inv.total) {
+      log(`Invasión dorada: ${inv.status}, ${inv.total} vivo(s)${inv.maps.length ? ` (${inv.maps.map((m) => `${m.name}: ${m.alive}`).join(' · ')})` : ''}.`);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2186,8 +2468,63 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
-    // 2) Reset al llegar al nivel: lo más importante para progresar.
-    if (world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    // 1b) Órdenes del panel. Cambio de modo: soltar el objetivo.
+    if (retarget) {
+      retarget = false;
+      target = null;
+      looting = null;
+    }
+    // En pausa no se hace nada más (las pociones de arriba siguen).
+    if (paused) {
+      phase = 'wait';
+      await sleep(500);
+      continue;
+    }
+    // Orden `warp` pendiente.
+    if (pendingWarp) {
+      const sp = pendingWarp;
+      pendingWarp = null;
+      doing = `viajando a ${sp.name}`;
+      if (await decide({ kind: 'travel', what: `warp a ${sp.name} por orden del panel (${zenTxt(sp)})`, detail: { warp: sp.index, reason: 'panel' } })) {
+        if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
+      }
+      target = null;
+      continue;
+    }
+    // Cacería: cortar a tiempo (0xFD dice 0 vivos, derrotada, 15 min) y llegar al mapa.
+    if (hunting) {
+      const h = hunting;
+      const nowH = Date.now();
+      const stop = shouldStopHunt({ invasion, map: h.hunt.map, since: h.since, now: nowH });
+      if (stop) {
+        stopHunt(stop);
+        target = null;
+        continue;
+      }
+      if (world.map !== h.hunt.map) {
+        target = null;
+        if (nowH < h.nextWarpAt) {
+          await sleep(500);
+          continue;
+        }
+        if (h.warpTries >= 3) {
+          stopHunt(`no pude llegar a ${h.hunt.name}`);
+          continue;
+        }
+        h.warpTries++;
+        h.nextWarpAt = nowH + WARP_COOLDOWN_MS;
+        doing = `viajando a ${h.hunt.name} a cazar dorados`;
+        const spot: Spot = { index: h.hunt.warp, name: `cacería ${h.hunt.name}`, reqLevel: h.hunt.reqLevel, zen: 0, map: h.hunt.map };
+        if (await decide({ kind: 'travel', what: `warp a ${h.hunt.name} para cazar dorados`, detail: { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' } })) {
+          // Sin medir: la cacería no es farmeo y ensuciaría el aprendizaje del spot.
+          await warpAndWait(spot, false);
+        }
+        continue;
+      }
+    }
+
+    // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería).
+    if (!hunting && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         target = null;
@@ -2221,7 +2558,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 5) ¿Cambiar de spot? (ruta fija: tramo nuevo, competencia, hambre). Cada
     //    10 ticks, o ya si hay hambre/competencia; respeta WARP_COOLDOWN_MS.
     const crowded = hungry.starving || camps.crowdedSpot(now0);
-    if (ticks % 10 === 0 || crowded || !currentSpot) {
+    // Cazando no se cambia de spot: manda la cacería.
+    if (!hunting && (ticks % 10 === 0 || crowded || !currentSpot)) {
       const moved = await maybeChangeSpot({ crowded });
       if (moved) {
         target = null;
@@ -2237,6 +2575,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 6) Desviar inventario antes de llenarse.
     if (inventoryPressure() > SELL_AT_PRESSURE) {
+      doing = 'vendiendo basura';
       await sellJunkToMerchant();
       continue;
     }
@@ -2248,12 +2587,58 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       target != null && npcs.has(target) && chebyshev(world.x, world.y, npcs.get(target)!.x, npcs.get(target)!.y) <= 1;
     if (!targetInMeleeRange && (await lootStep())) {
       phase = 'walk';
+      doing = `levantando loot en ${mapName(world.map)}`;
       continue;
     }
 
     // 8) Elegir / mantener objetivo: campamento (camp.ts) + exp/s (farming.ts).
     if (target != null && !npcs.has(target)) target = null;
-    if (target == null) {
+    if (hunting) {
+      // Cacería: el dorado más cercano siempre manda (aunque estemos pegándole a
+      // otro); a los comunes solo si están a HUNT_NORMAL_RANGE (no frenan la búsqueda).
+      const now = Date.now();
+      let gold: ScopedNpc | null = null;
+      let gd = Infinity;
+      for (const n of npcs.values()) {
+        if (!isGolden(n) || unreachable.has(n.id)) continue;
+        const d = chebyshev(world.x, world.y, n.x, n.y);
+        if (d < gd) {
+          gd = d;
+          gold = n;
+        }
+      }
+      if (gold && target !== gold.id) {
+        if (!hunting.seen.has(gold.id)) {
+          hunting.seen.add(gold.id);
+          panelLog(`Cacería: ${monsterName(gold.type)} a ${gd} tiles en (${gold.x},${gold.y}).`);
+        }
+        target = gold.id;
+        targetType = gold.type;
+        targetSince = now;
+        stuckCount = 0;
+      } else if (target != null) {
+        const t = npcs.get(target)!;
+        if (!isGolden(t) && chebyshev(world.x, world.y, t.x, t.y) > HUNT_NORMAL_RANGE) target = null;
+      }
+      if (target == null) {
+        let near: ScopedNpc | null = null;
+        let nd = Infinity;
+        for (const n of npcs.values()) {
+          if (unreachable.has(n.id)) continue;
+          const d = chebyshev(world.x, world.y, n.x, n.y);
+          if (d <= HUNT_NORMAL_RANGE && d < nd) {
+            nd = d;
+            near = n;
+          }
+        }
+        if (near) {
+          target = near.id;
+          targetType = near.type;
+          targetSince = now;
+          stuckCount = 0;
+        }
+      }
+    } else if (target == null) {
       const now = Date.now();
       const pick = camps.pick({
         now,
@@ -2290,6 +2675,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         log(`DEBUG combate: target=${target} yo=(${world.x},${world.y}) target_pos=(${t.x},${t.y}) dist=${dist} stuck=${stuckCount}`);
       }
       phase = 'fight';
+      doing = `${hunting ? 'cazando: ' : ''}peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
       if (dist <= 1) {
         // A distancia de golpe: skill si hay (respetando SKILL_PACE_MS desde el
         // último cast, también los del camino), si no el hit normal.
@@ -2332,6 +2718,16 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //  a) Mapa vacío DRY_MAP_MS (90 s): la ruta fija pasa a otra entrada del
     //     tramo (o se queda si no hay); el spot queda excluido un rato.
     const now = Date.now();
+    //  0) Cacería: recorrer el mapa en celdas de 25 tiles (panel-logic.ts).
+    if (hunting) {
+      const g = hunting.explorer.next(world.x, world.y, now);
+      goalPoint = [g.x, g.y];
+      doing = `cazando dorados en ${hunting.hunt.name}: recorro la celda (${g.x},${g.y})`;
+      phase = 'walk';
+      castOnTheWay();
+      await walkTowards(g.x, g.y);
+      continue;
+    }
     if (explorer.isDry(now)) {
       const where = currentSpot?.name ?? `map ${world.map}`;
       log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${where}: busco otro spot.`);
@@ -2356,13 +2752,16 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         lastGoalTxt = txt;
         log(`Voy a ${txt} desde (${world.x},${world.y}) map=${world.map}.`);
       }
+      goalPoint = [cg.x, cg.y];
       if (chebyshev(world.x, world.y, cg.x, cg.y) <= 2) {
         // En el campamento esperando el respawn: sin packets.
+        doing = `acampando en ${mapName(world.map)} (${cg.x},${cg.y})`;
         phase = 'wait';
         await sleep(500);
         continue;
       }
       phase = 'walk';
+      doing = `yendo al ${cg.kind === 'camp' ? 'campamento' : 'punto de llegada'} (${cg.x},${cg.y}) en ${mapName(world.map)}`;
       castOnTheWay();
       await walkTowards(cg.x, cg.y);
       continue;
@@ -2390,6 +2789,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
     }
     phase = act.action === 'wait' ? 'wait' : 'walk';
+    goalPoint = [act.goal.x, act.goal.y];
+    doing = `explorando ${mapName(world.map)}: ${act.goal.kind === 'hot' ? 'spot caliente' : 'salida'} (${act.goal.x},${act.goal.y})`;
     if (act.action === 'wait') {
       // Parado mirando: sin packets, solo deja correr el tick (si aparece un
       // monstruo, el paso 8 lo toma).
@@ -2457,6 +2858,9 @@ function clearScope() {
   openedNpcId = null;
   currentSpot = null;
   meter.stop();
+  inGameAt = 0;
+  doing = 'conectando';
+  goalPoint = null;
 }
 
 async function session(first: boolean, deadline: number): Promise<LoopResult> {
@@ -2471,6 +2875,7 @@ async function session(first: boolean, deadline: number): Promise<LoopResult> {
   // Una sola vez: los handlers del EventBus sobreviven a la reconexión.
   if (!worldTracked) {
     trackWorld();
+    trackPanelPackets();
     worldTracked = true;
   }
   const { startX, startY } = await loginAndSelectCharacter();
@@ -2509,8 +2914,16 @@ async function main() {
   if (wsPortArg) {
     const wsPort = parseInt(wsPortArg);
     statusServer = startStatusServer({ port: wsPort });
-    log(`Telemetría (solo lectura) en ws://127.0.0.1:${wsPort}`);
-    setInterval(() => statusServer?.broadcastState(snapshotWorld()), 1000);
+    statusServer.onCommand(handlePanelCommand);
+    log(`Panel en http://127.0.0.1:${wsPort}/panel (WebSocket ws://127.0.0.1:${wsPort}, solo esta máquina)`);
+    setInterval(() => {
+      const now = Date.now();
+      updateTrail(now);
+      noteModeChange();
+      statusServer?.broadcastState(snapshotWorld());
+      statusServer?.broadcastPanelState(buildPanelState(now));
+    }, 1000);
+    setInterval(pollEvents, EVENT_POLL_TICK_MS);
   }
 
   // Lo aprendido (memoria de campamentos, ciclos, tipos) antes de entrar: la
