@@ -273,3 +273,13 @@ entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda p
      atraer solo con el líder quieto, tope de mapa y resetear juntos.
    - Credenciales de las dos cuentas en el `.env`, nunca en el código.
 3. **Modo cazador sin navegador**, con la búsqueda dividida que se describe arriba.
+
+## Autoajuste: lo que el usuario descartó mirando la pantalla (2026-10-10)
+
+- **Ancla (`anchor=1`): descartada.** Se quedaba quieto esperando en un campamento sin monstruos a
+  15 tiles. En la medición ganaba poco (117M contra 109M/min) y el usuario lo vio "demasiado
+  estático". Queda en el historial del tuner como no adoptada y no se vuelve a probar.
+- **Recorrida (`roam=1`): se vuelve a probar en limpio.** Se había adoptado durante el dúo. En lugares
+  llenos iba y venía entre dos puntos calientes (76 % caminando). La causa era que borraba el
+  destino al encontrar un monstruo; eso ya está arreglado.
+- El reset exige nivel 400 (lo contestó el server). La mejora sale solo de llegar antes a 400.
