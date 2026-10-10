@@ -56,6 +56,8 @@
   };
   const tick = () => {
     if (!ai.on || ai.busy || S.uiState !== 5) { if (t.exp) t.exp.winStart = Date.now(); return; }
+    // Un experimento a la vez: esperar a que termine el de skills (skill-ab.js).
+    if (ai.skillAB && !ai.skillAB.done) { if (t.exp) { ai.cfg[t.exp.key] = t.exp.from; t.exp = null; } return; }
     // Solo en la fase larga (>=200): ahí se juega el ciclo; antes los mapas cambian demasiado.
     if ((S.playerData.level ?? 0) < 200) { if (t.exp) { ai.cfg[t.exp.key] = t.exp.from; t.exp = null; } return; }
     if (!t.exp) return start();
