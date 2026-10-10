@@ -311,13 +311,18 @@
         const p0 = pe.transform.pos; ai.arrival = { x: p0.x, z: p0.z, map: w.mapIndex }; ai.arrivalPending = 0; L(`llegada en (${Math.round(p0.x)},${Math.round(p0.z)})`);
         // Un campamento elegido durante el warp (con monstruos del mapa anterior) fuera de la correa se descarta.
         if (ai.camp && (ai.camp.map !== w.mapIndex || (ai.cfg.leashMaps.includes(w.mapIndex) && dist(ai.camp, ai.arrival) > ai.cfg.leashDist))) { L(`descarto campamento (${ai.camp.x},${ai.camp.z}): lejos de la llegada`); ai.camp = null; ai.explore = null; }
-        const dir = ai.cfg.arrivalSpotDir[w.mapIndex];
+        // 1) Lo aprendido primero: el mejor campamento medido en este mapa a nivel parecido.
+        const lvlNow = S.playerData.level ?? 0;
+        const known = (ai.campHist[w.mapIndex] ?? []).filter((k) => Math.abs((k.level ?? lvlNow) - lvlNow) <= 60 && k.n >= 1 && !k.seed && (!ai.cfg.leashMaps.includes(w.mapIndex) || dist(k, ai.arrival) <= ai.cfg.leashDist)).sort((a, b) => b.rate - a.rate)[0];
+        const dir = known ? null : ai.cfg.arrivalSpotDir[w.mapIndex];
+        if (known) { ai.camp = { x: known.x, z: known.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy al mejor spot aprendido (${known.x},${known.z}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`); }
+        // 2) Si no conoce nada: la regla del usuario para ese mapa como primera apuesta.
         if (dir) {
           let g = null;
           for (const R of [12, 15, 9, 18]) { for (let j = 0; j < 12 && !g; j++) { const x = Math.round(p0.x + dir[0] * R + (Math.random() - 0.5) * 6), z = Math.round(p0.z + dir[1] * R + (Math.random() - 0.5) * 6); if (walkable(w, x, z)) g = { x, z }; } if (g) break; }
           if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`spot de llegada (arriba) en (${g.x},${g.z})`); }
         }
-        if (ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
+        if (!known && ai.cfg.preferDownMaps.includes(w.mapIndex)) { const g = ai.downZone(w); if (g) { ai.camp = { x: g.x, z: g.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; L(`voy a la zona de abajo (${g.x},${g.z})`); } }
       }
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
@@ -546,6 +551,8 @@
       if (cands[0]) { const b = cands[0]; ai.camp = { x: b.x, z: b.z, map: w.mapIndex, since: Date.now(), lastSeen: Date.now() }; ai.explore = null; L(`voy al campamento conocido (${b.x},${b.z}) ~${Math.round(b.rate / 1e6)}M exp/min`); }
     }
   }, 1000);
+  // Ranking de spots aprendidos, para que el usuario vea qué aprendió.
+  ai.spots = () => Object.fromEntries(Object.entries(ai.campHist).map(([m, l]) => [m, l.slice(0, 5).map((k) => `(${k.x},${k.z}) ${Math.round(k.rate / 1e6)}M/min lvl${k.level} n=${k.n}`)]));
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
