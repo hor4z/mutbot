@@ -58,7 +58,8 @@
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
-      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
+      crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
+      anchor: 0, anchorRadius: 4, anchorWaitMs: 6000, roam: 0, enRouteScan: 8, hotMaxDist: 30, lootRadius: 12, campMemDist: 40,
       // Quedarse cerca del punto de llegada del warp: Devias 1-4 son el MISMO mapa y,
       // saltando de campamento en campamento, terminaba en la zona de Devias 1. El usuario:
       // "en las otras Devias hay spots muy cerca de donde sale el pj".
@@ -226,7 +227,12 @@
       if (n >= stopAt) { ai.camp = { x: Math.round(P.x), z: Math.round(P.z), map, since: now, lastSeen: now }; ai.explore = null; L(`me quedo: ${n} monstruos juntos en (${Math.round(P.x)},${Math.round(P.z)})`); }
       else { const near = ai.freePick(w, P, { ...c, scan: c.enRouteScan }); if (near) return near; }
     }
-    const t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
+    // Modo ancla (anchor=1): dentro del campamento solo atacar lo que esté a <= anchorRadius
+    // del centro y dejar que los agresivos se acerquen; si en anchorWaitMs no entra nada,
+    // buscar en todo el campamento. Caminar no da exp: el autoajuste decide si conviene.
+    let t = null;
+    if (c.anchor) { t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.anchorRadius + 1 }); if (!t && now - cp.lastSeen < c.anchorWaitMs) return null; }
+    if (!t) t = ai.freePick(w, { x: cp.x, z: cp.z }, { ...c, scan: c.campRadius + 1 });
     if (t) cp.lastSeen = now;
     return t;
   };
@@ -464,7 +470,9 @@
   ai.report = () => {
     const now = Date.now(), win = (ms) => ai.expLog.filter((x) => x.t > now - ms).reduce((a, x) => a + x.added, 0) / (ms / 60000);
     const T = ai.time, tot = T.fight + T.walk + T.idle + T.other || 1;
-    return { level: S.playerData.level, resets: ai.resets, kills: ai.kills, expPerMin5: Math.round(win(300000)), expPerMin30: Math.round(win(1800000)),
+    const killsN = Object.values(ai.typeKills ?? {}).reduce((a, x) => a + x, 0) || ai.kills || 1;
+    return { level: S.playerData.level, resets: ai.resets, kills: ai.kills,
+      killsPerCast: ai.castCount ? +(killsN / ai.castCount).toFixed(2) : null, walkSecPerKill: +(T.walk / killsN).toFixed(2), expPerMin5: Math.round(win(300000)), expPerMin30: Math.round(win(1800000)),
       time: Object.fromEntries(Object.entries(T).map(([k, v]) => [k, Math.round((100 * v) / tot) + '%'])), cyclesMin: ai.cycles ?? [],
       spots: Object.fromEntries(Object.entries(ai.spotScore).map(([k, v]) => [c_name(k), Math.round(v)])), map: W().mapIndex };
   };
@@ -561,6 +569,7 @@
     if (!best) return;
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false };
+    ai.castCount = (ai.castCount ?? 0) + 1;
   }, 50);
   // Vigilante de skills trabados: a veces el cliente no consume un castRequest y, como no
   // pega golpes normales mientras hay uno pendiente, el personaje queda quieto entre los

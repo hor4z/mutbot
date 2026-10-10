@@ -28,6 +28,8 @@
     campDistDecay: { min: 5, max: 30, step: 6 },
     // 0 = acampar, 1 = recorrer pegando (decisión del autoajuste, no mía)
     roam: { min: 0, max: 1, step: 1 },
+    // 0 = perseguir objetivos en todo el campamento, 1 = ancla (esperar que se acerquen)
+    anchor: { min: 0, max: 1, step: 1 },
   };
   const WINDOW_MS = 180000, PAIRS = 2, MIN_GAIN = 0.05;
   // Aplicar lo aprendido en sesiones anteriores.
@@ -38,7 +40,8 @@
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ best: pick(ai.cfg), history: t.history.slice(-200) })); } catch {} };
   const propose = () => {
     // La primera prueba: acampar vs recorrer (la duda del usuario).
-    if (!t.history.some((h) => h.key === 'roam')) return { key: 'roam', from: ai.cfg.roam ?? 0, to: (ai.cfg.roam ?? 0) ? 0 : 1 };
+    // Primero las dos dudas grandes de dinámica: ancla vs perseguir, y acampar vs recorrer.
+    for (const k of ['anchor', 'roam']) if (!t.history.some((h) => h.key === k)) return { key: k, from: ai.cfg[k] ?? 0, to: (ai.cfg[k] ?? 0) ? 0 : 1 };
     const keys = Object.keys(SPACE);
     for (let tries = 0; tries < 20; tries++) {
       const k = keys[Math.floor(Math.random() * keys.length)], sp = SPACE[k];
