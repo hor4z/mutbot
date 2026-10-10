@@ -594,6 +594,16 @@
     w.castRequest = null; w.attackTarget = null; ai.target = null; ai.camp = null; ai.explore = null;
     ai.expLog.push({ t: now, added: 0 }); // no volver a disparar en el próximo segundo
   }, 3000);
+  // Zona segura: el cliente no deja atacar ahí. Con un objetivo elegido desde adentro del
+  // pueblo el personaje quedaba quieto para siempre (pasó con Melu). Si está quieto en zona
+  // segura, soltar el objetivo y salir hacia el campamento.
+  ai.safeOut = setInterval(() => {
+    const pe = W()?.playerEntity; if (!pe || !ai.on || ai.busy || S.uiState !== 5) return;
+    if (pe.attributeSystem?.isAboveZero?.('inSafeZone') && (pe.movement?.velocity?.x ?? 0) === 0 && (pe.movement?.velocity?.y ?? 0) === 0) {
+      ai.target = null; W().attackTarget = null;
+      const sc = ai.camp ?? ai.cfg.startCamp[W().mapIndex]; if (sc) ai.moveTo(pe, sc);
+    }
+  }, 2000);
   ai.deaths = old?.deaths ?? 0;
   let wasDead = false;
   ai.deathTimer = setInterval(() => { const dead = S.uiState === 5 && S.playerData.currentHP <= 0; if (dead && !wasDead) { ai.deaths++; L(`MUERTE #${ai.deaths} en mapa ${W().mapIndex}`); } wasDead = dead; }, 300);
