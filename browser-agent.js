@@ -84,7 +84,7 @@
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
       playerRadius: 5, competitionPenalty: 0.3, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
-      resetLevel: 400, statBatch: 200,
+      resetLevel: 400, resetProbe: [300, 350], statBatch: 200,
       // Ruta del usuario: Lorencia → Devias 3/4 (mejor), Devias 2 si no → Arena 2/3/4. Devias 1 y Arena 1 no sirven (Arena 1: monstruos flojos y dispersos, ~0 exp/min medido).
       spots: [[2, 'Lorencia', 10], [6, 'Devias 3', 20], [7, 'Devias 4', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]],
       // Spot = exp/min. Tras evalMs, si rinde menos que minFracOfBest del mejor conocido, se cambia.
@@ -325,14 +325,32 @@
     const pts = S.playerData.points; if (!pts) return;
     for (const [s, n] of ai.planStats(pts)) if (n > 0) { say(`/add ${s} ${n}`); await sleep(2600); }
   };
-  ai.doReset = async () => {
+  // Nivel mínimo de reset del server: nunca se probó, el 400 salía de cómo reseteaba el usuario.
+  // El tramo 300→400 es casi la mitad del ciclo. probe=true: un solo /reset, sin ir a Lorencia;
+  // si no lo acepta se anota el nivel rechazado (mubot-resetmin:<pj>) y se sigue farmeando.
+  const RMIN_KEY = `mubot-resetmin:${S.playerData?.name ?? 'pj'}`;
+  ai.resetMin = (() => { try { return JSON.parse(localStorage.getItem(RMIN_KEY) || 'null') ?? { rejected: 0, accepted: null }; } catch { return { rejected: 0, accepted: null }; } })();
+  const saveRMin = () => { try { localStorage.setItem(RMIN_KEY, JSON.stringify(ai.resetMin)); } catch {} };
+  ai.doReset = async (probe = false) => {
     ai.busy = true; W().attackTarget = null;
     try {
-      L(`RESET: nivel ${S.playerData.level}`);
+      const lvl0 = S.playerData.level;
+      L(`RESET${probe ? ' de prueba' : ''}: nivel ${lvl0}`);
+      if (probe) {
+        say('/reset');
+        for (let i = 0; i < 12 && S.uiState === 5; i++) await sleep(500);
+        if (S.uiState === 5) {
+          ai.resetMin.rejected = Math.max(ai.resetMin.rejected, lvl0); saveRMin();
+          const msg = [...document.querySelectorAll('*')].filter((e) => !e.children.length && /reset|nivel|level/i.test(e.textContent ?? '')).slice(-3).map((e) => e.textContent.trim()).join(' | ');
+          L(`RESET de prueba: el server no lo acepta en nivel ${lvl0}${msg ? ` (${msg.slice(0, 160)})` : ''}`);
+          return;
+        }
+        ai.resetMin.accepted = ai.resetMin.accepted == null ? lvl0 : Math.min(ai.resetMin.accepted, lvl0); saveRMin();
+        L(`RESET de prueba: ACEPTADO en nivel ${lvl0}`);
+      }
       // Sin repartir antes: los puntos sobrantes se suman a los del reset (ahorra ~8 s).
       // Primero /reset donde esté; si el server no lo acepta fuera de Lorencia, warp y reintento.
-      say('/reset');
-      for (let i = 0; i < 12 && S.uiState === 5; i++) await sleep(500);
+      if (!probe) { say('/reset'); for (let i = 0; i < 12 && S.uiState === 5; i++) await sleep(500); }
       if (S.uiState === 5 && W().mapIndex !== 0) { L('RESET: no lo aceptó acá; voy a Lorencia y reintento'); ai.resetNeedsLorencia = true; S.warpCommandRequest(2); await sleep(6000); say('/reset'); for (let i = 0; i < 40 && S.uiState === 5; i++) await sleep(500); }
       else if (S.uiState !== 5 && W()?.mapIndex !== 0) ai.resetNeedsLorencia = false;
       if (S.uiState === 5) { L('RESET: el server no nos sacó del mundo; reintento en 2 min'); ai.nextResetTry = Date.now() + 120000; return; }
@@ -507,6 +525,11 @@
     if (ai.busy || !ai.on || S.uiState !== 5 || S.sceneLoading) return;
     const pd = S.playerData;
     if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
+    // Prueba del nivel mínimo de reset: 300 y, si lo rechaza, 350. Una vez por nivel, para siempre.
+    // Si lo acepta, desde ahí resetea a ese nivel (lo que se mide son resets por día).
+    if (ai.resetMin.accepted != null && ai.resetMin.accepted < ai.cfg.resetLevel) ai.cfg.resetLevel = ai.resetMin.accepted;
+    const probeAt = ai.cfg.resetProbe?.find((l) => l > ai.resetMin.rejected && l < ai.cfg.resetLevel);
+    if (probeAt && ai.resetMin.accepted == null && pd.level >= probeAt) return ai.doReset(true);
     // Repartir puntos sin frenar el juego (antes se perdía ~1/3 del tiempo acá).
     if (pd.points >= ai.cfg.statBatch && !ai.distributing) { ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }
   }, 5000);
@@ -694,7 +717,8 @@
     const lvl = S.playerData?.level ?? 0;
     if (ai.cycleStart && ai.cur.start !== ai.cycleStart) {
       // Nuevo ciclo: cerrar el anterior.
-      if (ai.cur.marks[400]) { ai.cycleLog.push({ ...ai.cur, end: ai.cycleStart, min: +((ai.cycleStart - ai.cur.start) / 60000).toFixed(1) }); try { localStorage.setItem(CYC_KEY, JSON.stringify(ai.cycleLog.slice(-200))); } catch {} }
+      // Ciclo completo = llegó al nivel de reset de ese momento (puede bajar de 400 si el server acepta antes).
+      if (ai.cur.marks[300] != null) { ai.cycleLog.push({ ...ai.cur, resetAt: ai.cfg.resetLevel, end: ai.cycleStart, min: +((ai.cycleStart - ai.cur.start) / 60000).toFixed(1) }); try { localStorage.setItem(CYC_KEY, JSON.stringify(ai.cycleLog.slice(-200))); } catch {} }
       ai.cur = { start: ai.cycleStart, marks: {} };
     }
     for (const m of MARKS) if (lvl >= m && ai.cur.marks[m] == null && S.uiState === 5) { ai.cur.marks[m] = +((Date.now() - ai.cur.start) / 60000).toFixed(1); if (m >= 100) L(`tramo: nivel ${m} al minuto ${ai.cur.marks[m]}`); }
