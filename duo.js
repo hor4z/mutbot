@@ -31,12 +31,13 @@
     // Tope = nivel del seguidor. Si deja de publicar (p. ej. comprando en una tienda), usar su
     // ÚLTIMO nivel conocido: con "sin tope" el líder se fue a Arena 4 y el seguidor no podía entrar.
     let lastCap = null;
-    const capNow = () => { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + followerName) || 'null'); if (v?.level) lastCap = v.level; } catch {} return lastCap ?? 999; };
+    // window.__duoSafeCap: tope extra mientras el seguidor no tenga armadura (Arena 3 lo mató sin ella).
+    const capNow = () => { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + followerName) || 'null'); if (v?.level) lastCap = v.level; } catch {} return Math.min(lastCap ?? 999, window.__duoSafeCap ?? 999); };
     Object.defineProperty(ai.cfg, 'spots', { configurable: true, enumerable: true, get() { const cap = capNow(); return all.filter((s) => s[2] <= cap && !(s[0] === 2 && cap >= 20)); } });
     ai.tierSeen = 0; ai.spotRun = null; ai.lastWarp = 0; ai.cfg.leashDist = 10;
     // Proteger al seguidor: primero los monstruos a <= 3 tiles de él (en Arena 1 se le
     // pegaron 7 de golpe en la entrada).
-    if (!ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(followerName); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 3 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
+    if (!ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(followerName); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
     // Arena 1 NO: también para el dúo rinde casi nada (dragoncitos/arañas). Medido: Melu
     // subió 26→66 en Devias y ~0 en Arena 1. Devias hasta que el seguidor llegue a 100.
     { const i = all.findIndex((s) => s[0] === 1); if (i >= 0) all.splice(i, 1); }
@@ -67,12 +68,12 @@
     every(() => {
       const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe || S.uiState !== 5 || S.sceneLoading) return;
       const now = Date.now();
-      if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.6 && now - lastPot > 900) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
+      if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.75 && now - lastPot > 600) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); lastPot = now; } }
       w.attackTarget = null; w.castRequest = null;
       const h = read(leaderName); if (!h) return;
       if (w.mapIndex !== h.map) { if (now - lastWarp > 20000 && h.spot != null) { lastWarp = now; S.warpCommandRequest(h.spot); } return; }
-      if (dist(pe.transform.pos, h) > 4) { const m = pe.playerMoveTo; m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; }
-    }, 600);
+      if (dist(pe.transform.pos, h) > 2) { const m = pe.playerMoveTo; m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; }
+    }, 400);
     every(async () => { if (S.uiState !== 5 || ai.distributing || (S.playerData.points ?? 0) < 10) return; ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }, 5000);
     return `seguidor: ${me} sigue a ${leaderName} sin atacar`;
   };
