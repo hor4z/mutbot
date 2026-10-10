@@ -63,6 +63,10 @@
     const ai = window.__ai; const me = S.playerData.name;
     publish(me);
     ai.on = false; // sin combate ni ruta propia
+    // Puntos del seguidor (Melu, Dark Wizard): el reparto de Dark Knight (fuerza/energía) no le
+    // sirve. Solo sigue y atrae, y se muere si queda sola: sobre todo vida y agilidad (defensa);
+    // la energía ya pasa de 2400 (sobra para Evil Spirit). window.__followerStats lo cambia.
+    ai.planStats = (pts) => { const sh = window.__followerStats ?? { sta: 0.5, agi: 0.3, ene: 0.2 }; const out = []; let left = pts; const ks = Object.keys(sh); ks.forEach((k, i) => { const n = i === ks.length - 1 ? left : Math.floor(pts * sh[k]); left -= n; out.push([k === 'sta' ? 'vit' : k, n]); }); return out; };
     // Aceptar la party del líder y filtrar el rechazo automático (C1 06 41 00).
     window.__acceptPartyFrom = leaderName;
     if (!window.__duoSendWrapped) { const orig = S.sendToGS.bind(S); S.sendToGS = (dv) => { try { const b = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength); if (window.__acceptPartyFrom && b[0] === 0xc1 && b[2] === 0x41 && b[3] === 0x00) return; } catch {} return orig(dv); }; window.__duoSendWrapped = true; }
