@@ -337,7 +337,11 @@ const SELL_AT_PRESSURE = 0.6;
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.
 // Twisting Slash (41) primero: es el skill fijo de Horaz. Rageful Blow (42)
 // fuera: el usuario lo descartó (lento). El resto queda para otros personajes.
-const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 48, 50, 51, 55];
+// Después, los de Dark Wizard: Evil Spirit (9, área alrededor), Ice (7), Energy Ball (17),
+// Fire Ball (4), Lightning (3), Meteorite (2), Inferno (14 — mismo número que un DK, se usa el
+// que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
+// 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
+const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 48, 50, 51, 55, 9, 7, 17, 4, 3, 2];
 
 // ---------------------------------------------------------------------------
 // Métricas
