@@ -214,6 +214,11 @@ acumulados. Hasta entonces, nada que saque tiempo del ciclo.
 | 6 | 18 | 80 | 5,6 | 1,5 | 5,0 | ~5,5 | 7 s | Devias llenas: saltos por hambre cada 50 s (corregido: máx. 1 cada 2 min); Arena 3 se queda en la entrada |
 | 7 | 12,0 | 120 | 2,5 | 2,0 | 1,6 | 5,9 | 7 s | Arenas: medir la zona de abajo antes de confiar en la memoria; viaje sin cortar por grupos chicos |
 | 8 | 11,4 | 127 | 2,8 | 1,3 | 1,7 | 5,4 | 7 s | loot solo útil (inventario limpio), party rechazada sin cartel; autoajuste corregido (ventanas 90 s) |
+| dúo | 30,2 / 16,9 | — | — | — | — | — | 7 s | con Melu (no cuentan: marcados `dúo`) |
+| 9 | 14,2 | — | 2,6 | 1,6 | 3,5 | 6,4 | 7 s | 5 recargas en vivo (no cuenta) |
+| 10 | 11,4 | 126 | 1,9 | 1,2 | 3,0 | 5,1 | 7 s | sin recargas: ancla radio 7, recorrida descartada, no abandonar el campamento peleando, ir a un spot conocido si rinde ≥ 25 % más |
+| 11 | **10,4** | **138** | 3,6 | 1,0 | 1,8 | 3,9 | 7 s | cripta llena → Noria; Devias 3 flojo → Devias 4. Mejor ciclo hasta ahora |
+| 12 | 15,9 | — | 8,2 | 1,2 | 1,6 | 4,8 | 7 s | cacería dorada en Noria (no cuenta: 18 → 90 en 5 min, 2 Box of Luck) |
 
 Ciclo 8: modo ancla como experimento (autoajuste), métricas kills/giro y caminata/kill. Tramo más lento: 350→400 (3,9 min).
 
