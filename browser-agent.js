@@ -29,7 +29,7 @@
   for (const id of window.__mubotTimers ?? []) clearInterval(id);
   window.__mubotTimers = [];
   const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); window.__mubotTimers.push(id); return id; };
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch', 'eventTimer']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -770,6 +770,31 @@
   }, 2000);
   // Ciclos con `tag` (dúo, cacería) no son del farmeo solo: se muestran pero no cuentan para
   // medir la mejora (usuario: "que nada de dúo o modo hunter afecte nuestra mejora de farmeo").
+  // Eventos: el panel de la derecha al centro (".event-row": nombre + cuenta regresiva mm:ss o
+  // hh:mm:ss) dice cuándo abre cada uno. Se guarda la hora absoluta de apertura y el historial
+  // (mubot-events:<pj>) para aprender cada cuánto se repite. Base para entrar justo a tiempo.
+  const EV_KEY = `mubot-events:${S.playerData?.name ?? 'pj'}`;
+  try { ai.events = old?.events ?? JSON.parse(localStorage.getItem(EV_KEY) || '{}'); } catch { ai.events = {}; }
+  ai.eventTimers = () => {
+    const out = {};
+    for (const row of document.querySelectorAll('.event-row')) {
+      const name = row.querySelector('.event-row-label')?.textContent?.trim(); if (!name) continue;
+      const m = (row.textContent ?? '').slice(name.length).match(/(\d+):(\d{2})(?::(\d{2}))?/); if (!m) continue;
+      const sec = m[3] != null ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : (+m[1]) * 60 + (+m[2]);
+      out[name] = { inSec: sec, at: Date.now() + sec * 1000 };
+    }
+    return out;
+  };
+  ai.eventTimer = setInterval(() => {
+    const t = ai.eventTimers(); let changed = false;
+    for (const [name, v] of Object.entries(t)) {
+      const e = (ai.events[name] ??= { next: null, starts: [] });
+      // Nueva apertura si la hora calculada se movió más de 2 min (pasó la anterior y el contador saltó).
+      if (e.next == null || Math.abs(v.at - e.next) > 120000) { if (e.next && e.next < Date.now()) { e.starts = [...e.starts.slice(-20), e.next]; } e.next = v.at; changed = true; }
+      if (e.starts.length >= 2) { const d = e.starts.slice(1).map((x, i) => x - e.starts[i]); e.periodMin = Math.round(d.reduce((a, b) => a + b, 0) / d.length / 60000); }
+    }
+    if (changed) try { localStorage.setItem(EV_KEY, JSON.stringify(ai.events)); } catch {}
+  }, 30000);
   ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks, ...(c.tag ? { tag: c.tag } : {}) }));
   ai.soloCycles = () => ai.cycleLog.filter((c) => !c.tag);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
