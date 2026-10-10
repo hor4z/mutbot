@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel MU Bot</title>
+<style>
+  :root {
+    --bg: #0d0b09; --panel: #17130f; --panel2: #201a14; --line: #3a2f22;
+    --text: #eadfcc; --muted: #9c8e78; --gold: #e3b05a; --gold2: #f6d48f;
+    --hp: #c8423a; --mp: #3a6fc8; --ok: #58b36a; --warn: #e0a03a; --bad: #d4544a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(1200px 600px at 20% -10%, #2a1f12 0%, var(--bg) 60%); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 16px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #1c160f, transparent); position: sticky; top: 0; z-index: 2; backdrop-filter: blur(6px); }
+  .name { font-size: 22px; font-weight: 700; color: var(--gold2); letter-spacing: .5px; }
+  .cls { color: var(--muted); font-size: 13px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--panel2); }
+  .pill.farm { color: var(--ok); border-color: #2f5d38; }
+  .pill.hunt { color: var(--gold2); border-color: #7a5a22; }
+  .pill.paused, .pill.connecting { color: var(--warn); border-color: #6a4c1e; }
+  .pill.dead, .pill.off { color: var(--bad); border-color: #6a2a25; }
+  .doing { color: var(--text); flex: 1 1 260px; }
+  .conn { font-size: 12px; color: var(--muted); }
+  main { display: grid; gap: 14px; padding: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1400px; margin: 0 auto; }
+  .card { background: linear-gradient(180deg, var(--panel), #120f0b); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); font-weight: 700; }
+  .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; } .c6 { grid-column: span 6; }
+  @media (max-width: 1000px) { .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } }
+  .big { font-size: 30px; font-weight: 700; color: var(--gold2); font-variant-numeric: tabular-nums; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .bar { height: 10px; border-radius: 6px; background: #2a221a; overflow: hidden; margin: 4px 0 10px; }
+  .bar > i { display: block; height: 100%; width: 0; transition: width .4s; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; text-align: center; }
+  .stat b { display: block; font-size: 16px; color: var(--gold2); font-variant-numeric: tabular-nums; }
+  .stat small { color: var(--muted); font-size: 11px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid #5a4630; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold2); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: linear-gradient(180deg, #7a5420, #4f3510); border-color: #a77a33; color: #fff3da; }
+  .events { display: grid; gap: 8px; }
+  .ev { display: flex; justify-content: space-between; align-items: center; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .ev .t { font-family: var(--mono); font-size: 16px; color: var(--gold2); }
+  .ev.open { border-color: #2f5d38; } .ev.open .t { color: var(--ok); }
+  .inv { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #2a2016; border: 1px solid var(--line); }
+  .chip b { color: var(--gold2); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { text-align: right; padding: 5px 6px; border-bottom: 1px solid #2a221a; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.tag { color: var(--muted); font-style: italic; text-align: left; }
+  .log { font-family: var(--mono); font-size: 12px; height: 320px; overflow: auto; background: #0f0c09; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .log div { white-space: pre-wrap; } .log .t { color: var(--muted); margin-right: 8px; } .log .cmd { color: var(--gold2); }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .tramos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .tramo { flex: 1 1 60px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; text-align: center; }
+  .tramo small { display: block; color: var(--muted); font-size: 11px; }
+  .tramo b { font-variant-numeric: tabular-nums; }
+  .tramo.better b { color: var(--ok); } .tramo.worse b { color: var(--bad); }
+  .toast { position: fixed; right: 16px; bottom: 16px; background: #241b12; border: 1px solid var(--gold); color: var(--text); padding: 10px 14px; border-radius: 10px; max-width: 360px; opacity: 0; transition: opacity .3s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="name" id="name">—</div>
+    <div class="cls" id="cls">esperando al bot…</div>
+  </div>
+  <span class="pill off" id="mode">sin conexión</span>
+  <div class="doing" id="doing"></div>
+  <div class="conn" id="conn"></div>
+</header>
+
+<main>
+  <section class="card c4">
+    <h2>Personaje</h2>
+    <div class="row" style="justify-content:space-between">
+      <div><div class="muted">Nivel</div><div class="big" id="level">—</div></div>
+      <div style="text-align:right"><div class="muted">Resets</div><div class="big" id="resets">—</div></div>
+    </div>
+    <div class="muted">Vida <span id="hpTxt"></span></div><div class="bar"><i id="hpBar" style="background:var(--hp)"></i></div>
+    <div class="muted">Maná <span id="mpTxt"></span></div><div class="bar"><i id="mpBar" style="background:var(--mp)"></i></div>
+    <div class="stats">
+      <div class="stat"><b id="sStr">—</b><small>Fuerza</small></div>
+      <div class="stat"><b id="sAgi">—</b><small>Agilidad</small></div>
+      <div class="stat"><b id="sVit">—</b><small>Vitalidad</small></div>
+      <div class="stat"><b id="sEne">—</b><small>Energía</small></div>
+    </div>
+    <div class="kv" style="margin-top:10px">
+      <span>Puntos libres</span><span id="points">—</span>
+      <span>Zen</span><span id="zen">—</span>
+    </div>
+  </section>
+
+  <section class="card c4">
+    <h2>Dónde y cuánto rinde</h2>
+    <div class="kv">
+      <span>Mapa</span><span id="map">—</span>
+      <span>Posición</span><span id="pos">—</span>
+      <span>Spot</span><span id="spot">—</span>
+      <span>Cerca</span><span id="nearby">—</span>
+    </div>
+    <div class="row" style="margin-top:12px; justify-content:space-between">
+      <div><div class="muted">Exp / min (1 min)</div><div class="big" id="exp1">—</div></div>
+      <div style="text-align:right"><div class="muted">Resets / día</div><div class="big" id="rpd">—</div></div>
+    </div>
+    <div class="muted" style="margin-top:4px">Exp / min (5 min): <span id="exp5">—</span></div>
+  </section>
+
+  <section class="card c4">
+    <h2>Control</h2>
+    <div class="row">
+      <button class="primary" data-cmd="farm">Farmear</button>
+      <button data-cmd="hunt">Cazar dorados</button>
+      <button data-cmd="pause">Pausar</button>
+      <button data-cmd="resume">Seguir</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <select id="huntMap" aria-label="Mapa para cazar">
+        <option value="">Cazar: mapa con más vivos</option>
+        <option value="0">Lorencia</option><option value="3">Noria</option><option value="2">Devias</option>
+      </select>
+      <button id="huntGo">Cazar ahí</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <select id="warpSel" aria-label="Ir a un spot">
+        <option value="2">Lorencia</option><option value="6">Devias 3</option><option value="7">Devias 4</option><option value="5">Devias 2</option>
+        <option value="24">Arena 2</option><option value="25">Arena 3</option><option value="26">Arena 4</option>
+      </select>
+      <button id="warpGo">Ir</button>
+    </div>
+    <div class="muted" style="margin-top:10px; font-size:12px">Las órdenes son de una lista cerrada; el bot valida y responde abajo en el log.</div>
+  </section>
+
+  <section class="card c5">
+    <h2>Eventos</h2>
+    <div class="events" id="events"><div class="muted">sin datos todavía</div></div>
+    <h2 style="margin-top:14px">Invasión dorada</h2>
+    <div id="invasion" class="muted">—</div>
+    <div class="inv" id="tickets"></div>
+  </section>
+
+  <section class="card c7">
+    <h2>Ciclo actual</h2>
+    <div class="row" style="justify-content:space-between">
+      <div><div class="muted">Minutos</div><div class="big" id="cycMin">—</div></div>
+      <div style="text-align:right"><div class="muted">Mejor ciclo</div><div class="big" id="best">—</div></div>
+    </div>
+    <div class="tramos" id="tramos"></div>
+    <h2 style="margin-top:14px">Últimos ciclos</h2>
+    <div style="overflow:auto"><table id="cycles"><thead><tr><th>Inicio</th><th>Min</th><th>/día</th><th>→100</th><th>→200</th><th>→300</th><th>→400</th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card c12">
+    <h2>Lo que va haciendo</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => n == null || Number.isNaN(n) ? '—' : Number(n).toLocaleString('es-AR');
+  const fmtM = (n) => n == null ? '—' : n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
+  const hhmm = (ms) => new Date(ms).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  const MODE = { farm: 'farmeando', hunt: 'cazando', paused: 'pausado', resetting: 'reseteando', connecting: 'conectando', dead: 'muerto' };
+  const EVN = { devilSquare: 'Devil Square', bloodCastle: 'Blood Castle', chaosCastle: 'Chaos Castle' };
+  let ws = null, last = null, nextId = 1, logN = 0;
+
+  const toast = (t) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove('show'), 3500); };
+  const addLog = (text, at = Date.now(), cls = '') => {
+    const el = $('log'), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    const d = document.createElement('div'); if (cls) d.className = cls;
+    const t = document.createElement('span'); t.className = 't'; t.textContent = new Date(at).toLocaleTimeString('es-AR'); d.append(t, document.createTextNode(text));
+    el.append(d); if (++logN > 400) { el.firstChild.remove(); logN--; }
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  };
+  const send = (command) => {
+    if (!ws || ws.readyState !== 1) return toast('Sin conexión con el bot');
+    const id = nextId++; ws.send(JSON.stringify({ type: 'command', id, command }));
+    addLog(`→ orden: ${command.cmd}${command.map != null ? ' mapa ' + command.map : ''}${command.warp != null ? ' warp ' + command.warp : ''}`, Date.now(), 'cmd');
+  };
+  document.querySelectorAll('button[data-cmd]').forEach((b) => b.addEventListener('click', () => send({ cmd: b.dataset.cmd })));
+  $('huntGo').addEventListener('click', () => { const v = $('huntMap').value; send(v === '' ? { cmd: 'hunt' } : { cmd: 'hunt', map: +v }); });
+  $('warpGo').addEventListener('click', () => send({ cmd: 'warp', warp: +$('warpSel').value }));
+
+  const setBar = (bar, txt, [cur, max]) => { const p = max ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0; $(bar).style.width = p + '%'; $(txt).textContent = `${fmt(cur)} / ${fmt(max)}`; };
+
+  const render = (s) => {
+    last = s;
+    $('name').textContent = s.char.name || '—';
+    $('cls').textContent = s.char.cls ?? 'personaje';
+    const m = $('mode'); m.textContent = MODE[s.mode] ?? s.mode; m.className = 'pill ' + s.mode;
+    $('doing').textContent = s.doing ?? '';
+    $('level').textContent = fmt(s.char.level); $('resets').textContent = fmt(s.char.resets);
+    setBar('hpBar', 'hpTxt', s.char.hp); setBar('mpBar', 'mpTxt', s.char.mp);
+    $('sStr').textContent = fmt(s.char.stats.str); $('sAgi').textContent = fmt(s.char.stats.agi); $('sVit').textContent = fmt(s.char.stats.vit); $('sEne').textContent = fmt(s.char.stats.ene);
+    $('points').textContent = fmt(s.char.points); $('zen').textContent = fmt(s.char.zen);
+    $('map').textContent = s.where.mapName; $('pos').textContent = `(${s.where.x}, ${s.where.y})`; $('spot').textContent = s.where.spot ?? '—';
+    $('nearby').textContent = `${s.nearby.monsters} monstruos · ${s.nearby.players} jugadores`;
+    $('exp1').textContent = fmtM(s.exp.perMin1); $('exp5').textContent = fmtM(s.exp.perMin5);
+    $('rpd').textContent = s.resetsPerDay == null ? '—' : Math.round(s.resetsPerDay);
+    renderEvents(); renderInvasion(s.invasion); renderTickets(s.tickets); renderCycle(s);
+  };
+
+  const renderEvents = () => {
+    const s = last; if (!s) return; const box = $('events'); box.textContent = '';
+    if (!s.events?.length) { box.innerHTML = '<div class="muted">sin datos todavía</div>'; return; }
+    for (const e of s.events) {
+      const row = document.createElement('div'); let t = '—';
+      if (e.minutes === 0) { row.className = 'ev open'; t = 'ABIERTO'; }
+      else if (e.opensAt) { row.className = 'ev'; const sec = Math.max(0, Math.round((e.opensAt - Date.now()) / 1000)); t = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }
+      else row.className = 'ev';
+      const l = document.createElement('div'); l.innerHTML = `<b></b><div class="muted" style="font-size:12px"></div>`;
+      l.querySelector('b').textContent = EVN[e.key] ?? e.key;
+      l.querySelector('div').textContent = e.opensAt ? `abre ${hhmm(e.opensAt)}${e.users ? ' · ' + e.users + ' anotados' : ''}` : e.minutes === 0 ? 'entrada abierta' : 'más de 4 h';
+      const r = document.createElement('div'); r.className = 't'; r.textContent = t;
+      row.append(l, r); box.append(row);
+    }
+  };
+  const renderInvasion = (inv) => {
+    const el = $('invasion');
+    if (!inv) { el.textContent = '—'; return; }
+    const next = inv.nextAt ? `próxima ${hhmm(inv.nextAt)}` : '';
+    if (inv.status !== 'active' || !inv.total) { el.innerHTML = ''; el.textContent = `sin invasión activa · ${next}`; return; }
+    el.textContent = '';
+    const head = document.createElement('div'); head.innerHTML = `<b class="ok"></b> vivos`; head.querySelector('b').textContent = inv.total; el.append(head);
+    const wrap = document.createElement('div'); wrap.className = 'inv';
+    for (const m of [...inv.maps].sort((a, b) => b.alive - a.alive)) { const c = document.createElement('span'); c.className = 'chip'; c.innerHTML = '<b></b> '; c.querySelector('b').textContent = m.alive; c.append(m.name); wrap.append(c); }
+    el.append(wrap);
+  };
+  const renderTickets = (t) => {
+    const el = $('tickets'); el.textContent = '';
+    const entries = Object.entries(t ?? {}); if (!entries.length) return;
+    for (const [k, n] of entries) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = `${k} ×${n}`; el.append(c); }
+  };
+  const MARKS = [20, 50, 100, 200, 300, 350, 400];
+  const renderCycle = (s) => {
+    const solo = (s.cycles ?? []).filter((c) => !c.tag && c.min);
+    const best = solo.reduce((b, c) => (!b || c.min < b.min ? c : b), null);
+    $('best').textContent = best ? best.min.toFixed(1) : '—';
+    const c = s.cycle; $('cycMin').textContent = c?.min != null ? c.min.toFixed(1) : '—';
+    const tr = $('tramos'); tr.textContent = '';
+    let prev = 0, prevB = 0, prevLvl = 10;
+    for (const lv of MARKS) {
+      const at = c?.marks?.[lv], bAt = best?.marks?.[lv];
+      const seg = at != null ? at - prev : null, bSeg = bAt != null ? bAt - prevB : null;
+      const d = document.createElement('div'); d.className = 'tramo' + (seg != null && bSeg != null ? (seg <= bSeg ? ' better' : ' worse') : '');
+      d.innerHTML = '<small></small><b></b><small></small>';
+      d.children[0].textContent = `${prevLvl}→${lv}`; d.children[1].textContent = seg != null ? seg.toFixed(1) : '…'; d.children[2].textContent = bSeg != null ? `mejor ${bSeg.toFixed(1)}` : '';
+      tr.append(d); if (at != null) prev = at; if (bAt != null) prevB = bAt; prevLvl = lv;
+    }
+    const tb = $('cycles').querySelector('tbody'); tb.textContent = '';
+    for (const r of [...(s.cycles ?? [])].reverse().slice(0, 12)) {
+      const tr2 = document.createElement('tr');
+      const cells = [hhmm(r.start), r.min?.toFixed(1) ?? '—', r.min ? Math.round(1440 / r.min) : '—', r.marks?.[100] ?? '—', r.marks?.[200] ?? '—', r.marks?.[300] ?? '—', r.marks?.[400] ?? '—'];
+      for (const v of cells) { const td = document.createElement('td'); td.textContent = v; tr2.append(td); }
+      const tag = document.createElement('td'); tag.className = 'tag'; tag.textContent = r.tag ?? ''; tr2.append(tag); tb.append(tr2);
+    }
+  };
+  setInterval(renderEvents, 1000);
+
+  const setConn = (ok, txt) => { $('conn').textContent = txt; if (!ok) { const m = $('mode'); m.textContent = 'sin conexión'; m.className = 'pill off'; } };
+  const connect = () => {
+    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + (location.host || '127.0.0.1:8787');
+    setConn(false, 'conectando…');
+    ws = new WebSocket(url);
+    ws.onopen = () => setConn(true, 'conectado');
+    ws.onclose = () => { setConn(false, 'sin conexión · reintento en 3 s'); setTimeout(connect, 3000); };
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'panel-state') render(m.state);
+      else if (m.type === 'log') addLog(m.text, m.at);
+      else if (m.type === 'decision') addLog(`${m.decision.kind}: ${m.decision.what}`, Date.parse(m.decision.at) || Date.now());
+      else if (m.type === 'history') for (const d of m.decisions.slice(-60)) addLog(`${d.kind}: ${d.what}`, Date.parse(d.at) || Date.now());
+      else if (m.type === 'command-result') { addLog(`← ${m.ok ? 'ok' : 'rechazada'}: ${m.msg}`, Date.now(), m.ok ? 'ok' : 'bad'); toast(m.msg); }
+      else if (m.type === 'hello') addLog(`bot ${m.botVersion} · órdenes: ${(m.commands ?? []).join(', ')}`);
+    };
+  };
+  connect();
+})();
+</script>
+</body>
+</html>
