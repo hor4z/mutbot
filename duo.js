@@ -21,7 +21,7 @@
   const timers = (window.__duoTimers ??= []);
   const every = (fn, ms) => { const id = window.setInterval(fn, ms); timers.push(id); (window.__mubotTimers ??= []).push(id); return id; };
   // 250 ms: el seguidor va pegado al líder y necesita su posición casi en tiempo real.
-  const publish = (name) => every(() => { const pe = W()?.playerEntity; if (!pe || S.uiState !== 5) return; const P = pe.transform.pos; try { localStorage.setItem('mubot:follow:' + name, JSON.stringify({ x: Math.round(P.x), z: Math.round(P.z), map: W().mapIndex, spot: window.__ai?.spot, level: S.playerData.level, at: Date.now() })); } catch {} }, 1000);
+  const publish = (name) => { let lastK = '', movedAt = 0; return every(() => { const pe = W()?.playerEntity; if (!pe || S.uiState !== 5) return; const P = pe.transform.pos; const x = Math.round(P.x), z = Math.round(P.z); const k = x + ',' + z; if (k !== lastK) { lastK = k; movedAt = Date.now(); } try { localStorage.setItem('mubot:follow:' + name, JSON.stringify({ x, z, still: Date.now() - movedAt > 1000, map: W().mapIndex, spot: window.__ai?.spot, level: S.playerData.level, at: Date.now() })); } catch {} }, 250); };
   // Nivel mínimo de cada warp (lista del cliente, perfil v097d).
   const REQ = { 2: 10, 3: 10, 4: 20, 5: 20, 6: 20, 7: 20, 1: 50, 24: 100, 25: 200, 26: 300 };
   const stop = () => { while (timers.length) window.clearInterval(timers.pop()); };
@@ -83,7 +83,7 @@
       // el área cuando hay >= 2 monstruos a <= 6 tiles y está con el líder: se le vienen encima y,
       // como está en el mismo tile, el giro del líder los toma a todos juntos. Sin golpe normal.
       const pull = window.__pullSkill;
-      if (pull && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 2 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 1500) {
+      if (pull && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 1 && h.still && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 1500) {
         const P = pe.transform.pos; let n = 0, near = null;
         for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; if (dist(P, e.transform.pos) <= 6) { n++; near ??= e; } }
         if (n >= 2 && !w.castRequest) { if (S.currentSkill !== pull) S.selectSkill(pull); const tp = near.transform.pos; w.castRequest = { target: near, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
@@ -114,8 +114,15 @@
     if (ai && !ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(name); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
     // Llegar los dos a 400 (usuario, 2026-10-10): el líder no resetea hasta que el compañero
     // llegue a su nivel de reset; mientras tanto sigue farmeando en party para subirlo.
-    // Último nivel conocido si el compañero deja de publicar (no resetear por un relay viejo).
-    if (ai && !ai.cfg.__resetHeld) { const base = ai.cfg.resetLevel; let lastLvl = 0; Object.defineProperty(ai.cfg, 'resetLevel', { configurable: true, enumerable: true, get() { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); if (v?.level) lastLvl = v.level; } catch {} return lastLvl >= base ? base : 999; }, set(v) {} }); ai.cfg.__resetHeld = true; }
+    // Basta con haberlo visto en 400 una vez: el compañero resetea primero y vuelve a nivel 10
+    // (con "nivel actual >= 400" Horaz quedó esperando para siempre en Arena 4).
+    if (ai && !ai.cfg.__resetHeld) { const base = ai.cfg.resetLevel; let seen = false; Object.defineProperty(ai.cfg, 'resetLevel', { configurable: true, enumerable: true, get() { try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); if (v?.level >= base) seen = true; } catch {} if (S.playerData.level < base) seen = false; return seen ? base : 999; }, set(v) {} }); ai.cfg.__resetHeld = true; }
+    // Esperar al compañero (Melu murió a 23 tiles: Horaz siguió cambiando de campamento mientras
+    // ella quedaba quieta lanzando): si está a > 4 tiles en el mismo mapa, el líder no avanza a su
+    // próxima meta, vuelve hacia él; protegerlo (pickTarget) sigue igual.
+    if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > 4) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
+    // nextGoal solo se consulta al llegar: cortar el viaje en curso si el compañero quedó atrás.
+    if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > 4 && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
