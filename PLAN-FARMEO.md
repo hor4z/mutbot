@@ -250,8 +250,10 @@ El usuario los dejó para después; ahora sigue Horaz solo (`browser-agent.js` s
 **Modo cazador** (`hunter.js`), invasión dorada:
 - La búsqueda a ciegas con uno solo no sirvió. Devias es enorme y la vista es de ~15-20 tiles.
   El widget mostraba "Noria" con los dragones en Devias, y otros jugadores los matan rápido.
-- Siguiente versión, idea del usuario: en dúo, dividir el mapa. Cada uno recorre una mitad
-  y el que ve un dorado lo publica (`mubot:gold`): el líder va directo y el otro vuelve con él.
+- Siguiente versión, idea del usuario: los dos se dividen el mapa y buscan cada uno en su mitad.
+  El que encuentra un dorado avisa al otro (`mubot:gold` con mapa, posición y nombre) y lo mata
+  el fuerte (Horaz). Si lo encuentra Melu, se queda mirándolo sin atacar, actualizando la
+  posición mientras Horaz llega. Si lo encuentra Horaz, lo mata él y Melu vuelve a su lado.
 - Anotar dónde aparecen los dorados por mapa (`mubot:goldSpots`) e ir primero ahí.
 - Detectar el inicio de la invasión por el aviso del chat ("¡El Dragón Dorado está invadiendo!").
 - Mientras caza, pelear los comunes a <= 3 tiles: si los ignora, lo rodean.
