@@ -486,7 +486,10 @@
         }
         ai.target = null;
         const tb = ai.pickTarget(w, P, c);
-        if (tb) { ai.target = tb; ai.targetSince = now; ai.explore = null; }
+        // El destino se conserva durante la pelea: borrarlo hacía que, al matar, eligiera el punto
+        // caliente más cercano desde donde quedó y alternara entre dos (Arena 3 lleno: 76% caminando,
+        // "voy a hot (84,115)" ↔ "(73,114)" cada 1-5 s).
+        if (tb) { ai.target = tb; ai.targetSince = now; }
       }
       if (ai.target) {
         ai.time.fight += 0.4;
