@@ -582,6 +582,10 @@ Claves: las de SimpleModulus del cliente (`ze`/`_e`) son las mismas que
 
 ### Reset y stats (capturado)
 
+**Confirmado en vivo (2026-10-10, ciclo 4):** `/reset` se acepta desde Arena 4 (no hace
+falta estar en Lorencia) y el server devuelve al personaje a Lorencia al volver a entrar.
+El reset completo (comando → selección → volver al mundo) tarda ~7 s.
+
 Todo por **chat** (`C1 len 00 <nombre 10 bytes> <texto>`):
 - `/add <stat> <n>` reparte n puntos de una vez. Confirmados `str`, `ene` y `vit`
   (3000 puntos post-reset repartidos con 3 comandos); `agi` sin probar todavía. El server contesta con un

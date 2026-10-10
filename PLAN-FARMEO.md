@@ -209,6 +209,7 @@ acumulados. Hasta entonces, nada que saque tiempo del ciclo.
 | 1 | 25 | 58 | 10,8 | 2,0 | 3,0 | ~9 | — | primera corrida medida (con parches en vivo) |
 | 2 | 20 | 72 | — | — | — | — | 22 s | ruta fija, cripta, correa, pelea en el camino |
 | 3 | 14,7 | 98 | 2,5 | 1,5 | 3,2 | 7,1 | 22 s | exp por segundo (medición), giro caminando, conglomerados, hambre con rivales |
+| 4 | 17,4 | 83 | 3,0 | 5,1 | 3,6 | 5,5 | 7 s | reset sin warp (aceptado desde Arena 4); perdió ~3 min con un skill trabado |
 
 Siguiente (ciclo 4): reset sin warp ni reparto previo, sin warp a Lorencia tras el reset.
 Tramo que decide: 300→400 (7,1 min, ~48% del ciclo).
