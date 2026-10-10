@@ -32,11 +32,13 @@
     t0: Date.now(), lastPotion: 0, lastWarp: 0, spot: old?.spot ?? null,
     spotScore: old?.spotScore ?? {}, spotRun: null, tierSeen: old?.tierSeen ?? 0,
     expByType: old?.expByType ?? {}, expLog: old?.expLog ?? [], expHooked: old?.expHooked ?? false,
-    killSecByType: old?.killSecByType ?? {}, targetSince: 0,
+    killSecByType: old?.killSecByType ?? {}, hpByType: old?.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
     target: null, explore: null, arrivedAt: 0, stuck: 0, lastPos: null,
     lastMonster: Date.now(), mapNoMonsterSince: Date.now(), scoutIdx: 0, hot: old?.hot ?? {},
     cfg: {
-      hpPot: 0.55, mpPot: 0.2, scan: 28, secPerTile: 0.4, giveUpZoneMs: 20000, giveUpMapMs: 90000,
+      hpPot: 0.55, mpPot: 0.2, scan: 28, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
+      playerRadius: 5, competitionPenalty: 0.6, giveUpZoneMs: 20000, giveUpMapMs: 90000,
       skill: 41, skillMinMp: 0.15,
       resetLevel: 400, statBatch: 50, build: [['str', 50], ['ene', 33], ['vit', 17]],
       // Ruta del usuario: Lorencia → Devias 2/3/4 (Devias 1 no sirve) → Arena 1-4.
@@ -62,39 +64,52 @@
   // Lo que importa es la exp por kill para MI nivel: se aprende de experienceGained
   // ({added, killedNetId}; kills grandes llegan partidos en tramos de 65535).
   // Sin dato todavía, la vida máxima sirve de estimación.
-  ai.valueOf = (e) => ai.expByType[e.npcType] ?? (e.attributeSystem?.getValue?.('maxHealth') || 1) * 50;
+  // Exp por kill: se aprende de experienceGained ({added, killedNetId}; kills grandes
+  // llegan partidos en tramos de 65535). Cuando llega el evento el monstruo ya salió
+  // del mundo, por eso el tipo se busca en netInfo (lo que vimos de cada netId).
+  // Sin dato, se estima exp ∝ sqrt(vida): en MU la exp va con el NIVEL del monstruo,
+  // que crece mucho más lento que su vida. El usuario lo confirmó jugando: con
+  // monstruos más débiles sube más rápido.
+  const median = (xs) => { if (!xs.length) return null; const v = [...xs].sort((x, y) => x - y); return v[Math.floor(v.length / 2)]; };
+  const maxHpOf = (e) => { const h = e.attributeSystem?.getValue?.('maxHealth') || 0; if (h) ai.hpByType[e.npcType] = h; return h || ai.hpByType[e.npcType] || 1; };
+  ai.expPerSqrtHp = () => median(Object.keys(ai.expByType).filter((k) => ai.hpByType[k]).map((k) => ai.expByType[k] / Math.sqrt(ai.hpByType[k])));
+  ai.dps = () => median(Object.keys(ai.killSecByType).filter((k) => ai.hpByType[k]).map((k) => ai.hpByType[k] / ai.killSecByType[k]));
+  ai.valueOf = (e) => ai.expByType[e.npcType] ?? Math.sqrt(maxHpOf(e)) * (ai.expPerSqrtHp() ?? 300);
   if (!ai.expHooked) {
     __eventBus.on('experienceGained', (p) => {
       const a = window.__ai; if (!a || !p?.added) return;
       const now = Date.now();
       a.expLog.push({ t: now, added: p.added }); if (a.expLog.length > 5000) a.expLog.shift();
-      const e = W().getByNetId(p.killedNetId);
-      if (e?.npcType !== undefined) {
-        const k = e.npcType, last = a.lastExpKill;
-        // mismo kill partido en varios eventos: acumular
-        if (last && last.netId === p.killedNetId && now - last.t < 1500) { last.sum += p.added; a.expByType[k] = last.prev == null ? last.sum : last.prev * 0.7 + last.sum * 0.3; }
-        else { const prev = a.expByType[k]; a.lastExpKill = { netId: p.killedNetId, t: now, sum: p.added, prev }; a.expByType[k] = prev == null ? p.added : prev * 0.7 + p.added * 0.3; }
-        a.noteHot(W().mapIndex, e.transform.pos, p.added);
-      }
+      const info = a.netInfo.get(p.killedNetId); if (!info) return;
+      const k = info.type, last = a.lastExpKill;
+      if (last && last.netId === p.killedNetId && now - last.t < 1500) { last.sum += p.added; a.expByType[k] = last.prev == null ? last.sum : last.prev * 0.7 + last.sum * 0.3; }
+      else { const prev = a.expByType[k]; a.lastExpKill = { netId: p.killedNetId, t: now, sum: p.added, prev }; a.expByType[k] = prev == null ? p.added : prev * 0.7 + p.added * 0.3; }
+      a.noteHot(W().mapIndex, info, p.added);
     });
     ai.expHooked = true;
   }
-  // Lo que se optimiza es EXP POR SEGUNDO: exp que da el tipo / (segundos que tardo en
-  // matarlo + segundos de caminar hasta él). Un bicho duro que da mucho puede rendir
-  // menos que varios medianos de un golpe. Twisting Slash es de área: un objetivo con
-  // otros bichos alrededor vale más (bonus por densidad).
-  ai.killSecOf = (e) => ai.killSecByType[e.npcType] ?? 2.5;
+  // Sin medición: vida / daño por segundo medido, con algo de pesimismo.
+  ai.killSecOf = (e) => { const k = ai.killSecByType[e.npcType]; if (k != null) return k; const dps = ai.dps(); return dps ? (maxHpOf(e) / dps) * ai.cfg.unknownPessimism : 3; };
   ai.pickTarget = (w, P, c) => {
-    const ms = [];
-    for (const e of w.byNetId.values()) if (ai.isMonster(e) && alive(e)) ms.push(e);
+    const ms = [], players = [];
+    for (const e of w.byNetId.values()) {
+      if (e.localPlayer) continue;
+      if (e.npcType === undefined && e.playerAnimation) { players.push(e.transform.pos); continue; }
+      if (ai.isMonster(e)) { ai.netInfo.set(e.netId, { type: e.npcType, x: e.transform.pos.x, z: e.transform.pos.z }); maxHpOf(e); if (alive(e)) ms.push(e); }
+    }
+    if (ai.netInfo.size > 3000) ai.netInfo.clear();
+    // Duros (kill estimado > maxKillSec) solo si no hay nada razonable.
+    const easy = ms.filter((e) => ai.killSecOf(e) <= c.maxKillSec);
+    const pool = easy.length ? easy : ms;
     let best = null, bestRate = 0;
-    for (const e of ms) {
-      const d = dist(P, e.transform.pos); if (d >= c.scan) continue;
-      let crowd = 0; for (const o of ms) if (o !== e && dist(o.transform.pos, e.transform.pos) <= 3) crowd += ai.valueOf(o) * 0.5;
-      const rate = (ai.valueOf(e) + crowd) / (ai.killSecOf(e) + d * c.secPerTile);
+    for (const e of pool) {
+      const p = e.transform.pos, d = dist(P, p); if (d >= c.scan) continue;
+      let crowd = 0; for (const o of pool) if (o !== e && dist(o.transform.pos, p) <= 3) crowd += ai.valueOf(o) * 0.5;
+      const rivals = players.filter((q) => dist(q, p) <= c.playerRadius).length;
+      const rate = ((ai.valueOf(e) + crowd) / (ai.killSecOf(e) + d * c.secPerTile)) * Math.pow(1 - c.competitionPenalty, rivals);
       if (rate > bestRate) { bestRate = rate; best = e; }
     }
-    ai.lastPickRate = bestRate;
+    ai.lastPickRate = bestRate; ai.lastRivals = players.length;
     return best;
   };
   ai.nextGoal = (P, w) => {
