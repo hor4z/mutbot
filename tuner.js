@@ -22,7 +22,7 @@
     competitionPenalty: { min: 0.2, max: 0.9, step: 0.15 },
     maxKillSec: { min: 3, max: 14, step: 2 },
     secPerTile: { min: 0.15, max: 1.0, step: 0.15 },
-    castRange: { min: 3, max: 9, step: 2 },
+    castRange: { min: 2, max: 5, step: 1 },
     skillMinMp: { min: 0, max: 0.4, step: 0.1 },
     campDistDecay: { min: 5, max: 30, step: 6 },
   };

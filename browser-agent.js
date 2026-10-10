@@ -45,7 +45,8 @@
     cfg: {
       // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
       // hpPot 0.55 no alcanzó en Arena 4 con skill continuo: murió en un grupo.
-      hpPot: 0.7, mpPot: 0.3, castRange: 6, vitShare: 0.15, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // castRange 3: Twisting Slash gira alrededor del DK (~2-3 tiles). Con 6 giraba en el aire.
+      hpPot: 0.7, mpPot: 0.3, castRange: 3, vitShare: 0.15, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
