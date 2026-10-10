@@ -24,17 +24,21 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
+  // Lo aprendido sobrevive a un F5: localStorage por personaje.
+  const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
   const SCREEN = { up: [-1, 1], right: [1, 1], down: [1, -1], left: [-1, -1] };
   const ai = (window.__ai = {
     on: true, busy: false, log: old?.log ?? [], samples: old?.samples ?? [], kills: old?.kills ?? 0, resets: old?.resets ?? 0,
     t0: Date.now(), lastPotion: 0, lastWarp: 0, spot: old?.spot ?? null,
-    spotScore: old?.spotScore ?? {}, spotRun: null, tierSeen: old?.tierSeen ?? 0,
-    expByType: old?.expByType ?? {}, expLog: old?.expLog ?? [], expHooked: old?.expHooked ?? false,
-    killSecByType: old?.killSecByType ?? {}, hpByType: old?.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
+    spotScore: old?.spotScore ?? saved.spotScore ?? {}, spotRun: null, tierSeen: old?.tierSeen ?? 0,
+    expByType: old?.expByType ?? saved.expByType ?? {}, expLog: old?.expLog ?? [], expHooked: old?.expHooked ?? false,
+    killSecByType: old?.killSecByType ?? saved.killSecByType ?? {}, hpByType: old?.hpByType ?? saved.hpByType ?? {}, netInfo: old?.netInfo ?? new Map(), targetSince: 0,
     target: null, explore: null, arrivedAt: 0, stuck: 0, lastPos: null,
-    lastMonster: Date.now(), mapNoMonsterSince: Date.now(), scoutIdx: 0, hot: old?.hot ?? {},
+    lastMonster: Date.now(), mapNoMonsterSince: Date.now(), scoutIdx: 0, hot: old?.hot ?? saved.hot ?? {},
     cfg: {
       hpPot: 0.55, mpPot: 0.2, scan: 28, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
       // Competencia: cada jugador a <= playerRadius del objetivo le resta competitionPenalty.
@@ -150,14 +154,20 @@
       S.selectCharacterRequest(S.playerData.name || 'Horaz');
       for (let i = 0; i < 40 && S.uiState !== 5; i++) await sleep(500);
       await sleep(3000);
-      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.hot = {}; ai.lastWarp = 0;
+      // Los spots (hot) dependen del mapa, no del nivel: se conservan. Lo que rinde
+      // cada mapa sí depende del nivel: se vuelve a medir.
+      const cycleMin = ai.cycleStart ? (Date.now() - ai.cycleStart) / 60000 : null;
+      ai.cycles = ai.cycles ?? []; if (cycleMin) ai.cycles.push(Math.round(cycleMin));
+      ai.cycleStart = Date.now();
+      ai.resets++; ai.spot = null; ai.spotRun = null; ai.tierSeen = 0; ai.spotScore = {}; ai.lastWarp = 0;
       L(`RESET #${ai.resets} hecho, nivel ${S.playerData.level}, puntos ${S.playerData.points}`);
       await ai.distribute();
     } catch (e) { L('RESET error: ' + e.message); } finally { ai.busy = false; }
   };
   ai.tick = () => {
     try {
-      if (!ai.on || ai.busy || S.uiState !== 5) return;
+      if (!ai.on) return;
+      if (ai.busy || S.uiState !== 5) { ai.time && (ai.time.other += 0.4); return; }
       if (S.sceneLoading) { ai.lastMonster = ai.mapNoMonsterSince = Date.now(); return; }
       const w = W(), pe = w?.playerEntity; if (!pe) return;
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
@@ -201,6 +211,7 @@
         if (tb) { ai.target = tb; ai.targetSince = now; ai.explore = null; }
       }
       if (ai.target) {
+        ai.time.fight += 0.4;
         ai.lastMonster = ai.mapNoMonsterSince = now;
         if (w.attackTarget !== ai.target) w.attackTarget = ai.target;
         const tp = ai.target.transform.pos;
@@ -208,6 +219,7 @@
         return;
       }
       const arrived = ai.explore && dist(P, ai.explore) < 4;
+      if (arrived) ai.time.idle += 0.4; else ai.time.walk += 0.4;
       if (arrived && !ai.arrivedAt) ai.arrivedAt = now;
       const lingerOver = arrived && now - ai.arrivedAt > (ai.explore.kind === 'hot' ? c.respawnWaitMs : c.giveUpZoneMs);
       if (!ai.explore || ai.stuck > 15 || lingerOver) {
@@ -221,6 +233,18 @@
       ai.lastPos = { x: P.x, z: P.z };
     } catch (e) { L('error: ' + e.message); }
   };
+  // Autoevaluación: exp/min reciente y en qué se fue el tiempo.
+  ai.time = ai.time ?? { fight: 0, walk: 0, idle: 0, other: 0 };
+  ai.report = () => {
+    const now = Date.now(), win = (ms) => ai.expLog.filter((x) => x.t > now - ms).reduce((a, x) => a + x.added, 0) / (ms / 60000);
+    const T = ai.time, tot = T.fight + T.walk + T.idle + T.other || 1;
+    return { level: S.playerData.level, resets: ai.resets, kills: ai.kills, expPerMin5: Math.round(win(300000)), expPerMin30: Math.round(win(1800000)),
+      time: Object.fromEntries(Object.entries(T).map(([k, v]) => [k, Math.round((100 * v) / tot) + '%'])), cyclesMin: ai.cycles ?? [],
+      spots: Object.fromEntries(Object.entries(ai.spotScore).map(([k, v]) => [c_name(k), Math.round(v)])), map: W().mapIndex };
+  };
+  const c_name = (idx) => (ai.cfg.spots.find((s) => String(s[0]) === String(idx)) ?? [0, idx])[1];
+  ai.save = () => { try { localStorage.setItem(KEY, JSON.stringify({ spotScore: ai.spotScore, expByType: ai.expByType, killSecByType: ai.killSecByType, hpByType: ai.hpByType, hot: ai.hot, at: Date.now() })); } catch {} };
+  ai.saver = setInterval(ai.save, 30000);
   ai.timer = setInterval(ai.tick, 400);
   ai.sampler = setInterval(() => { const pd = S.playerData; ai.samples.push({ t: Date.now(), level: pd.level, map: W()?.mapIndex, kills: ai.kills }); if (ai.samples.length > 3000) ai.samples.shift(); }, 30000);
   ai.mgr = setInterval(async () => {
