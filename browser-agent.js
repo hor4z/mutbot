@@ -24,7 +24,7 @@
  */
 (() => {
   const old = window.__ai;
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -44,7 +44,8 @@
     camp: null, campBest: old?.campBest ?? {}, leftCamps: [], visited: old?.visited ?? {},
     cfg: {
       // scan cubre todo el scope: la distancia ya pesa en la cuenta de exp/s.
-      hpPot: 0.55, mpPot: 0.3, castRange: 6, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
+      // hpPot 0.55 no alcanzó en Arena 4 con skill continuo: murió en un grupo.
+      hpPot: 0.7, mpPot: 0.3, castRange: 6, vitShare: 0.15, scan: 80, secPerTile: 0.4, maxKillSec: 8, unknownPessimism: 1.4,
       // Campamento: pelear solo a <= campRadius de un centro; mudarse si tras campEvalMs
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
@@ -202,13 +203,13 @@
   //   daño del skill ≈ daño base (fuerza/4) × (2 + energía/1000).
   //   +1 fuerza → +0.25 × (2 + ene/1000);  +1 energía → (fuerza/4) × 0.001.
   //   Rinden igual cuando energía ≈ fuerza − 2000. Debajo de eso, todo a energía;
-  //   arriba, mitad y mitad para mantener la relación. La vitalidad casi no aporta
-  //   (casi no se usan pociones); un 5% por las dudas.
+  //   arriba, mitad y mitad para mantener la relación. Vitalidad: vitShare (15%):
+  //   con 5% murió en Arena 4.
   // La energía no viene en playerData: se estima del maná (~1 de maná por punto,
   // + medio por nivel; verificado al repartir 1000 de energía en el reset 3).
   ai.planStats = (pts) => {
     const pd = S.playerData, str = pd.str ?? 0, ene = Math.max(0, (pd.maxMP ?? 0) - 0.5 * (pd.level ?? 0));
-    const vit = Math.floor(pts * 0.05); let left = pts - vit;
+    const vit = Math.floor(pts * ai.cfg.vitShare); let left = pts - vit;
     const gap = Math.max(0, str - 2000 - ene);
     const toEne1 = Math.min(left, gap); left -= toEne1;
     const half = Math.floor(left / 2);
@@ -252,7 +253,7 @@
       const w = W(), pe = w?.playerEntity; if (!pe) return;
       const pd = S.playerData, P = pe.transform.pos, now = Date.now(), c = ai.cfg;
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
-      if (pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
+      if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
       if (pd.currentMP / pd.maxMP < c.mpPot && now - ai.lastPotion > 900) { const s = potionSlot(4, 6); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; return; } }
       // Spots: medir exp/min del actual y cambiar si no conviene.
       const run = ai.spotRun;
@@ -299,7 +300,6 @@
         ai.lastMonster = ai.mapNoMonsterSince = now;
         if (w.attackTarget !== ai.target) w.attackTarget = ai.target;
         const tp = ai.target.transform.pos;
-        if (!w.castRequest && pd.currentMP / pd.maxMP >= c.skillMinMp && dist(P, tp) <= c.castRange) w.castRequest = { target: ai.target, point: { x: tp.x, y: tp.z }, forced: false };
         return;
       }
       const arrived = ai.explore && dist(P, ai.explore) < 4;
@@ -359,6 +359,18 @@
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
     for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying && hpOf(e) > 0) ai.noteHot(w.mapIndex, e.transform.pos, ai.valueOf(e) * ai.cfg.densityWeight);
   }, 3000);
+  // Skill sin pausa: el cliente omite el golpe normal mientras haya un castRequest,
+  // así que recargarlo cada 50 ms deja todo el ataque en Twisting Slash (área).
+  // Medido: de 74 skills + 26 golpes por minuto (cada 200 ms) a 0 golpes.
+  ai.caster = setInterval(() => {
+    const w = W(), t = ai.target, pe = w?.playerEntity, pd = S.playerData;
+    if (!ai.on || ai.busy || !t || !pe || w.castRequest || S.sceneLoading || pd.currentMP / pd.maxMP < ai.cfg.skillMinMp) return;
+    const P = pe.transform.pos, tp = t.transform.pos;
+    if (dist(P, tp) <= ai.cfg.castRange) w.castRequest = { target: t, point: { x: tp.x, y: tp.z }, forced: false };
+  }, 50);
+  ai.deaths = old?.deaths ?? 0;
+  let wasDead = false;
+  ai.deathTimer = setInterval(() => { const dead = S.uiState === 5 && S.playerData.currentHP <= 0; if (dead && !wasDead) { ai.deaths++; L(`MUERTE #${ai.deaths} en mapa ${W().mapIndex}`); } wasDead = dead; }, 300);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
 })();
