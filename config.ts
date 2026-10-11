@@ -26,7 +26,7 @@ for (let i = 0; i < argv.length; i++) {
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
   '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
-  '--explore-dir', '--learn-file', '--ws-port', '--decision-log',
+  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -125,3 +125,6 @@ export const ATTACK_SKILL_POOL = ATTACK_SKILLS.length ? ATTACK_SKILLS : DEFAULT_
 
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
 export const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
+
+// Cazador automático de invasiones (panel-logic.ts, AUTO_HUNT): prendido salvo --no-auto-hunt.
+export const AUTO_HUNT_ON = !args.has('--no-auto-hunt');

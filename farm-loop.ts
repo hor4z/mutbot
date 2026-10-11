@@ -3,7 +3,7 @@
  * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
-import { ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
+import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
 import { castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
@@ -26,7 +26,7 @@ import { castOnTheWay, newLoopCtx, walkTowards } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { publishGold, sessionStart, setLoopView, stopHunt } from './panel';
-import { GoldReporter, mapName, shouldStopHunt } from './panel-logic';
+import { AUTO_HUNT, GoldReporter, HuntExplorer, autoHuntChoice, invasionKey, mapName, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, typeStats, world, type ScopedNpc } from './state';
@@ -54,6 +54,8 @@ let economyWatched = false;
 // Defensa propia (defense.ts) y aggro: quién me pega, de los paquetes 0x18/0x19 (protocol097.ts).
 const defense = new Defense();
 let lastFleeAt = 0;
+// Invasión ya cazada por el cazador automático (una por invasión).
+let lastAutoHuntKey: number | null = null;
 let aggroHooked = false;
 let aggroTarget: Map<number, number> | null = null;
 function hookAggro() {
@@ -282,7 +284,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (bot.hunting) {
       const h = bot.hunting;
       const nowH = Date.now();
-      const stop = shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH });
+      const stop = shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined });
       if (stop) {
         stopHunt(stop);
         ctx.target = null;
@@ -358,8 +360,23 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       stuckCount = 0;
     }
 
-    // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería).
-    if (!bot.hunting && !goldHold && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    // 1e) Cazador automático: invasión activa con más de 25 vivos en un mapa al alcance → a cazar, una
+    //     vez por invasión (hunter.js del navegador).
+    if (AUTO_HUNT_ON && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
+      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey });
+      if (ch?.ok) {
+        lastAutoHuntKey = invasionKey(bot.invasion!);
+        bot.hunting = { hunt: ch.hunt, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
+        ctx.target = null;
+        panelLog(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}: salgo a cazar (corto con ${AUTO_HUNT.stopAlive} o menos).`);
+        journal('travel', `cazador automático: ${ch.hunt.name}`, { map: ch.hunt.map, alive: ch.alive, reason: 'auto-hunt' });
+        continue;
+      }
+    }
+
+    // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería). Entre
+    //    :47 y :51 no, para llegar a la invasión de las :50 (con el cazador prendido).
+    if (!bot.hunting && !goldHold && !(AUTO_HUNT_ON && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;

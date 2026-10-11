@@ -101,7 +101,8 @@ export const world = {
 };
 
 // Cacería de dorados (orden `hunt` del panel).
-export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number> };
+// auto: la arrancó el cazador automático (corta con pocos vivos); si no, una orden del panel.
+export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number>; auto?: boolean };
 
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.
