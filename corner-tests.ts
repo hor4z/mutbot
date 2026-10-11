@@ -3,6 +3,8 @@
  *
  *   bun run corner-tests.ts
  */
+import { mageNeedsPower } from './combat';
+import { world } from './state';
 import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 
 let fails = 0;
@@ -94,6 +96,19 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('dúo: el mago va al segundo spot (medio) aunque el este rinda más', (() => { const c = new CornerSides(); c.stats.set('este', { exp: 9e9, ms: 60_000, rate: 9e9, windows: 3 }); return c.pick(0, [], [{ x: 2, y: 10 }], false, true).name === 'medio'; })());
   ok('dúo: y no vuelve a la esquina después de los 40 s', mage2.pick(200_000, [], [{ x: 12, y: 11 }], false, true).name !== 'esquina');
   ok('solo (sin compañero): elige normal y respeta los 40 s', new CornerSides().pick(0, [], [], true).name === 'esquina');
+}
+
+// --- Skill del mago: Decay con competencia o cooperando, Evil Spirit sola ---------------------------
+{
+  world.x = 7; world.y = 11; world.players.clear();
+  ok('mago sola: Evil Spirit (no hace falta Decay)', !mageNeedsPower());
+  world.players.set(1, { x: 12, y: 11, name: 'Rival' });
+  ok('mago con un rival a 5: Decay', mageNeedsPower());
+  world.players.clear(); world.players.set(2, { x: 2, y: 10, name: 'Horaz' });
+  ok('mago con Horaz en la esquina: Decay (cooperan)', mageNeedsPower());
+  world.players.clear(); world.players.set(3, { x: 40, y: 40, name: 'Lejos' });
+  ok('mago con un rival lejos: Evil Spirit', !mageNeedsPower());
+  world.players.clear();
 }
 
 // --- No irse de la esquina -------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { ConsumeItemRequest075Packet } from './packets';
 import { ATTACK_SKILLS, ATTACK_SKILL_POOL, HEAL_AT_PCT } from './config';
 import { sendToGS } from './connection';
 import { sendAreaSkill, sendTargetedSkill } from './actions';
-import { world, type ItemSlot, type SkillInfo } from './state';
+import { isMate, world, type ItemSlot, type SkillInfo } from './state';
 import { directionTowards, log } from './util';
 import skillsData from './data/skills.json';
 
@@ -91,12 +91,20 @@ export function castReach(num: number): number {
 // Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
 export const SKILL_MIN_MANA = 0.15;
 
-// Arena 2 (la esquina; CORNER.map en corner.ts): el mago tira Decay (38) en todo, pelea, camino y lo que
-// muestra el panel. Usuario: "en el spot debe tirar Decay con todo" (Evil Spirit solo sin competidores).
-const DECAY_MAP = 83;
+// Mago: Decay (38, el más poderoso) cuando hay que ganar el spot o se coopera: un rival a <= 8 o un
+// compañero a <= 15. Farmeando solo, Evil Spirit (limpia más rápido sin competencia). Usuario: "usa
+// evil cuando está solo farmeando, pero si están cooperando en los spots o debe ganarle a alguien, lo
+// más poderoso".
+export function mageNeedsPower(): boolean {
+  for (const q of world.players.values()) {
+    const d = Math.hypot(q.x - world.x, q.y - world.y);
+    if (q.name != null && isMate(q.name) ? d <= 15 : d <= 8) return true;
+  }
+  return false;
+}
 
-/** `prefer`: skill a usar si se lo conoce. Por defecto, Decay para el mago en Arena 2. */
-export function pickAttackSkill(prefer: number | undefined = isMage() && world.map === DECAY_MAP ? 38 : undefined): SkillInfo | undefined {
+/** `prefer`: skill a usar si se lo conoce. Por defecto, para el mago: Decay con competencia o compañero. */
+export function pickAttackSkill(prefer: number | undefined = isMage() && mageNeedsPower() ? 38 : undefined): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
   const preferred = prefer != null ? world.skills.get(prefer) : undefined;
   if (preferred) return preferred;
