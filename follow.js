@@ -90,7 +90,9 @@
     // nunca en medio de un grupo (>= 3 monstruos a <= 3 tiles del punto de llegada).
     const dl = d(P, lp);
     const monsNear = (q, r) => [...w.byNetId.values()].filter((e) => window.__ai?.isMonster?.(e) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && d(e.transform.pos, q) <= r).length;
-    if (dl > 10 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 2000 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
+    // Y solo si hay pared en línea recta hacia el líder (entrar/salir de corrales); si no, caminar es más rápido.
+    const wall = (() => { for (let t = 1; t <= Math.min(7, dl); t++) { const x = Math.round(P.x + (lp.x - P.x) * t / dl), z = Math.round(P.z + (lp.z - P.z) * t / dl); if (w.isWalkable?.(x, z) === false) return true; } return false; })();
+    if (dl > 4 && wall && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 2000 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
       const step = Math.min(7, dl - 2), k = step / dl, x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
       if (w.isWalkable?.(x, z) !== false && monsNear({ x, z }, 3) < 3) { F.tpAt = now; if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
     }

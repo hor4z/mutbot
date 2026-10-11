@@ -299,15 +299,17 @@
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false }; C.fastCasts = (C.fastCasts ?? 0) + 1;
   }, 100);
-  // Teleport de viaje (magos con skill 6, Melu): yendo a un destino a > 12 tiles sin pelear, saltar 7
-  // tiles hacia él cada ~1,3 s en vez de caminar (usuario: "Melu es mago, puede llegar más rápido a
-  // los spots usando teleport").
+  // Teleport de viaje (magos con skill 6, Melu): solo para pasar una pared (entrar/salir de corrales).
   if (window.__corner?.tpTimer) clearInterval(window.__corner.tpTimer);
   C.tpTimer = setInterval(() => {
     if (!C.on || !ai.on || ai.busy || ai.looting || ai.target || S.uiState !== 5 || S.sceneLoading || window.__defense?.engaged) return;
     if (!(S.skills ?? []).some((k) => k.number === 6)) return;
     const w = W(), pe = w?.playerEntity, dst = ai.explore; if (!pe || !dst || w.castRequest) return;
-    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 12 || Date.now() - (C.tpAt ?? 0) < 2000) return; // > 12 tiles y cada 2 s (más seguido se veía torpe)
+    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 3 || Date.now() - (C.tpAt ?? 0) < 2000) return;
+    // Solo para entrar o salir de los corrales (usuario: "si no, es más lento que volar"): teleport
+    // únicamente si en los próximos 7 tiles en línea recta hay una pared; con camino libre, caminar.
+    const blocked = (() => { for (let t = 1; t <= Math.min(7, dd); t++) { const x = Math.round(P.x + (dst.x - P.x) * t / dd), z = Math.round(P.z + (dst.z - P.z) * t / dd); if (w.isWalkable?.(x, z) === false) return true; } return false; })();
+    if (!blocked) return;
     const pd = S.playerData; if ((pd.currentMana ?? 100) < 30) return;
     const k = 7 / dd, x = Math.round(P.x + (dst.x - P.x) * k), z = Math.round(P.z + (dst.z - P.z) * k);
     if (w.isWalkable?.(x, z) === false) return;
