@@ -27,6 +27,11 @@ export function buildPartyAccept(requesterId: number): Uint8Array {
   return Uint8Array.from([0xc1, 0x06, 0x41, 0x01, (requesterId >> 8) & 0xff, requesterId & 0xff]);
 }
 
+/** PartyPlayerKickRequest (C1 04 43 <índice en la party>): el que armó la party (índice 0) la disuelve. */
+export function buildPartyKick(index: number): Uint8Array {
+  return Uint8Array.from([0xc1, 0x04, 0x43, index & 0xff]);
+}
+
 /** PartyInviteRequest (C1 05 40, id big-endian): invitar a party a un jugador. */
 export function buildPartyInvite(targetId: number): Uint8Array {
   return Uint8Array.from([0xc1, 0x05, 0x40, (targetId >> 8) & 0xff, targetId & 0xff]);

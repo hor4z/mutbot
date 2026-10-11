@@ -551,6 +551,23 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Cazador automático** (`autoHuntChoice`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y más de 25 vivos en un mapa al alcance (Lorencia, Noria, Devias), sale a cazar solo, una vez por invasión. Corta con 20 o menos vivos, con la invasión terminada o a los 15 min. Entre :47 y :51 no resetea.
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
 
+## Datos y aprendizaje (ClickHouse local)
+
+- `bun run db:up` levanta ClickHouse en Docker (`db/docker-compose.yml`): solo en `127.0.0.1:8123`, datos
+  en `~/.mubot/clickhouse`, credenciales en `.env.db` (no se commitea; `MUBOT_DB_USER`,
+  `MUBOT_DB_PASSWORD`, `MUBOT_DB_URL`). `bun run db:init` aplica `db/schema.sql` y `db/views.sql`.
+  Consola web: `http://127.0.0.1:8123/play`.
+- `telemetry.ts`: los bots mandan `ticks` (foto cada 5 s), `events` (decide/journal, death con
+  asesino, kill, cast, golden_seen, party, cycle) y `players_seen` (cada 10 s). Junta en memoria y manda
+  cada 5 s; si la base no responde, reintenta espaciado y sigue jugando. La estación pasa `MUBOT_DB_*`
+  de `.env.db`; sin eso no hace nada.
+- `bun run aprender` (la estación lo corre cada 30 min) muestra las vistas (`v_party`, `v_exp_spot`,
+  `v_skill`, `v_killers`, `v_rivals`, `v_cycles`, `v_golden`) y escribe `~/.mubot/knowledge.json`.
+- `knowledge.ts`: perillas que el bot ajusta solo con lo aprendido (lista cerrada). Hoy: party sí/no en
+  el dúo de la esquina (decideParty: 30 min medidos de cada lado, margen 5 %), con experimento ~10 % de
+  bloques de 30 min (`experimentSlot`). El DK disuelve la party con PartyPlayerKick índice 0 cuando los
+  datos dicen que no. Cada cambio sale en Decisiones. Borrar `knowledge.json` vuelve atrás.
+
 ## Estación (conectar personajes desde el navegador)
 
 `bun run estacion` → `http://127.0.0.1:8787/panel` (también `/`). Lista los personajes, los conecta o desconecta sin

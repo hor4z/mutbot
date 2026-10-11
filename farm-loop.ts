@@ -4,6 +4,7 @@
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
 import { askHelp, newRequests, teammates } from './team';
+import { track, trackEvent } from './telemetry';
 import { DRAGON_TYPES } from './golden';
 import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
@@ -11,7 +12,7 @@ import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
 import { SKILL_TABLE, castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, cornerActive, inCorner } from './corner';
-import { cornerStep, newCornerState } from './corner-step';
+import { cornerStep, newCornerState, type CornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
@@ -25,10 +26,10 @@ import { SelfReport } from './farming';
 import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
 import { lootState, drops, lootStep, watchDrops } from './loot';
-import { castOnTheWay, newLoopCtx, walkTowards } from './loop-ctx';
+import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
-import { publishGold, sessionStart, setLoopView, stopHunt } from './panel';
+import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
 import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, autoHuntChoice, invasionKey, mapName, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, warpAndWait, zenTxt } from './route';
@@ -52,6 +53,32 @@ const TEAM_HELP_RIVALS = 2;
 const TEAM_HELP_RATE = 150e6;
 // Ningún monstruo a la vista durante esto = el server dejó de mandar el scope: reconectar.
 const BLIND_RECONNECT_MS = 3 * 60_000;
+// Datos (telemetry.ts): foto cada 5 s y jugadores a la vista cada 10 s.
+const TICK_MS = 5_000;
+const PLAYERS_EVERY_MS = 10_000;
+let lastTickAt = 0;
+let lastPlayersAt = 0;
+
+function dataTick(ctx: LoopCtx, corner: CornerState) {
+  const now = Date.now();
+  lastTickAt = now;
+  const near = (q: { x: number; y: number }, d: number) => Math.hypot(q.x - world.x, q.y - world.y) <= d;
+  const players = [...world.players.values()];
+  const mates = players.filter((q) => q.name != null && isMate(q.name));
+  track('ticks', {
+    map: world.map, x: world.x, y: world.y, level: world.level, resets: world.resets ?? 0,
+    exp_total: ctx.expTotal, exp_min_1m: expLog.perMin(now, 60_000),
+    hp: Math.max(0, world.hp), mp: Math.max(0, world.mana),
+    mode: currentMode(), phase: ctx.phase, side: corner.since != null ? corner.sides.side.name : '',
+    rivals_near: players.filter((q) => !mates.includes(q) && near(q, 8)).length, mates_near: mates.filter((q) => near(q, 15)).length,
+    monsters_near: [...ctx.npcs.values()].filter((m) => near(m, 8)).length,
+    in_party: bot.inParty ? 1 : 0, skill: castSkill, doing: bot.doing,
+  }, now);
+  if (now - lastPlayersAt >= PLAYERS_EVERY_MS) {
+    lastPlayersAt = now;
+    for (const q of players) track('players_seen', { map: world.map, x: q.x, y: q.y, name: q.name ?? '', mate: mates.includes(q) ? 1 : 0 }, now);
+  }
+}
 
 // Totales de todas las sesiones (el loop corre una vez por conexión).
 export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
@@ -69,6 +96,8 @@ let lastFleeAt = 0;
 // Invasión ya cazada por el cazador automático (una por invasión).
 let lastAutoHuntKey: number | null = null;
 let aggroHooked = false;
+// Último skill de área confirmado por el server (para los datos).
+let castSkill = 0;
 let aggroTarget: Map<number, number> | null = null;
 function hookAggro() {
   if (aggroHooked) return;
@@ -81,6 +110,8 @@ function hookAggro() {
       if (n == null || n === lastOwnSkill) return;
       lastOwnSkill = n;
       log(`Tiro ${SKILL_TABLE.get(n)?.name ?? 'skill ' + n} (${n}).`);
+      trackEvent('cast', SKILL_TABLE.get(n)?.name ?? '', n);
+      castSkill = n;
     });
   }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
@@ -151,6 +182,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
+    const dead = world.npcs.get(p.KilledId & 0x7fff);
     world.npcs.delete(p.KilledId & 0x7fff);
     ctx.npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === bot.playerId) {
@@ -159,6 +191,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const killer = world.players.get(kid);
       const by = killer ? `${killer.name ?? 'jugador #' + kid} en (${killer.x},${killer.y})` : world.npcs.has(kid) ? monsterName(world.npcs.get(kid)!.type) : `#${kid}`;
       decide(`Me mató ${by}.`);
+      trackEvent('death', killer?.name ?? by, kid, killer ? 1 : 0, { killer: killer?.name ?? null, kx: killer?.x, ky: killer?.y, npc: killer ? null : world.npcs.get(kid)?.type ?? null });
       onDeath('ObjectGotKilled');
       return;
     }
@@ -166,6 +199,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       kills++;
       // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
       if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
+      trackEvent('kill', dead ? monsterName(dead.type) : '', dead?.type ?? 0, wasOurTarget ? (Date.now() - targetSince) / 1000 : 0);
       if (process.env.MUBOT_DEBUG_COMBAT) log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
     } else if (wasOurTarget && process.env.MUBOT_DEBUG_COMBAT) {
       // Zona concurrida: puede que otro jugador/NPC mate a nuestro objetivo
@@ -249,6 +283,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // monstruo a la vista (ni en zona segura) durante BLIND_RECONNECT_MS, se corta y se vuelve a entrar.
     // También sin exp: con la sesión "fantasma" llegan monstruos pero ninguno muere y no entra exp.
     const farming = !bot.paused && !bot.hunting && !bot.resetting && bot.inGameAt > 0;
+    if (bot.inGameAt > 0 && Date.now() - lastTickAt >= TICK_MS) dataTick(ctx, corner);
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
     const sinceIn = Date.now() - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(Date.now(), BLIND_RECONNECT_MS) === 0;
@@ -584,8 +619,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const spots = (hunting.spots ??= new Map());
       for (const n of ctx.npcs.values()) {
         if (!isGolden(n)) continue;
-        if (!spots.has(n.id) && world.map === hunting.hunt.map)
+        if (!spots.has(n.id) && world.map === hunting.hunt.map) {
           askHelp('golden', world.map, n.x, n.y, monsterName(n.type), HUNT_SHARE_MS);
+          trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
+        }
         spots.set(n.id, { x: n.x, y: n.y, type: n.type, at: now });
       }
       if (gold && ctx.target !== gold.id) {

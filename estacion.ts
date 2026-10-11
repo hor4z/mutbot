@@ -190,6 +190,25 @@ async function applyRoutine(s: Slot, r: Routine) {
 // --- Conectar / desconectar ------------------------------------------------------------------
 const ownExits = new Set<number>();
 
+// Aprender de los datos cada 30 min (scripts/aprender.ts → ~/.mubot/knowledge.json), si hay base.
+const LEARN_EVERY_MS = 30 * 60_000;
+setInterval(() => {
+  if (!Object.keys(dbEnv()).length) return;
+  Bun.spawn([process.execPath, '--env-file=.env.db', 'scripts/aprender.ts'], { cwd: ROOT, stdout: 'ignore', stderr: 'ignore' });
+}, LEARN_EVERY_MS);
+
+/** MUBOT_DB_* de .env.db (ClickHouse local, ver db/docker-compose.yml); vacío si no hay archivo. */
+function dbEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (const line of readFileSync(join(ROOT, '.env.db'), 'utf8').split('\n')) {
+      const m = /^(MUBOT_DB_[A-Z_]+)=(.*)$/.exec(line.trim());
+      if (m) out[m[1]] = m[2];
+    }
+  } catch {}
+  return out;
+}
+
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
@@ -213,6 +232,8 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
   env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
+  // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
+  Object.assign(env, dbEnv());
   const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, stdin: 'ignore', stdout: fd, stderr: fd,
   });
