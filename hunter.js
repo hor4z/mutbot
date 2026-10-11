@@ -72,10 +72,13 @@
   // Mismo criterio que el buscador (más vivos al alcance) para que los dos vayan al mismo mapa.
   const bestMap = () => Object.keys(MAPS).map(Number).filter((m) => S.playerData.level >= MAPS[m].lvl && aliveIn(m) >= CFG.huntMinAlive).sort((a, b) => aliveIn(b) - aliveIn(a) || mapScore(b) - mapScore(a))[0];
 
+  // Prioridad (usuario: "los dragones son el objetivo número 1, después los grandes, lo que tire cosas
+  // relevantes"): Golden Dragon 3 > grandes (Titan, Lizard King, Tantallos) 2 > el resto 1.
+  const prio = (name) => (/Golden Dragon/i.test(name) ? 3 : /Titan|Lizard|Tantal/i.test(name) ? 2 : 1);
   // Dorado a la vista: atacarlo primero y recordar dónde estaba.
   const sighting = (w, P) => {
     let b = null, bd = 1e9;
-    for (const e of w.byNetId.values()) if (isGold(e)) { const d = dist(P, e.transform.pos); if (d < bd) { bd = d; b = e; } }
+    for (const e of w.byNetId.values()) if (isGold(e)) { const d = dist(P, e.transform.pos) - prio(String(e.objectNameInWorld ?? '')) * 40; if (d < bd) { bd = d; b = e; } }
     if (b && !h.seen.has(b.netId)) {
       h.seen.add(b.netId); const p = b.transform.pos, k = cellOf(p.x, p.z);
       const g = (gold[w.mapIndex] ??= {}); g[k] = (g[k] ?? 0) + 1; jset(`mubot-gold:${me}`, gold);
@@ -87,7 +90,7 @@
   h.reports = [];
   const pollGold = () => fetch('http://127.0.0.1:8788/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me) : []; }).catch(() => {});
   const reportGoal = (P, w) => {
-    const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }) })).sort((a, b) => a.d - b.d)[0];
+    const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }), p: prio(g.name ?? '') })).sort((a, b) => b.p - a.p || a.d - b.d)[0];
     if (!near || near.d < 4) return null;
     if (h.lastReport !== near.id) { h.lastReport = near.id; ai.L(`HUNTER: ${near.from} vio ${near.name || 'un dorado'} en (${near.x},${near.y}) a ${near.d} tiles: voy`); }
     return { x: near.x, z: near.y, kind: 'hunter:aviso' };
@@ -163,8 +166,11 @@
   (window.__mubotTimers ??= []).push(h.lingerTimer);
   h.pollTimer = window.setInterval(() => {
     if (!h.on && !h.auto) return; pollGold(); if (!h.on) return;
-    const w = W(), pe = w?.playerEntity; if (!pe || (ai.target && isGold(ai.target))) return;
+    const w = W(), pe = w?.playerEntity; if (!pe) return;
     const g = reportGoal(pe.transform.pos, w);
+    // Peleando un dorado: solo se cambia si el aviso es de mayor prioridad (un dragón).
+    if (ai.target && isGold(ai.target) && !(g && prio(g.name ?? '') > prio(String(ai.target.objectNameInWorld ?? '')))) return;
+    if (g && ai.target && isGold(ai.target)) { ai.target = null; W().attackTarget = null; }
     if (g && (ai.explore?.kind !== 'hunter:aviso' || dist(ai.explore, g) > 4)) { ai.explore = g; ai.moveTo(pe, g); }
   }, 2000);
   (window.__mubotTimers ??= []).push(h.pollTimer);
