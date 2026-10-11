@@ -93,7 +93,7 @@
     const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }), p: prio(g.name ?? '') })).sort((a, b) => b.p - a.p || a.d - b.d)[0];
     if (!near || near.d < 4) return null;
     if (h.lastReport !== near.id) { h.lastReport = near.id; ai.L(`HUNTER: ${near.from} vio ${near.name || 'un dorado'} en (${near.x},${near.y}) a ${near.d} tiles: voy`); }
-    return { x: near.x, z: near.y, kind: 'hunter:aviso' };
+    return { x: near.x, z: near.y, kind: 'hunter:aviso', name: near.name };
   };
   // Próxima celda: primero donde ya aparecieron dorados (más vistas, más cerca), después el resto.
   const nextCell = (P, w) => {
