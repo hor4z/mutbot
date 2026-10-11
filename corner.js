@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, dwellMs: 40000, rivalPenalty: 0.25, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, devias4: { x: 69, z: 181 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, dwellMs: 40000, rivalPenalty: 0.25, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
   // misma clase que los magos que lideran la esquina).
@@ -122,6 +122,17 @@
       const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
       let best = null, bn = 0;
       for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
+      // Campamento vacío 10 s (Melu quedó en (57,191), el "spot de arriba" del agente, con 0 monstruos):
+      // ir al grupo más grande a <= 25 de la llegada, o al spot que usa Horaz, (69,181).
+      const campEmpty = ai.camp?.map === 2 && ![...w.byNetId.values()].some((e) => alive(e) && d(e.transform.pos, ai.camp) <= 10);
+      if (campEmpty) C.campEmptySince ??= Date.now(); else C.campEmptySince = null;
+      if (C.campEmptySince && Date.now() - C.campEmptySince > 10000) {
+        C.campEmptySince = null;
+        const far = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 25);
+        let fb = null, fn = 0; for (const e of far) { const n = far.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > fn) { fn = n; fb = e.transform.pos; } }
+        const to = fb && fn >= 2 ? { x: Math.round(fb.x), z: Math.round(fb.z) } : C.devias4;
+        ai.camp = { ...to, map: 2, since: Date.now(), lastSeen: Date.now(), known: true }; ai.explore = { ...to, kind: 'camp' }; ai.moveTo(pe, to); L(`campamento vacío en Devias: voy a (${to.x},${to.z})`);
+      }
       if (best && bn >= 3 && (!ai.camp || ai.camp.map !== 2 || d(ai.camp, best) > 4 || d(ai.camp, A) > 15)) {
         ai.camp = { x: Math.round(best.x), z: Math.round(best.z), map: 2, since: Date.now(), lastSeen: Date.now(), known: true };
         if (!ai.target) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
