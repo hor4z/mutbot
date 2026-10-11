@@ -91,9 +91,18 @@
       // seguidor pelea de verdad: Evil Spirit al monstruo más cercano a <= 4 tiles cada 0,4 s, con vida
       // > 60 % y maná > 20 %, sin esperar a que el líder esté quieto. Va a <= 2 tiles del líder.
       if (window.__coopFight && w.mapIndex === h.map && pd.currentHP / pd.maxHP > 0.6 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 400 && !w.castRequest) {
-        const P = pe.transform.pos; let near = null, nd = 99;
-        for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } }
-        if (near && nd <= 4) { const sk = window.__coopSkill ?? 9; if (S.currentSkill !== sk) S.selectSkill(sk); const tp = near.transform.pos; w.castRequest = { target: near, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
+        // Agrupar (usuario: "agrupando mayor número de atacantes"): con >= 2 monstruos a <= 4 tiles,
+        // Evil Spirit (área alrededor); si no, Ice al más lejano a <= 7 tiles que esté lejos del líder,
+        // para traerlo al grupo y que el giro del líder lo agarre junto con el resto.
+        const P = pe.transform.pos; let near = null, nd = 99, close = 0, far = null, fd = -1;
+        for (const e of w.byNetId.values()) {
+          if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue;
+          const d = dist(P, e.transform.pos), dl = dist(h, e.transform.pos);
+          if (d < nd) { nd = d; near = e; } if (d <= 4) close++;
+          if (d <= 7 && dl >= 4 && dl > fd) { fd = dl; far = e; }
+        }
+        const pick = close >= 2 ? [near, window.__coopSkill ?? 9] : far ? [far, window.__pullFarSkill ?? 7] : near && nd <= 4 ? [near, window.__coopSkill ?? 9] : null;
+        if (pick) { const [tg, sk] = pick; if (S.currentSkill !== sk) S.selectSkill(sk); const tp = tg.transform.pos; w.castRequest = { target: tg, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
       }
       const pull = window.__pullSkill;
       if (pull && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 1 && h.still && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 1500) {
