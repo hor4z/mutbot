@@ -6,7 +6,7 @@
 import { ATTACK_PACE_MS, PARTY_MATES, SKILL_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { buildPartyInvite, buildPartyKick } from './protocol097';
-import { partyWanted } from './knowledge';
+import { isPriorityChar, partyWanted } from './knowledge';
 import { sendHit, sendTargetedSkill } from './actions';
 import { castReach, isMage, mageNeedsPower, pickAttackSkill, useSkill } from './combat';
 import { CORNER, CornerSides, SIDE, SIDES, mageCenter, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
@@ -191,7 +191,10 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     // El que me pega primero; si no, el grupo; si no, el lado elegido por exp medida.
     // (el que me pega, solo si está dentro de la esquina: si no, salía de la esquina y volvía sin parar)
     const aggroHere = aggro && Math.hypot(aggro.x - CORNER.home.x, aggro.y - CORNER.home.y) <= CORNER.radius + CORNER.fill ? aggro : null;
-    const ct = planted ? null : (aggroHere ?? cornerTarget(me, mons, playersNear, r));
+    // El prioritario (Horaz) disputa los grupos aunque haya rivales encima: esperando quieto, los rivales
+    // se llevaban el 66-87 % de las kills del sector (datos 2026-10-11). Los demás, como antes.
+    const contest = isPriorityChar(bot.charName) ? 0 : playersNear;
+    const ct = planted ? null : (aggroHere ?? cornerTarget(me, mons, contest, r));
     // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
     const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
     const before = corner.sides.side.name;
