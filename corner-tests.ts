@@ -3,9 +3,9 @@
  *
  *   bun run corner-tests.ts
  */
-import { mageNeedsPower } from './combat';
+import { mageNeedsPower, spotIsTight } from './combat';
 import { world } from './state';
-import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { mageCenter, CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -109,6 +109,21 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   world.players.clear(); world.players.set(3, { x: 40, y: 40, name: 'Lejos' });
   ok('mago con un rival lejos: Evil Spirit', !mageNeedsPower());
   world.players.clear();
+  const me = { x: 7, y: 11 };
+  const amontonados = [{ x: 4, y: 10 }, { x: 5, y: 10 }, { x: 4, y: 11 }, { x: 5, y: 11 }, { x: 4, y: 9 }];
+  ok('spot cerrado (5 amontonados): Decay', spotIsTight(amontonados, me));
+  const abiertos = [{ x: 3, y: 11 }, { x: 11, y: 11 }, { x: 7, y: 7 }, { x: 7, y: 15 }];
+  ok('spot abierto (repartidos alrededor): Evil Spirit', !spotIsTight(abiertos, me));
+  ok('pocos monstruos: Evil Spirit', !spotIsTight([{ x: 5, y: 10 }, { x: 5, y: 11 }], me));
+}
+
+// --- Mago solo: al centro del grupo más grande ------------------------------------------------------
+{
+  const grupo = [{ x: 12, y: 12 }, { x: 13, y: 12 }, { x: 12, y: 13 }, { x: 13, y: 13 }, { x: 11, y: 12 }];
+  const c = mageCenter([...grupo, { x: 3, y: 10 }], 5);
+  ok('mago solo: el centro es el grupo grande (5 a tiro)', c.n >= 5 && Math.hypot(c.at.x - 12, c.at.y - 12.5) <= 1.5, c);
+  ok('mago solo sin monstruos: home', mageCenter([], 5).at.x === CORNER.home.x);
+  ok('mago solo: ignora monstruos fuera de la esquina', mageCenter([{ x: 60, y: 60 }, { x: 61, y: 60 }], 5).n === 0);
 }
 
 // --- No irse de la esquina -------------------------------------------------------------------
