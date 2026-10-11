@@ -8,8 +8,8 @@ import { sendToGS } from './connection';
 import { buildPartyInvite, buildPartyKick } from './protocol097';
 import { partyWanted } from './knowledge';
 import { sendHit, sendTargetedSkill } from './actions';
-import { castReach, isMage, pickAttackSkill, useSkill } from './combat';
-import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { castReach, isMage, mageNeedsPower, pickAttackSkill, useSkill } from './combat';
+import { CORNER, CornerSides, SIDE, SIDES, mageCenter, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { decide, journal } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
@@ -119,6 +119,19 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   const mateInCorner = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
   const planted = here && isMage() && mateInCorner && skill != null;
   const st = here ? (spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
+  // Mago solo (sin rivales ni compañero cerca): al centro del grupo más grande, para que Evil Spirit
+  // agarre la mayor cantidad. Se mueve solo si allá agarra 2+ más que acá.
+  if (here && isMage() && !mageNeedsPower()) {
+    const c = mageCenter(mons, r);
+    const nHere = mons.filter((m) => Math.hypot(m.x - me.x, m.y - me.y) <= r).length;
+    if (c.n >= nHere + 2 && Math.hypot(c.at.x - me.x, c.at.y - me.y) > 1.5) {
+      ctx.phase = 'walk';
+      bot.goalPoint = [c.at.x, c.at.y];
+      bot.doing = `esquina de Arena 2: sola, me centro en el grupo (${c.n} a tiro contra ${nHere})`;
+      await walkTowards(ctx, c.at.x, c.at.y);
+      return;
+    }
+  }
   // Mago parado en la esquina con un compañero a la vista: primero dejarle la esquina al DK (si no,
   // con monstruos siempre a tiro no salía nunca del giro).
   const matesSeen = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));

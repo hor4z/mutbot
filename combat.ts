@@ -95,12 +95,27 @@ export const SKILL_MIN_MANA = 0.15;
 // compañero a <= 15. Farmeando solo, Evil Spirit (limpia más rápido sin competencia). Usuario: "usa
 // evil cuando está solo farmeando, pero si están cooperando en los spots o debe ganarle a alguien, lo
 // más poderoso".
-export function mageNeedsPower(): boolean {
+// También en un spot cerrado (usuario: "si el spot es muy cerrado conviene Decay"): si un tiro de Decay
+// (radio ~3,5 alrededor del objetivo) agarra al menos el 80 % de lo que agarra Evil Spirit (radio ~5
+// alrededor mío), Decay rinde más (95 de daño contra 45).
+export function mageNeedsPower(monsters: Iterable<{ x: number; y: number }> = world.npcs.values()): boolean {
   for (const q of world.players.values()) {
     const d = Math.hypot(q.x - world.x, q.y - world.y);
     if (q.name != null && isMate(q.name) ? d <= 15 : d <= 8) return true;
   }
-  return false;
+  return spotIsTight([...monsters], { x: world.x, y: world.y });
+}
+
+/** ¿Los monstruos a tiro están tan juntos que un Decay agarra casi lo mismo que un Evil Spirit? */
+export function spotIsTight(monsters: readonly { x: number; y: number }[], me: { x: number; y: number }, evilR = 5, decayR = 3.5, decayReach = 6): boolean {
+  const evil = monsters.filter((m) => Math.hypot(m.x - me.x, m.y - me.y) <= evilR).length;
+  if (evil < 3) return false;
+  let decay = 0;
+  for (const t of monsters) {
+    if (Math.hypot(t.x - me.x, t.y - me.y) > decayReach) continue;
+    decay = Math.max(decay, monsters.filter((m) => Math.hypot(m.x - t.x, m.y - t.y) <= decayR).length);
+  }
+  return decay >= 0.8 * evil;
 }
 
 /** `prefer`: skill a usar si se lo conoce. Por defecto, para el mago: Decay con competencia o compañero. */

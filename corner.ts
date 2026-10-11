@@ -109,6 +109,21 @@ export function cornerTarget<M extends Pos>(me: Pos, monsters: readonly M[], pla
   return best;
 }
 
+/**
+ * Mago solo: el punto (un monstruo o home) que deja más monstruos a <= r de la esquina (Evil Spirit
+ * pega alrededor). Usuario: "si está solo, a un mago le conviene centrarse y explotar la mayor cantidad
+ * de enemigos". Empate: el más cerca de home. Devuelve el punto y cuántos agarra.
+ */
+export function mageCenter<M extends Pos>(monsters: readonly M[], r: number): { at: Pos; n: number } {
+  const pool = monsters.filter((m) => dist(m, CORNER.home) <= CORNER.radius + CORNER.fill);
+  let best = { at: { x: CORNER.home.x, y: CORNER.home.y } as Pos, n: cluster(CORNER.home as M, pool, r) };
+  for (const m of pool) {
+    const n = cluster(m, pool, r);
+    if (n > best.n || (n === best.n && dist(m, CORNER.home) < dist(best.at, CORNER.home))) best = { at: { x: m.x, y: m.y }, n };
+  }
+  return best;
+}
+
 /** La Arena "de afuera" según el nivel: 24 (Arena 2, otro spot), 25 (Arena 3) o 26 (Arena 4). */
 export const altWarp = (level: number) => (level >= 300 ? 26 : level >= 200 ? 25 : 24);
 
