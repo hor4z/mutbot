@@ -7,7 +7,7 @@ import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
 import { isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, CornerSides, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
-import { journal, panelLog } from './journal';
+import { decide, journal } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 import { WARP_COOLDOWN_MS, WARP_SPOTS, warpAndWait } from './route';
@@ -65,13 +65,14 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     const rivals = rivalPlayers().filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
     const altRate = corner.altRates.get(altWarp(world.level));
-    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate })) {
+    const mateHere = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
+    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level, mateHere })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;
       ctx.target = null;
       const alt = WARP_SPOTS.find((sp) => sp.index === altWarp(world.level))!;
       const vs = `${Math.round(rate / 1e6)}M/min el último minuto contra ${Math.round(Math.max(altRate ?? 0, CORNER.altMinRate) / 1e6)}M de ${alt.name}`;
-      panelLog(`Esquina ${rivals >= CORNER.fullRivals ? `llena (${rivals} jugadores)` : 'sin rendir'}, ${vs}: voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
+      decide(`Esquina ${rivals >= CORNER.fullRivals ? `llena (${rivals} jugadores)` : 'sin rendir'}, ${vs}: voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
       journal('travel', `esquina llena: warp a ${alt.name}`, { warp: alt.index, reason: 'corner-full', rivals });
       await warpAndWait(alt);
       return;
@@ -123,7 +124,12 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     const ct = aggroHere ?? cornerTarget(me, mons, playersNear, r);
     // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
     const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
+    const before = corner.sides.side.name;
     const goal = ct ?? corner.sides.pick(now, rivalPlayers(), mates, !isMage());
+    if (corner.sides.side.name !== before) {
+      const why = mates.some((m) => inCorner(m)) ? `con ${mates.map((m) => m.name).join(', ')} en la esquina` : 'rinde más';
+      decide(`Esquina: me paso al lado ${corner.sides.side.name} (${why}).`);
+    }
     // Sin skill hay que llegar pegado para el golpe normal.
     const reach = ct ? (skill ? r : 1) : 0.8;
     bot.goalPoint = [goal.x, goal.y];

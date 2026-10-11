@@ -113,8 +113,13 @@ export function cornerTarget<M extends Pos>(me: Pos, monsters: readonly M[], pla
 export const altWarp = (level: number) => (level >= 300 ? 26 : level >= 200 ? 25 : 24);
 
 /** ¿La esquina está llena y conviene irse un rato? */
-export function cornerFull(inp: { rivals: number; inCornerSince: number | null; now: number; rate1m: number; altRate?: number }): boolean {
+export function cornerFull(inp: { rivals: number; inCornerSince: number | null; now: number; rate1m: number; altRate?: number; level?: number; mateHere?: boolean }): boolean {
   if (inp.inCornerSince == null) return false;
+  // Con un compañero en la esquina se sostiene el sector entre los dos: no se va.
+  if (inp.mateHere) return false;
+  // Debajo del 200 "la Arena de su nivel" es Arena 2 misma: irse es farmear peor en el mismo mapa
+  // (Melu en nivel 124 se iba a los 60 s). Ahí se queda y compite.
+  if (inp.level != null && altWarp(inp.level) === CORNER.warp) return false;
   const inside = inp.now - inp.inCornerSince;
   const alt = Math.max(inp.altRate ?? 0, CORNER.altMinRate);
   const poor = inp.rate1m < alt * CORNER.altFrac;

@@ -1502,3 +1502,36 @@ time {
   color: var(--gold);
   font-weight: 600;
 }
+
+/* Decisiones del personaje (vista general) */
+.decisions {
+  display: grid;
+  gap: 8px;
+}
+.decision {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.decision time {
+  font-size: 10px;
+  color: #6e7e88;
+  flex-shrink: 0;
+}
+.decision.travel span {
+  color: var(--gold);
+}
+.decision.reset span {
+  color: var(--green);
+}
+.decision.mode span,
+.decision.command span {
+  color: #a8b4bd;
+}
+.decision-count {
+  color: #6e7e88;
+  font-weight: 500;
+}

@@ -30,6 +30,9 @@ import {
 import { Radar } from "./Radar";
 import knight from "../../assets/ui/knight-alpha.webp";
 type Log = { at: number; text: string; kind: string };
+// Decisiones del bot (el diario): viajes, reset, órdenes, cambios de modo y decisiones con motivo.
+type Decision = { at: number; kind: string; what: string; n: number };
+const DECISION_KINDS = new Set(["decide", "travel", "reset", "mode", "command"]);
 type Chat = { at: number; kind: "normal" | "party" | "guild" | "whisper" | "server"; from: string; text: string; mine?: boolean };
 const chatKinds: Record<Chat["kind"], string> = { normal: "", party: "Party", guild: "Guild", whisper: "Susurro", server: "Server" };
 const channels = [
@@ -80,6 +83,7 @@ function useBot() {
     [connected, setConnected] = useState(false),
     [logs, setLogs] = useState<Log[]>([]),
     [chats, setChats] = useState<Chat[]>([]),
+    [decisions, setDecisions] = useState<Decision[]>([]),
     [result, setResult] = useState<{ id: number; ok: boolean } | null>(null),
     [toast, setToast] = useState("");
   const socket = useRef<WebSocket | null>(null),
@@ -123,11 +127,26 @@ function useBot() {
           window.dispatchEvent(
             new CustomEvent("panel-state", { detail: m.state }),
           );
-        } else if (m.type === "hello") {
+        } else if (m.type === "decision" || m.type === "history") {
+          const list = m.type === "decision" ? [m.decision] : m.decisions;
+          setDecisions((old) => {
+            let out = old;
+            for (const d of list) {
+              if (!DECISION_KINDS.has(d.kind)) continue;
+              const at = Date.parse(d.at) || Date.now();
+              // La misma decisión seguida no se repite: se cuenta (×n) y se actualiza la hora.
+              const last = out[out.length - 1];
+              out = last && last.what === d.what ? [...out.slice(0, -1), { ...last, at, n: last.n + 1 }] : [...out, { at, kind: d.kind, what: d.what, n: 1 }];
+            }
+            return out.slice(-50);
+          });
+        }
+        if (m.type === "hello") {
           // Al (re)conectar el bot vuelve a mandar el historial, el log y el chat: empezar de cero
           // (si no, cada reconexión los duplicaba).
           setLogs([]);
           setChats([]);
+          setDecisions([]);
         } else if (m.type === "log") add(m.text, m.at);
         else if (m.type === "chat")
           setChats((old) => [...old, m as Chat].slice(-500));
@@ -172,7 +191,7 @@ function useBot() {
     );
     return id;
   }
-  return { state, connected, logs, chats, result, toast, send, lastAt, levels };
+  return { state, connected, logs, chats, decisions, result, toast, send, lastAt, levels };
 }
 function Controls({
   s,
@@ -400,7 +419,7 @@ function ChatPanel({
   );
 }
 export function Panel() {
-  const { state: s, connected, logs, chats, result, toast, send, lastAt, levels } = useBot();
+  const { state: s, connected, logs, chats, decisions, result, toast, send, lastAt, levels } = useBot();
   const [tab, setTab] = useState("overview"),
     [onlyBot, setOnlyBot] = useState(false),
     [now, setNow] = useState(Date.now());
@@ -535,6 +554,20 @@ export function Panel() {
                   label="Maná"
                   tone="blue"
                 />
+              </Section>
+              <Section title="Decisiones">
+                <div className="decisions">
+                  {decisions.slice(-6).reverse().map((d, i) => (
+                    <div className={`decision ${d.kind}`} key={`${d.at}:${i}`}>
+                      <time>{clock(d.at)}</time>
+                      <span>
+                        {d.what}
+                        {d.n > 1 && <b className="decision-count"> ×{d.n}</b>}
+                      </span>
+                    </div>
+                  ))}
+                  {!decisions.length && <p className="empty-copy">Acá aparece lo que decide el personaje y por qué.</p>}
+                </div>
               </Section>
               {s && <Near s={s} />}
             </div>
