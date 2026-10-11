@@ -105,7 +105,8 @@
     if ((window.__followHelp ?? true) && !(F.calmUntil && now < F.calmUntil) && dl <= 12 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 250) {
       // Decay (38, Soul Master) primero: 16.145 de daño/s; Inferno (14) 14.997 como Soul Master (10.434
       // como Dark Wizard), Evil Spirit 5.383, Hellfire 4.278 (medido 2026-10-11 en Arena 2).
-      const skill = [38, 14, 9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
+      // Usuario: "usá Spirit principalmente" (alcance ~5 tiles: agarra más monstruos que Decay/Inferno).
+      const skill = [9, 38, 14, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
       let m = null, md = 1e9;
       for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P); if (dd <= 6 && dd < md) { md = dd; m = e; } } // 6 tiles: con más nivel ayuda más ("a menos que la golpeen": eso lo corta calmUntil)
       if (m && skill != null) { F.helpAt = now; if (S.currentSkill !== skill) S.selectSkill(skill); const tp = m.transform.pos; w.castRequest = { target: m, point: { x: tp.x, y: tp.z }, forced: false }; F.helps = (F.helps ?? 0) + 1; return; }
