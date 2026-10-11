@@ -5,7 +5,7 @@
  */
 import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
-import { isMage, pickAttackSkill, useSkill } from './combat';
+import { castReach, isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, CornerSides, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { decide, journal } from './journal';
 import { lootStep } from './loot';
@@ -48,7 +48,10 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   }
   bot.currentSpot = arena2;
   const me = { x: world.x, y: world.y };
-  const skill = pickAttackSkill();
+  // Mago: Evil Spirit (9) limpia rápido sin nadie al lado; con competencia es débil y va Decay (38,
+  // el meteoro verde: 95 de daño contra 45) para ganarles los monstruos.
+  const contested = rivalPlayers().some((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist);
+  const skill = pickAttackSkill(isMage() && contested ? 38 : undefined);
   const r = spinRange(skill?.number);
   const mons = [...ctx.npcs.values()];
   const here = inCorner(me);
@@ -92,11 +95,15 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   // Pegar: lo que deja más monstruos en el giro (o el que me pega, si está a tiro), a ritmo de skill.
   // Viajando, solo lo que bloquea.
   const aggroInReach = aggro && Math.hypot(aggro.x - me.x, aggro.y - me.y) <= r + 0.5 ? aggro : null;
-  const st = here ? (spinTarget(me, mons, r) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
+  // Mago con un compañero plantado en la esquina: se queda en su spot y tira de lejos (Decay a 5-6
+  // tiles) al grupo más grande a tiro, sin caminar hacia los monstruos.
+  const mateInCorner = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
+  const planted = here && isMage() && mateInCorner && skill != null;
+  const st = here ? (spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
   if (st && Date.now() - ctx.lastCastAt >= SKILL_PACE_MS) {
     ctx.phase = 'fight';
     bot.doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
-    if (skill && useSkill(st.id)) {
+    if (skill && useSkill(st.id, skill)) {
       ctx.lastCastAt = Date.now();
       ctx.skillsUsed++;
       await sleep(SKILL_PACE_MS);
@@ -128,7 +135,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     // El que me pega primero; si no, el grupo; si no, el lado elegido por exp medida.
     // (el que me pega, solo si está dentro de la esquina: si no, salía de la esquina y volvía sin parar)
     const aggroHere = aggro && Math.hypot(aggro.x - CORNER.home.x, aggro.y - CORNER.home.y) <= CORNER.radius + CORNER.fill ? aggro : null;
-    const ct = aggroHere ?? cornerTarget(me, mons, playersNear, r);
+    const ct = planted ? null : (aggroHere ?? cornerTarget(me, mons, playersNear, r));
     // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
     const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
     const before = corner.sides.side.name;
