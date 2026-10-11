@@ -230,6 +230,14 @@ export async function loadRealMap(
           mixer.uncacheRoot(gltf.scene);
         }
         gltf.scene.updateMatrixWorld(true);
+        // Planos sin espesor (calcos del piso, ej. Object20 de Devias, 136 "alfombras" violetas): su
+        // textura con mezcla no se ve bien acá y no aportan nada para seguir al personaje. Se saltean.
+        const size = new T.Box3().setFromObject(gltf.scene).getSize(new T.Vector3());
+        if (Math.min(size.x, size.y, size.z) < 0.01) {
+          disposeObject(gltf.scene);
+          complete++;
+          continue;
+        }
         const parts: T.Mesh[] = [];
         gltf.scene.traverse((o) => {
           if (o instanceof T.Mesh) parts.push(o);
