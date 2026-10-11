@@ -92,6 +92,15 @@
       F.tpAt = now; const k = Math.min(1, 7 / dl), x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
       if (w.isWalkable?.(x, z) !== false) { if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
     }
+    // Ayudar sin moverse (usuario: "ya Melu puede ayudar un poco"): al lado del líder (<= 3 tiles), si
+    // hay un monstruo a <= 5 tiles de ella, tirar su skill de área (Evil Spirit, 9) sin caminar hacia
+    // él. Nunca se aleja de Horaz por pelear. window.__followHelp = false lo apaga.
+    if ((window.__followHelp ?? true) && dl <= 3 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 400) {
+      const skill = [9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
+      let m = null, md = 1e9;
+      for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P); if (dd <= 5 && dd < md) { md = dd; m = e; } }
+      if (m && skill != null) { F.helpAt = now; if (S.currentSkill !== skill) S.selectSkill(skill); const tp = m.transform.pos; w.castRequest = { target: m, point: { x: tp.x, y: tp.z }, forced: false }; F.helps = (F.helps ?? 0) + 1; return; }
+    }
     if (dl > 2.5 && pe.playerMoveTo.handled) {
       // Un paso al lado (no encima), del lado de donde viene.
       const k = Math.min(1, 1.5 / Math.max(d(P, lp), 0.1)), x = Math.round(lp.x + (P.x - lp.x) * k), z = Math.round(lp.z + (P.z - lp.z) * k);
