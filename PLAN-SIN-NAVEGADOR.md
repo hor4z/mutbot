@@ -48,6 +48,52 @@ mismo que en el navegador), 0 paquetes perdidos.
   referencia solo con 0 exp; Devias lleno → Arena 1 desde el 50.
 - **Sin compras ni ventas** (pedido del usuario). Fuera buscador, atlas, ruta libre y la capa de decisión.
 
+## Hecho el 2026-10-11 (noche)
+
+- **Dúo en la esquina**: Horaz plantado en (2,10), Melu en el medio (7,11) con Decay; el mago le deja
+  la esquina al DK; party entre compañeros con Soul Barrier al compañero (PRs #18-#23).
+- **Cacería con memoria** de dónde se vio cada dorado, aviso al compañero y quién nos mató (#24).
+- **Cámara** en el radar del panel (#26) y radar con los mapas del server.
+- **Datos**: ClickHouse local con fotos cada 5 s, eventos, rivales, kills del sector (nuestras,
+  compañero, rivales), juntos/separados, ranking cada hora, versión y política; `bun run aprender`;
+  resultado de cada decisión (`v_outcome`); primera perilla automática: party sí/no (#27-#30).
+- Arranque: no cruzar Devias a pie desde Devias 3 (#31).
+
+## Plan de mejora continua (aprobado, 2026-10-11)
+
+Ciclo **medir → aprender → probar → adoptar o revertir**, solo, con una regla dura: **nunca se adopta
+algo que rinda menos que la línea base**, y todo cambio se revierte solo. Métrica que manda: **resets
+por día** (y debajo: exp/min farmeando, % del tiempo farmeando, tramos del ciclo, muertes).
+
+1. **F0, métricas y línea base:** `v_kpi`, `v_baseline` (mediana de 7 días por personaje y
+   franja), pestaña Rendimiento.
+2. **F1, guardarraíles:**
+   - versiones fijadas por personaje (worktree por commit);
+   - **canario**: una versión nueva corre en un personaje y, si no rinde peor, pasa al otro; si rinde
+     peor, vuelve sola a la anterior;
+   - vigías de trabado, ciego, muertes, exp baja y ciclo largo;
+   - escenas reales en los tests.
+3. **F2, decisiones que aprenden:** bandido con seguridad (explora ≤10 %, nunca peor que la regla con
+   alta probabilidad). En orden:
+   - quedarse o irse de la esquina;
+   - lados;
+   - tramo del arranque;
+   - cazar dorados;
+   - party y skill.
+4. **F3, rivales y pelea por los spots:**
+   - juntos contra separados;
+   - ganar un spot disputado o molestar a un rival del top para bajarle el ritmo de resets;
+   - PKs conocidos;
+   - coordinación de resets del dúo.
+5. **F4, ítems y dorados:** qué cae dónde y valor de cada cacería. Sin compras automáticas.
+6. **F5, ciclo automático:**
+   - informe diario;
+   - una rutina diaria de Claude propone PRs, que **se adoptan solos si pasan el canario** (decidido
+     por el usuario);
+   - registro de lo probado.
+
+Próximo paso: el 2026-10-12, con un día de datos, correr `bun run aprender` y empezar por F0 + F1.
+
 ## Pendiente, en orden
 
 1. **Igualar al agente del navegador regla por regla** (usuario: "habíamos pulido todas estas
