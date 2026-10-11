@@ -88,7 +88,7 @@
     // Teleport (skill 6) si está a > 5 tiles: salto de hasta 7 tiles hacia el líder, uno cada 1,5 s
     // (usuario: "que Melu use más teletransportación"). Caminando, quedaba atrás después de cada warp.
     const dl = d(P, lp);
-    if (dl > 5 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 1500 && !w.castRequest && pd.currentMana > 30) {
+    if (dl > 5 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 1500 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
       F.tpAt = now; const k = Math.min(1, 7 / dl), x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
       if (w.isWalkable?.(x, z) !== false) { if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
     }
