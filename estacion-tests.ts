@@ -6,6 +6,7 @@
  */
 import { isPanelCommand } from './panel-protocol';
 import {
+  parseTeamRequest,
   GOLD_TTL_MS, applyGoldSignal, freshGolds,
   DEFAULT_SERVER, botArgs, charFromEnv, exitStatus, isCharEnvFile, isRoutine, parseEnvFile, parseStationRequest,
   processRunsAccount, routineCommands, type CharConfig,
@@ -82,6 +83,15 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char
     && !applyGoldSignal(golds, { from: 'H', map: 1, x: 300, y: 1, id: 1 }, 0) && !applyGoldSignal(golds, [], 0));
   applyGoldSignal(golds, { from: 'Melu', map: 3, x: 1, y: 1, name: 'x', id: 5 }, 0);
   ok('dorado: vence al minuto', freshGolds(golds, GOLD_TTL_MS + 1).length === 0 && golds.size === 0);
+}
+
+// --- equipo: pedidos de ayuda ---------------------------------------------------------------
+{
+  const r = parseTeamRequest({ from: 'Horaz', kind: 'corner', map: 83, x: 2, y: 10, note: '3 rivales' }, 5);
+  ok('equipo: pedido válido', r?.from === 'Horaz' && r.kind === 'corner' && r.at === 5, r);
+  ok('equipo: tipo desconocido o mapa fuera de rango → null', parseTeamRequest({ from: 'Horaz', kind: 'pk', map: 83, x: 1, y: 1 }, 0) === null &&
+    parseTeamRequest({ from: 'Horaz', kind: 'golden', map: 300, x: 1, y: 1 }, 0) === null && parseTeamRequest([], 0) === null);
+  ok('equipo: nombre saneado', parseTeamRequest({ from: '<Melu>', kind: 'golden', map: 2, x: 1, y: 1 }, 0)?.from === 'Melu');
 }
 
 // --- salida del bot -----------------------------------------------------------------------

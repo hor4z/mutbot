@@ -3,19 +3,21 @@
  * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
+import { askHelp, newRequests, teammates } from './team';
+import { DRAGON_TYPES } from './golden';
 import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
 import { castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
-import { CORNER, cornerActive } from './corner';
+import { CORNER, cornerActive, inCorner } from './corner';
 import { cornerStep, newCornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
 import { attackerOf } from './protocol097';
-import { GOLDEN_TYPES, MATES } from './state';
+import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
@@ -27,7 +29,7 @@ import { castOnTheWay, newLoopCtx, walkTowards } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { publishGold, sessionStart, setLoopView, stopHunt } from './panel';
-import { AUTO_HUNT, GoldReporter, HuntExplorer, autoHuntChoice, invasionKey, mapName, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
+import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, autoHuntChoice, invasionKey, mapName, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, typeStats, world, type ScopedNpc } from './state';
@@ -41,6 +43,9 @@ const REPORT_EVERY_MS = 5 * 60_000;
 const HUNT_NORMAL_RANGE = 3;
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
 const EARLY_STARVE_MS = 60_000;
+// Equipo: pedir ayuda en la esquina con esta cantidad de rivales y rindiendo menos que esto.
+const TEAM_HELP_RIVALS = 2;
+const TEAM_HELP_RATE = 150e6;
 // Ningún monstruo a la vista durante esto = el server dejó de mandar el scope: reconectar.
 const BLIND_RECONNECT_MS = 3 * 60_000;
 
@@ -369,11 +374,49 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       if (!goldAnnounced.has(gold.id)) {
         goldAnnounced.add(gold.id);
         decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
+        // Un dragón: pedir ayuda al equipo (lo matan entre los dos y hay más cajas para levantar).
+        if (DRAGON_TYPES.has(gold.type) && teammates().length && askHelp('golden', world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`))
+          decide(`Pido ayuda al equipo con el ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       ctx.target = gold.id;
       targetType = gold.type;
       targetSince = nowG;
       stuckCount = 0;
+    }
+
+    // 1f) Equipo (team.ts): pedir ayuda para sostener la esquina y contestar los pedidos de los compañeros.
+    {
+      const me = { x: world.x, y: world.y };
+      const mates = teammates();
+      if (world.map === CORNER.map && inCorner(me) && mates.length) {
+        const rivals = [...world.players.values()].filter((q) => !(q.name && isMate(q.name)) && Math.hypot(q.x - me.x, q.y - me.y) <= CORNER.fullRivalDist).length;
+        const mateHere = mates.some((m) => m.map === CORNER.map && inCorner(m));
+        const rate = expLog.perMin(nowG, 60_000);
+        if (rivals >= TEAM_HELP_RIVALS && !mateHere && rate < TEAM_HELP_RATE && nowG - bot.lastArrivalAt > 60_000 &&
+          askHelp('corner', world.map, me.x, me.y, `${rivals} rivales en la esquina, ${Math.round(rate / 1e6)}M/min`))
+          decide(`Pido ayuda a ${mates.map((m) => m.char).join(', ')} en la esquina: ${rivals} rivales y ${Math.round(rate / 1e6)}M/min.`);
+      }
+      for (const r of newRequests()) {
+        if (r.kind === 'corner') {
+          if (world.level < CORNER.minLevel) decide(`${r.from} pide ayuda en la esquina, pero me falta nivel (${world.level}/${CORNER.minLevel}).`);
+          else if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} pide ayuda en la esquina, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
+          else if (world.map === CORNER.map && inCorner(me)) decide(`${r.from} pide ayuda en la esquina: ya estoy acá, sostenemos el sector juntos.`);
+          else {
+            corner.awayUntil = 0;
+            bot.pinnedSpot = null;
+            decide(`${r.from} pide ayuda en la esquina (${r.note}): voy.`);
+          }
+        } else if (r.kind === 'golden') {
+          const hm = HUNT_MAPS.find((h) => h.map === r.map);
+          if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} vio ${r.note}, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
+          else if (!hm || world.level < hm.reqLevel) decide(`${r.from} vio ${r.note}: no puedo ir a ese mapa.`);
+          else {
+            bot.hunting = { hunt: hm, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
+            ctx.target = null;
+            decide(`${r.from} vio ${r.note}: voy a ayudarlo.`);
+          }
+        }
+      }
     }
 
     // 1e) Cazador automático: invasión activa con más de 25 vivos en un mapa al alcance → a cazar, una

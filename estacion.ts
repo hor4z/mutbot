@@ -19,7 +19,7 @@ import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, r
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
@@ -198,6 +198,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   env.MUBOT_GOLD_URL = `http://127.0.0.1:${PORT}/api/gold`;
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
+  env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
   const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, stdin: 'ignore', stdout: fd, stderr: fd,
   });
@@ -302,6 +303,17 @@ async function ranking(): Promise<unknown> {
   }
 }
 
+// Equipo: pedidos de ayuda vigentes (uno por personaje y tipo, vencen a los 2 min).
+const teamRequests = new Map<string, TeamRequest>();
+function team() {
+  const now = Date.now();
+  for (const [k, r] of teamRequests) if (now - r.at > TEAM_REQUEST_TTL_MS) teamRequests.delete(k);
+  const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
+    char: s.cfg.char, level: s.state!.char.level, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
+  }));
+  return { members, requests: [...teamRequests.values()] };
+}
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 refreshSlots();
@@ -323,10 +335,25 @@ Bun.serve({
       if (url.pathname === '/api/gold') return new Response(JSON.stringify(freshGolds(golds, Date.now())), { headers: { ...GOLD_CORS, 'content-type': 'application/json', 'cache-control': 'no-store' } });
       // Ranking del server (top de resets y ELO de Arena), el mismo que muestra el cliente web.
       if (url.pathname === '/api/ranking') return json(await ranking());
+      // Equipo: dónde está cada personaje y los pedidos de ayuda vigentes (los bots lo consultan).
+      if (url.pathname === '/api/team') return json(team());
       if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       return new Response('No encontrado.', { status: 404 });
+    }
+    if (url.pathname === '/api/team' && req.method === 'POST') {
+      // Solo los bots (sin Origin): ninguna página del navegador pide ayuda en su nombre.
+      if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
+      const body = await req.text();
+      if (body.length > 1024) return json({ ok: false }, 413);
+      let raw: unknown;
+      try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
+      const r = parseTeamRequest(raw, Date.now());
+      if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
+      teamRequests.set(`${r.from}:${r.kind}`, r);
+      say(`${r.from} pide ayuda (${r.kind}): ${r.note}`);
+      return json({ ok: true });
     }
     if (url.pathname === '/api/gold') {
       const origin = req.headers.get('origin');

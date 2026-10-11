@@ -17,6 +17,8 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
 export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number;
+  // compañeros que ya estaban en la esquina (para anunciar cuando llega uno)
+  matesHere: Set<string>;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
   altRates: Map<number, number> };
 
@@ -24,7 +26,7 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
 const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map() };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -65,7 +67,12 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     const rivals = rivalPlayers().filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
     const altRate = corner.altRates.get(altWarp(world.level));
-    const mateHere = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
+    const matesIn = [...world.players.values()].filter((q) => q.name != null && isMate(q.name) && inCorner(q));
+    const mateHere = matesIn.length > 0;
+    // Llegó un compañero: anunciar el reparto (él toma otro lado; ver CornerSides.pick).
+    for (const q of matesIn)
+      if (!corner.matesHere.has(q.name!)) decide(`Llegó ${q.name} a la esquina: cooperamos, yo en el lado ${corner.sides.side.name} y ${q.name} en el otro.`);
+    corner.matesHere = new Set(matesIn.map((q) => q.name!));
     if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level, mateHere })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;

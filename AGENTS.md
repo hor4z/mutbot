@@ -536,6 +536,13 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - No cuentan como rivales: ni para "esquina llena", ni para la elección de lado, ni para la defensa.
   - Si un compañero está en la esquina, los lados que ocupa no se eligen y se cambia ya; el DK se planta en la esquina (2,10) si está libre.
   - **Sin party**: se rechaza toda invitación. Con party la exp se reparte; en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min. `--party-mates` acepta party solo de un compañero.
+- **Equipo** (`team.ts`; la estación hace de canal: `GET/POST /api/team`, `MUBOT_TEAM_URL`):
+  - Cada bot consulta cada 5 s dónde están los compañeros y los pedidos de ayuda vigentes (2 min).
+  - **Pide ayuda en la esquina** con 2+ rivales, sin compañero y rindiendo < 150M/min (como mucho una vez cada 3 min).
+  - **Pide ayuda con un dragón** (Golden Dragon o Dragón Rojo) a la vista.
+  - **El compañero contesta** con una decisión: va a la esquina (desde el 100), sale a cazar a ese mapa, o dice por qué no puede (nivel, cazando, reseteando, en pausa).
+  - Cuando un compañero llega a la esquina se anuncia el reparto de lados.
+  - El `POST` solo lo aceptan los bots: con `Origin` se rechaza.
 - **Dorados** (`golden.ts`): farmeando, un dorado a ≤ 20 tiles es el objetivo, dragones (44/79) primero. A los 2 min sin matarlo se deja. Mientras dura, y 15 s después para las cajas, no resetea, no cambia de spot ni vuelve a la esquina.
 - **Defensa propia** (`defense.ts`):
   - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.

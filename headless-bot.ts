@@ -51,6 +51,7 @@
  *   util.ts         log, sleep, bytes, direcciones
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
+import { startTeamPolling } from './team';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
@@ -108,6 +109,7 @@ async function session(deadline: number): Promise<LoopResult> {
     trackWorld();
     trackPanelPackets();
     watchChat();
+    startTeamPolling();
     worldTracked = true;
   }
   await loginAndSelectCharacter();
