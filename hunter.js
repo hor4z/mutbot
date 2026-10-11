@@ -194,7 +194,7 @@
     //    avisado o a la vista); los grandes duran menos de un minuto y a los 2-3 min no queda casi nada.
     const nowD = new Date();
     if (active && !h.invStart) h.invStart = Date.now(); if (!active) h.invStart = null;
-    if (h.on && h.pre) { if (active) h.pre = false; else if (nowD.getMinutes() !== 49) { h.stop('no hubo invasión'); return; } else return; }
+    if (h.on && h.pre) { if (active) h.pre = false; else if (![49, 50].includes(nowD.getMinutes())) { h.stop('no hubo invasión'); return; } else return; }
     if (!h.on && h.auto && h.prepos && !active && nowD.getMinutes() === 49 && nowD.getSeconds() >= 20 && lvl >= (MAPS[h.prepos]?.lvl ?? 0)) { h.start(h.prepos, false, true); ai.L(`HUNTER: me paro en ${MAPS[h.prepos].name} a esperar la invasión`); return; }
     const fresh = h.reports.filter((g) => Date.now() - g.at < 30000 && MAPS[g.map] && lvl >= MAPS[g.map].lvl);
     if (h.on && h.byReport) {
