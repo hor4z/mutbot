@@ -70,6 +70,19 @@
     }
     // Hasta 100: la ruta del usuario con Arena 1 desde nivel 50 (faltaba: se quedaba con los Yetis de
     // Devias, "muy esparcidos", del 20 al 100).
+    // Devias (nivel 20-50): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
+    // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15
+    // tiles de la llegada; no salir de ahí persiguiendo Yetis sueltos (se iba hacia el este).
+    if (w.mapIndex === 2 && S.playerData.level < 50 && ai.arrival) {
+      const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
+      let best = null, bn = 0;
+      for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
+      if (best && bn >= 3 && (!ai.camp || ai.camp.map !== 2 || d(ai.camp, best) > 4 || d(ai.camp, A) > 15)) {
+        ai.camp = { x: Math.round(best.x), z: Math.round(best.z), map: 2, since: Date.now(), lastSeen: Date.now(), known: true };
+        if (!ai.target) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
+      }
+      if (ai.target && d(ai.target.transform.pos, A) > 18) { ai.target = null; w.attackTarget = null; }
+    }
     if (S.playerData.level < C.minLevel) { if (!ai.cfg.spots.some((x) => x[0] === 1)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
     if (!(ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] === C.warp)) { C.savedSpots ??= ai.cfg.allSpots ?? window.__drakSaved ?? ai.cfg.spots; ai.cfg.spots = [[C.warp, 'Arena 2 esquina', 0]]; }
     if (w.mapIndex !== C.map) {
