@@ -76,7 +76,9 @@ function dataTick(ctx: LoopCtx, corner: CornerState) {
   }, now);
   if (now - lastPlayersAt >= PLAYERS_EVERY_MS) {
     lastPlayersAt = now;
-    for (const q of players) track('players_seen', { map: world.map, x: q.x, y: q.y, name: q.name ?? '', mate: mates.includes(q) ? 1 : 0 }, now);
+    // En el pueblo (zona segura) nadie compite: no se guarda.
+    if (!isSafeZone(world.map, world.x, world.y))
+      for (const q of players) track('players_seen', { map: world.map, x: q.x, y: q.y, name: q.name ?? '', mate: mates.includes(q) ? 1 : 0 }, now);
   }
 }
 
@@ -182,7 +184,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
-    const dead = world.npcs.get(p.KilledId & 0x7fff);
     world.npcs.delete(p.KilledId & 0x7fff);
     ctx.npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === bot.playerId) {
@@ -199,7 +200,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       kills++;
       // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
       if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
-      trackEvent('kill', dead ? monsterName(dead.type) : '', dead?.type ?? 0, wasOurTarget ? (Date.now() - targetSince) / 1000 : 0);
       if (process.env.MUBOT_DEBUG_COMBAT) log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
     } else if (wasOurTarget && process.env.MUBOT_DEBUG_COMBAT) {
       // Zona concurrida: puede que otro jugador/NPC mate a nuestro objetivo

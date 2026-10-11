@@ -564,6 +564,10 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   asesino, kill, cast, golden_seen, party, cycle) y `players_seen` (cada 10 s). Junta en memoria y manda
   cada 5 s; si la base no responde, reintenta espaciado y sigue jugando. La estación pasa `MUBOT_DB_*`
   de `.env.db`; sin eso no hace nada.
+- Qué se guarda (solo lo que sirve para aprender): la foto cada 5 s, muertes con asesino, skills,
+  dorados, party, ciclos, decisiones/viajes/resets, y jugadores vistos fuera de la zona segura. No se
+  guarda cada kill (la exp ya está en la foto) ni comandos o modos. `v_outcome` / `v_outcome_type`: el
+  resultado de cada decisión (exp/min 5 min antes contra 5 después), la base para aprender qué conviene.
 - `bun run aprender` (la estación lo corre cada 30 min) muestra las vistas (`v_party`, `v_exp_spot`,
   `v_skill`, `v_killers`, `v_rivals`, `v_cycles`, `v_golden`) y escribe `~/.mubot/knowledge.json`.
 - `knowledge.ts`: perillas que el bot ajusta solo con lo aprendido (lista cerrada). Hoy: party sí/no en

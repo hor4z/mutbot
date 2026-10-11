@@ -46,3 +46,28 @@ CREATE OR REPLACE VIEW v_golden AS
 SELECT map, text AS monster, toHour(ts) AS hour, count() AS seen
 FROM events WHERE kind = 'golden_seen'
 GROUP BY map, monster, hour;
+
+-- Resultado de cada decisión: exp/min de los 5 min antes contra los 5 min después (desde el minuto 1,
+-- para no contar el viaje). Es lo que dice si una decisión conviene.
+CREATE OR REPLACE VIEW v_outcome AS
+SELECT e.char AS char, e.ts AS ts, e.kind AS kind, e.text AS text,
+       round(avgIf(t.exp_min_1m, t.ts < e.ts)) AS before,
+       round(avgIf(t.exp_min_1m, t.ts > e.ts + INTERVAL 1 MINUTE)) AS after,
+       after - before AS delta,
+       -- cruza un reset: cambia el contador, pasa por 'resetting' o el nivel baja (la exp/min de 1 min
+       -- arrastra la de la esquina y compara peras con manzanas)
+       max(t.resets) != min(t.resets) OR countIf(t.mode = 'resetting') > 0 OR
+         maxIf(t.level, t.ts > e.ts) < minIf(t.level, t.ts < e.ts) AS crosses_reset
+FROM events AS e
+INNER JOIN ticks AS t ON t.session = e.session
+WHERE e.kind IN ('decide', 'travel')
+  AND t.ts >= e.ts - INTERVAL 5 MINUTE AND t.ts <= e.ts + INTERVAL 6 MINUTE
+GROUP BY char, ts, kind, text;
+
+-- Por tipo de decisión (números y coordenadas tapados): cuántas veces, cambio medio y % que mejoró.
+CREATE OR REPLACE VIEW v_outcome_type AS
+SELECT char, replaceRegexpAll(text, '[0-9]+', '#') AS decision, count() AS n,
+       round(avg(delta)) AS avg_delta, round(100 * avg(delta > 0)) AS pct_better
+-- (sin las que cruzan un reset: el nivel cae y compara la esquina con el arranque)
+FROM v_outcome WHERE (before > 0 OR after > 0) AND NOT crosses_reset
+GROUP BY char, decision;
