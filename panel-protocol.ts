@@ -77,6 +77,14 @@ export type PanelState = {
   trail?: [number, number][];
   /** campamento / punto al que va el bot ahora, si tiene uno */
   camp?: [number, number] | null;
+  /** lo que el bot ve en su scope (coordenadas del mapa actual): para dibujar el mapa en el panel */
+  entities?: {
+    monsters: { id: number; x: number; y: number; type: number; name: string; gold: boolean; target: boolean }[];
+    players: { id: number; x: number; y: number }[];
+    drops: { x: number; y: number; name: string; money: boolean; valuable: boolean }[];
+  };
+  /** desde que arrancó el bot: kills, muertes, skills tirados, exp ganada, loot, skill de ataque actual */
+  session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
 };
 
 export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean };

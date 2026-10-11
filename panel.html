@@ -8,180 +8,214 @@
   :root {
     --bg: #0d0b09; --panel: #17130f; --panel2: #201a14; --line: #3a2f22;
     --text: #eadfcc; --muted: #9c8e78; --gold: #e3b05a; --gold2: #f6d48f;
-    --hp: #c8423a; --mp: #3a6fc8; --ok: #58b36a; --warn: #e0a03a; --bad: #d4544a;
+    --hp: #c8423a; --mp: #3a6fc8; --ok: #58b36a; --warn: #e0a03a; --bad: #d4544a; --player: #5aa7e6; --drop: #b07cf0;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: radial-gradient(1200px 600px at 20% -10%, #2a1f12 0%, var(--bg) 60%); color: var(--text);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 16px; border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, #1c160f, transparent); position: sticky; top: 0; z-index: 2; backdrop-filter: blur(6px); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #1c160f, rgba(13,11,9,.85)); position: sticky; top: 0; z-index: 5; backdrop-filter: blur(6px); }
   .name { font-size: 22px; font-weight: 700; color: var(--gold2); letter-spacing: .5px; }
-  .cls { color: var(--muted); font-size: 13px; }
-  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--panel2); }
+  .sub { color: var(--muted); font-size: 13px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--line); background: var(--panel2); text-transform: uppercase; letter-spacing: .6px; }
   .pill.farm { color: var(--ok); border-color: #2f5d38; }
-  .pill.hunt { color: var(--gold2); border-color: #7a5a22; }
-  .pill.paused, .pill.connecting { color: var(--warn); border-color: #6a4c1e; }
+  .pill.hunt, .pill.scout, .pill.atlas { color: var(--gold2); border-color: #7a5a22; }
+  .pill.paused, .pill.connecting, .pill.resetting { color: var(--warn); border-color: #6a4c1e; }
   .pill.dead, .pill.off { color: var(--bad); border-color: #6a2a25; }
-  .doing { color: var(--text); flex: 1 1 260px; }
-  .conn { font-size: 12px; color: var(--muted); }
-  main { display: grid; gap: 14px; padding: 16px; grid-template-columns: repeat(12, 1fr); max-width: 1400px; margin: 0 auto; }
+  .doing { flex: 1 1 260px; font-size: 15px; }
+  .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  main { display: grid; gap: 14px; padding: 14px 16px; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .col { display: grid; gap: 14px; align-content: start; min-width: 0; }
   .card { background: linear-gradient(180deg, var(--panel), #120f0b); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-width: 0; }
-  .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); font-weight: 700; }
-  .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; } .c6 { grid-column: span 6; }
-  @media (max-width: 1000px) { .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } }
-  .big { font-size: 30px; font-weight: 700; color: var(--gold2); font-variant-numeric: tabular-nums; }
-  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-variant-numeric: tabular-nums; }
-  .kv span:nth-child(odd) { color: var(--muted); }
-  .bar { height: 10px; border-radius: 6px; background: #2a221a; overflow: hidden; margin: 4px 0 10px; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card h2 small { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; }
+  .big { font-size: 28px; font-weight: 700; color: var(--gold2); font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .bar { height: 10px; border-radius: 6px; background: #2a221a; overflow: hidden; margin: 3px 0 8px; position: relative; }
   .bar > i { display: block; height: 100%; width: 0; transition: width .4s; }
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
-  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; text-align: center; }
-  .stat b { display: block; font-size: 16px; color: var(--gold2); font-variant-numeric: tabular-nums; }
+  .bar.lvl { height: 14px; } .bar.lvl > i { background: linear-gradient(90deg, #a77a33, var(--gold2)); }
+  .bar.lvl span { position: absolute; inset: 0; font-size: 10px; line-height: 14px; text-align: center; color: #1a1209; font-weight: 700; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; text-align: center; min-width: 0; }
+  .stat b { display: block; font-size: 17px; color: var(--gold2); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stat small { color: var(--muted); font-size: 11px; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  button, select { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid #5a4630; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  .spread { display: flex; justify-content: space-between; gap: 10px; align-items: end; }
+  button, select { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid #5a4630; border-radius: 8px; padding: 7px 11px; cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold2); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { background: linear-gradient(180deg, #7a5420, #4f3510); border-color: #a77a33; color: #fff3da; }
-  .events { display: grid; gap: 8px; }
-  .ev { display: flex; justify-content: space-between; align-items: center; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-  .ev .t { font-family: var(--mono); font-size: 16px; color: var(--gold2); }
-  .ev.open { border-color: #2f5d38; } .ev.open .t { color: var(--ok); }
-  .inv { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  button.on { border-color: var(--gold); color: var(--gold2); }
+  .mapwrap { position: relative; border-radius: 10px; overflow: hidden; background: #070605; border: 1px solid var(--line); aspect-ratio: 1 / 1; }
+  .mapwrap canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; cursor: crosshair; }
+  .maplbl { position: absolute; left: 10px; top: 8px; font-weight: 700; color: var(--gold2); text-shadow: 0 1px 3px #000; pointer-events: none; }
+  .maptools { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
+  .maptools button { padding: 4px 9px; font-size: 12px; background: rgba(32,26,20,.85); }
+  .tip { position: absolute; pointer-events: none; background: rgba(20,16,12,.95); border: 1px solid var(--gold); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; white-space: nowrap; z-index: 3; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #2a2016; border: 1px solid var(--line); }
   .chip b { color: var(--gold2); }
+  .chip.gold { border-color: #a77a33; background: #3a2a12; }
+  .ev { display: flex; justify-content: space-between; align-items: center; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .ev .t { font-family: var(--mono); font-size: 15px; color: var(--gold2); }
+  .ev.open { border-color: #2f5d38; } .ev.open .t { color: var(--ok); }
+  .ev.inv.active { border-color: #a77a33; background: #2c2010; }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
-  th, td { text-align: right; padding: 5px 6px; border-bottom: 1px solid #2a221a; white-space: nowrap; }
+  th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid #2a221a; white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   td.tag { color: var(--muted); font-style: italic; text-align: left; }
-  .log { font-family: var(--mono); font-size: 12px; height: 320px; overflow: auto; background: #0f0c09; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
-  .log div { white-space: pre-wrap; } .log .t { color: var(--muted); margin-right: 8px; } .log .cmd { color: var(--gold2); }
-  .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); }
-  .tramos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .tramo { flex: 1 1 60px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px; text-align: center; }
-  .tramo small { display: block; color: var(--muted); font-size: 11px; }
-  .tramo b { font-variant-numeric: tabular-nums; }
-  .tramo.better b { color: var(--ok); } .tramo.worse b { color: var(--bad); }
-  .viewer { position: relative; height: 380px; border-radius: 10px; overflow: hidden; background: radial-gradient(400px 300px at 50% 70%, #3a2a16, #0b0907); border: 1px solid var(--line); }
+  .log { font-family: var(--mono); font-size: 12px; height: 300px; overflow: auto; background: #0f0c09; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .log div { white-space: pre-wrap; } .log .t { color: var(--muted); margin-right: 8px; } .log .cmd { color: var(--gold2); } .log .ok { color: var(--ok); } .log .bad { color: var(--bad); }
+  .log .hl { color: var(--gold2); }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .alert { display: none; background: #3a1712; border: 1px solid #8a3a2e; color: #ffd9cf; border-radius: 10px; padding: 8px 12px; margin: 10px 16px 0; }
+  .alert.show { display: block; }
+  details.card > summary { cursor: pointer; list-style: none; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); font-weight: 700; }
+  details.card > summary::after { content: ' ▸'; color: var(--muted); } details.card[open] > summary::after { content: ' ▾'; }
+  .viewer { position: relative; height: 340px; border-radius: 10px; overflow: hidden; background: radial-gradient(400px 300px at 50% 70%, #3a2a16, #0b0907); border: 1px solid var(--line); margin-top: 10px; }
   .viewer canvas { display: block; width: 100% !important; height: 100% !important; }
-  .viewer .hint, .mapbox .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .viewer .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
   .anims { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
   .anims button { padding: 4px 8px; font-size: 12px; }
-  .mapbox { position: relative; height: 380px; border-radius: 10px; overflow: hidden; background: #0b0907; border: 1px solid var(--line); }
-  .mapbox canvas { width: 100%; height: 100%; display: block; object-fit: contain; }
-  .maplbl { position: absolute; left: 10px; top: 8px; font-weight: 700; color: var(--gold2); text-shadow: 0 1px 3px #000; }
-  .toast { position: fixed; right: 16px; bottom: 16px; background: #241b12; border: 1px solid var(--gold); color: var(--text); padding: 10px 14px; border-radius: 10px; max-width: 360px; opacity: 0; transition: opacity .3s; }
+  .toast { position: fixed; right: 16px; bottom: 16px; background: #241b12; border: 1px solid var(--gold); color: var(--text); padding: 10px 14px; border-radius: 10px; max-width: 360px; opacity: 0; transition: opacity .3s; z-index: 9; }
   .toast.show { opacity: 1; }
+  .nearlist { display: grid; gap: 4px; max-height: 190px; overflow: auto; font-size: 13px; }
+  .nearlist div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; border-radius: 6px; background: var(--panel2); }
+  .nearlist .g { color: var(--gold2); font-weight: 700; }
 </style>
 </head>
 <body>
 <header>
   <div>
     <div class="name" id="name">—</div>
-    <div class="cls" id="cls">esperando al bot…</div>
+    <div class="sub" id="sub">esperando al bot…</div>
   </div>
   <span class="pill off" id="mode">sin conexión</span>
   <div class="doing" id="doing"></div>
-  <div class="conn" id="conn"></div>
+  <div class="conn"><span class="dot" id="connDot"></span><span id="conn">conectando…</span></div>
 </header>
+<div class="alert" id="alert"></div>
 
 <main>
-  <section class="card c5">
-    <h2>Personaje</h2>
-    <div class="viewer" id="viewer">
-      <div class="anims"><button data-anim="idle">Quieto</button><button data-anim="walk">Caminar</button><button data-anim="skill">Giro</button></div>
-      <div class="hint" id="viewerHint">cargando modelo…</div>
-    </div>
-  </section>
-  <section class="card c7">
-    <h2>Mapa</h2>
-    <div class="mapbox" id="mapbox"><canvas id="mapCanvas" width="1024" height="1024"></canvas><div class="maplbl" id="mapLbl">—</div><div class="hint" id="mapHint"></div></div>
-  </section>
-  <section class="card c4">
-    <h2>Personaje</h2>
-    <div class="row" style="justify-content:space-between">
-      <div><div class="muted">Nivel</div><div class="big" id="level">—</div></div>
-      <div style="text-align:right"><div class="muted">Resets</div><div class="big" id="resets">—</div></div>
-    </div>
-    <div class="muted">Vida <span id="hpTxt"></span></div><div class="bar"><i id="hpBar" style="background:var(--hp)"></i></div>
-    <div class="muted">Maná <span id="mpTxt"></span></div><div class="bar"><i id="mpBar" style="background:var(--mp)"></i></div>
-    <div class="stats">
-      <div class="stat"><b id="sStr">—</b><small>Fuerza</small></div>
-      <div class="stat"><b id="sAgi">—</b><small>Agilidad</small></div>
-      <div class="stat"><b id="sVit">—</b><small>Vitalidad</small></div>
-      <div class="stat"><b id="sEne">—</b><small>Energía</small></div>
-    </div>
-    <div class="kv" style="margin-top:10px">
-      <span>Puntos libres</span><span id="points">—</span>
-      <span>Zen</span><span id="zen">—</span>
-    </div>
-  </section>
+  <div class="col">
+    <section class="card">
+      <h2>Mapa <small id="mapInfo">—</small></h2>
+      <div class="mapwrap" id="mapwrap">
+        <canvas id="mapCanvas" width="1024" height="1024"></canvas>
+        <div class="maplbl" id="mapLbl">—</div>
+        <div class="maptools">
+          <button id="zoomNear" class="on" title="Ver alrededor del personaje">Cerca</button>
+          <button id="zoomMid" title="Ver la zona">Zona</button>
+          <button id="zoomFull" title="Ver el mapa entero">Mapa</button>
+        </div>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#ffdf8a"></i>yo</span>
+        <span><i style="background:#e05a4a"></i>monstruo</span>
+        <span><i style="background:#ffd23a;box-shadow:0 0 6px #ffd23a"></i>dorado</span>
+        <span><i style="background:var(--player)"></i>jugador</span>
+        <span><i style="background:var(--drop);border-radius:2px"></i>drop valioso</span>
+        <span><i style="background:#2f5d38"></i>zona segura</span>
+        <span><i style="border:2px solid var(--ok);background:none"></i>destino</span>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Lo que va haciendo <small><label><input type="checkbox" id="onlyBot"> solo el bot</label></small></h2>
+      <div class="log" id="log"></div>
+    </section>
+    <section class="card">
+      <h2>Ciclos <small id="cycInfo"></small></h2>
+      <div class="row" id="tramos"></div>
+      <div style="overflow:auto;margin-top:10px"><table id="cycles"><thead><tr><th>Inicio</th><th>Min</th><th>/día</th><th>→100</th><th>→200</th><th>→300</th><th>→400</th><th></th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
 
-  <section class="card c4">
-    <h2>Dónde y cuánto rinde</h2>
-    <div class="kv">
-      <span>Mapa</span><span id="map">—</span>
-      <span>Posición</span><span id="pos">—</span>
-      <span>Spot</span><span id="spot">—</span>
-      <span>Cerca</span><span id="nearby">—</span>
-    </div>
-    <div class="row" style="margin-top:12px; justify-content:space-between">
-      <div><div class="muted">Exp / min (1 min)</div><div class="big" id="exp1">—</div></div>
-      <div style="text-align:right"><div class="muted">Resets / día</div><div class="big" id="rpd">—</div></div>
-    </div>
-    <div class="muted" style="margin-top:4px">Exp / min (5 min): <span id="exp5">—</span></div>
-  </section>
+  <div class="col">
+    <section class="card">
+      <div class="spread">
+        <div><div class="muted">Nivel</div><div class="big" id="level">—</div></div>
+        <div style="text-align:center"><div class="muted">Exp / min</div><div class="big" id="exp1">—</div><div class="muted" style="font-size:12px">5 min: <span id="exp5">—</span></div></div>
+        <div style="text-align:right"><div class="muted">Resets</div><div class="big" id="resets">—</div></div>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">Hacia el reset (<span id="resetAt">400</span>) · <span id="eta">—</span></div>
+      <div class="bar lvl"><i id="lvlBar"></i><span id="lvlTxt"></span></div>
+      <div class="muted" style="font-size:12px">Vida <span id="hpTxt"></span></div><div class="bar"><i id="hpBar" style="background:var(--hp)"></i></div>
+      <div class="muted" style="font-size:12px">Maná <span id="mpTxt"></span></div><div class="bar"><i id="mpBar" style="background:var(--mp)"></i></div>
+    </section>
 
-  <section class="card c4">
-    <h2>Control</h2>
-    <div class="row">
-      <button class="primary" data-cmd="farm">Farmear</button>
-      <button data-cmd="hunt">Cazar dorados</button>
-      <button data-cmd="pause">Pausar</button>
-      <button data-cmd="resume">Seguir</button>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <select id="huntMap" aria-label="Mapa para cazar">
-        <option value="">Cazar: mapa con más vivos</option>
-        <option value="0">Lorencia</option><option value="3">Noria</option><option value="2">Devias</option>
-      </select>
-      <button id="huntGo">Cazar ahí</button>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <select id="warpSel" aria-label="Ir a un spot">
-        <option value="2">Lorencia</option><option value="6">Devias 3</option><option value="7">Devias 4</option><option value="5">Devias 2</option>
-        <option value="24">Arena 2</option><option value="25">Arena 3</option><option value="26">Arena 4</option>
-      </select>
-      <button id="warpGo">Ir</button>
-    </div>
-    <div class="muted" style="margin-top:10px; font-size:12px">Las órdenes son de una lista cerrada; el bot valida y responde abajo en el log.</div>
-  </section>
+    <section class="card">
+      <h2>Esta sesión <small id="sesSince">—</small></h2>
+      <div class="grid3">
+        <div class="stat"><b id="sKills">—</b><small>kills</small></div>
+        <div class="stat"><b id="sKpm">—</b><small>kills / min</small></div>
+        <div class="stat"><b id="sLvls">—</b><small>niveles</small></div>
+        <div class="stat"><b id="sCasts">—</b><small>skills</small></div>
+        <div class="stat"><b id="sLoot">—</b><small>loot</small></div>
+        <div class="stat"><b id="sDeaths">—</b><small>muertes</small></div>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">Ataca con <b id="sSkill" style="color:var(--gold2)">—</b> · exp ganada <span id="sExp">—</span></div>
+    </section>
 
-  <section class="card c5">
-    <h2>Eventos</h2>
-    <div class="events" id="events"><div class="muted">sin datos todavía</div></div>
-    <h2 style="margin-top:14px">Invasión dorada</h2>
-    <div id="invasion" class="muted">—</div>
-    <div class="inv" id="tickets"></div>
-  </section>
+    <section class="card">
+      <h2>Alrededor <small id="nearSum">—</small></h2>
+      <div class="nearlist" id="nearList"><div class="muted">nada a la vista</div></div>
+    </section>
 
-  <section class="card c7">
-    <h2>Ciclo actual</h2>
-    <div class="row" style="justify-content:space-between">
-      <div><div class="muted">Minutos</div><div class="big" id="cycMin">—</div></div>
-      <div style="text-align:right"><div class="muted">Mejor ciclo</div><div class="big" id="best">—</div></div>
-    </div>
-    <div class="tramos" id="tramos"></div>
-    <h2 style="margin-top:14px">Últimos ciclos</h2>
-    <div style="overflow:auto"><table id="cycles"><thead><tr><th>Inicio</th><th>Min</th><th>/día</th><th>→100</th><th>→200</th><th>→300</th><th>→400</th><th></th></tr></thead><tbody></tbody></table></div>
-  </section>
+    <section class="card">
+      <h2>Órdenes</h2>
+      <div class="row">
+        <button class="primary" data-cmd="farm">Farmear</button>
+        <button data-cmd="pause">Pausar</button>
+        <button data-cmd="resume">Seguir</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <select id="huntMap" aria-label="Mapa para cazar">
+          <option value="">Cazar: mapa con más dorados</option>
+          <option value="0">Lorencia</option><option value="3">Noria</option><option value="2">Devias</option>
+        </select>
+        <button id="huntGo">Cazar</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <select id="warpSel" aria-label="Ir a un spot">
+          <option value="2">Lorencia</option><option value="6">Devias 3</option><option value="7">Devias 4</option><option value="5">Devias 2</option>
+          <option value="24">Arena 2</option><option value="25">Arena 3</option><option value="26">Arena 4</option>
+        </select>
+        <button id="warpGo">Ir</button>
+      </div>
+    </section>
 
-  <section class="card c12">
-    <h2>Lo que va haciendo</h2>
-    <div class="log" id="log"></div>
-  </section>
+    <section class="card">
+      <h2>Invasión y eventos</h2>
+      <div style="display:grid;gap:6px" id="events"><div class="muted">sin datos todavía</div></div>
+      <div class="chips" id="tickets" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Personaje <small id="where">—</small></h2>
+      <div class="grid4">
+        <div class="stat"><b id="sStr">—</b><small>Fuerza</small></div>
+        <div class="stat"><b id="sAgi">—</b><small>Agilidad</small></div>
+        <div class="stat"><b id="sVit">—</b><small>Vitalidad</small></div>
+        <div class="stat"><b id="sEne">—</b><small>Energía</small></div>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">Puntos libres <b id="points">—</b> · Zen <b id="zen">—</b></div>
+    </section>
+
+    <details class="card" id="modelBox">
+      <summary>Modelo 3D</summary>
+      <div class="viewer" id="viewer">
+        <div class="anims"><button data-anim="idle">Quieto</button><button data-anim="walk">Caminar</button><button data-anim="skill">Skill</button></div>
+        <div class="hint" id="viewerHint">cargando modelo…</div>
+      </div>
+    </details>
+  </div>
 </main>
 <div class="toast" id="toast"></div>
 
@@ -191,18 +225,23 @@
   const fmt = (n) => n == null || Number.isNaN(n) ? '—' : Number(n).toLocaleString('es-AR');
   const fmtM = (n) => n == null ? '—' : n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
   const hhmm = (ms) => new Date(ms).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-  const MODE = { farm: 'farmeando', hunt: 'cazando', paused: 'pausado', resetting: 'reseteando', connecting: 'conectando', dead: 'muerto' };
+  const dur = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; };
+  const MODE = { farm: 'farmeando', hunt: 'cazando', scout: 'buscando', atlas: 'explorando', paused: 'pausado', resetting: 'reseteando', connecting: 'conectando', dead: 'muerto' };
+  const CLS = { 0: 'Dark Wizard', 1: 'Soul Master', 2: 'Soul Master', 4: 'Dark Knight', 5: 'Blade Knight', 6: 'Blade Knight', 8: 'Fairy Elf', 9: 'Muse Elf', 10: 'Muse Elf', 12: 'Magic Gladiator', 16: 'Dark Lord' };
   const EVN = { devilSquare: 'Devil Square', bloodCastle: 'Blood Castle', chaosCastle: 'Chaos Castle' };
-  let ws = null, last = null, nextId = 1, logN = 0;
+  let ws = null, last = null, nextId = 1, logN = 0, lastMsgAt = 0;
+  const lvlHist = [];
 
   const toast = (t) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove('show'), 3500); };
+  const HL = /dorad|golden|drag[oó]n|caja|levant|muerte|reset|invasi/i;
   const addLog = (text, at = Date.now(), cls = '') => {
     const el = $('log'), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
-    const d = document.createElement('div'); if (cls) d.className = cls;
+    const d = document.createElement('div'); d.className = cls || (HL.test(text) ? 'hl' : ''); d.dataset.kind = cls === 'cmd' ? 'cmd' : 'bot';
     const t = document.createElement('span'); t.className = 't'; t.textContent = new Date(at).toLocaleTimeString('es-AR'); d.append(t, document.createTextNode(text));
-    el.append(d); if (++logN > 400) { el.firstChild.remove(); logN--; }
+    el.append(d); if (++logN > 500) { el.firstChild.remove(); logN--; }
     if (atBottom) el.scrollTop = el.scrollHeight;
   };
+  $('onlyBot').addEventListener('change', (e) => { for (const d of $('log').children) d.style.display = e.target.checked && /^decision|^bot /.test(d.textContent.slice(8)) ? 'none' : ''; });
   const send = (command) => {
     if (!ws || ws.readyState !== 1) return toast('Sin conexión con el bot');
     const id = nextId++; ws.send(JSON.stringify({ type: 'command', id, command }));
@@ -215,26 +254,70 @@
   const setBar = (bar, txt, [cur, max]) => { const p = max ? Math.max(0, Math.min(100, (cur / max) * 100)) : 0; $(bar).style.width = p + '%'; $(txt).textContent = `${fmt(cur)} / ${fmt(max)}`; };
 
   const render = (s) => {
-    last = s;
+    last = s; lastMsgAt = Date.now();
     $('name').textContent = s.char.name || '—';
-    $('cls').textContent = s.char.cls ?? 'personaje';
+    $('sub').textContent = `${CLS[s.char.classId] ?? 'personaje'} · ${s.where.mapName} (${s.where.x}, ${s.where.y})`;
     const m = $('mode'); m.textContent = MODE[s.mode] ?? s.mode; m.className = 'pill ' + s.mode;
     $('doing').textContent = s.doing ?? '';
-    $('level').textContent = fmt(s.char.level); $('resets').textContent = fmt(s.char.resets);
+    $('level').textContent = fmt(s.char.level); $('resets').textContent = s.char.resets == null ? '—' : fmt(s.char.resets);
+    // Progreso hacia el reset y ETA por la velocidad de los últimos minutos (niveles / min).
+    const now = Date.now(); lvlHist.push([now, s.char.level]); while (lvlHist.length && now - lvlHist[0][0] > 10 * 60000) lvlHist.shift();
+    const resetAt = 400; $('resetAt').textContent = resetAt;
+    const p = Math.max(0, Math.min(100, (s.char.level / resetAt) * 100)); $('lvlBar').style.width = p + '%'; $('lvlTxt').textContent = `${s.char.level} / ${resetAt}`;
+    const [t0, l0] = lvlHist[0] ?? [now, s.char.level], rate = (s.char.level - l0) / Math.max(1, (now - t0) / 60000);
+    $('eta').textContent = rate > 0.05 ? `${rate.toFixed(1)} niveles/min · reset en ~${dur(((resetAt - s.char.level) / rate) * 60000)}` : 'sin subir de nivel en los últimos minutos';
     setBar('hpBar', 'hpTxt', s.char.hp); setBar('mpBar', 'mpTxt', s.char.mp);
+    $('exp1').textContent = fmtM(s.exp.perMin1); $('exp5').textContent = fmtM(s.exp.perMin5);
     $('sStr').textContent = fmt(s.char.stats.str); $('sAgi').textContent = fmt(s.char.stats.agi); $('sVit').textContent = fmt(s.char.stats.vit); $('sEne').textContent = fmt(s.char.stats.ene);
     $('points').textContent = fmt(s.char.points); $('zen').textContent = fmt(s.char.zen);
-    $('map').textContent = s.where.mapName; $('pos').textContent = `(${s.where.x}, ${s.where.y})`; $('spot').textContent = s.where.spot ?? '—';
-    $('nearby').textContent = `${s.nearby.monsters} monstruos · ${s.nearby.players} jugadores`;
-    $('exp1').textContent = fmtM(s.exp.perMin1); $('exp5').textContent = fmtM(s.exp.perMin5);
-    $('rpd').textContent = s.resetsPerDay == null ? '—' : Math.round(s.resetsPerDay);
-    renderEvents(); renderInvasion(s.invasion); renderTickets(s.tickets); renderCycle(s);
+    $('where').textContent = s.where.spot ? `spot: ${s.where.spot}` : '';
+    const ses = s.session;
+    if (ses) {
+      const min = Math.max(1, (now - ses.since) / 60000);
+      $('sesSince').textContent = `desde ${hhmm(ses.since)} (${dur(now - ses.since)})`;
+      $('sKills').textContent = fmt(ses.kills); $('sKpm').textContent = (ses.kills / min).toFixed(1); $('sLvls').textContent = '+' + Math.max(0, s.char.level - ses.level0);
+      $('sCasts').textContent = fmt(ses.casts); $('sLoot').textContent = fmt(ses.loot); $('sDeaths').textContent = fmt(ses.deaths);
+      $('sDeaths').className = ses.deaths ? 'bad' : ''; $('sSkill').textContent = ses.skill; $('sExp').textContent = fmtM(ses.exp);
+    }
+    // Alertas: lo que el usuario tiene que ver sin buscarlo.
+    const al = [];
+    if (s.mode === 'dead') al.push('El personaje está muerto.');
+    if (s.char.hp[1] && s.char.hp[0] / s.char.hp[1] < 0.3) al.push('Vida por debajo del 30%.');
+    if (s.mode === 'farm' && s.exp.perMin5 === 0 && ses && now - ses.since > 5 * 60000) al.push('5 minutos sin ganar experiencia.');
+    if (s.char.points > 400) al.push(`${fmt(s.char.points)} puntos sin repartir.`);
+    $('alert').textContent = al.join(' · '); $('alert').classList.toggle('show', al.length > 0);
+    renderNear(s); renderEvents(); renderTickets(s.tickets); renderCycle(s);
+  };
+
+  const renderNear = (s) => {
+    const e = s.entities; const box = $('nearList'); box.textContent = '';
+    if (!e) { $('nearSum').textContent = `${s.nearby.monsters} monstruos · ${s.nearby.players} jugadores`; box.innerHTML = '<div class="muted">el bot no manda la lista (versión vieja)</div>'; return; }
+    const d = (o) => Math.max(Math.abs(o.x - s.where.x), Math.abs(o.y - s.where.y));
+    const groups = new Map();
+    for (const m of e.monsters) { const g = groups.get(m.name) ?? { name: m.name, n: 0, gold: m.gold, near: 99 }; g.n++; g.near = Math.min(g.near, d(m)); groups.set(m.name, g); }
+    const list = [...groups.values()].sort((a, b) => (b.gold - a.gold) || a.near - b.near);
+    $('nearSum').textContent = `${e.monsters.length} monstruos · ${e.players.length} jugadores · ${e.drops.filter((x) => x.valuable).length} drops valiosos`;
+    if (!list.length && !e.players.length) { box.innerHTML = '<div class="muted">nada a la vista</div>'; return; }
+    for (const g of list) { const r = document.createElement('div'); const a = document.createElement('span'); a.textContent = `${g.gold ? '★ ' : ''}${g.name} ×${g.n}`; if (g.gold) a.className = 'g'; const b = document.createElement('span'); b.className = 'muted'; b.textContent = `a ${g.near} tiles`; r.append(a, b); box.append(r); }
+    if (e.players.length) { const r = document.createElement('div'); r.innerHTML = '<span></span><span class="muted"></span>'; r.children[0].textContent = `Jugadores ×${e.players.length}`; r.children[0].style.color = 'var(--player)'; r.children[1].textContent = `el más cerca a ${Math.min(...e.players.map(d))} tiles`; box.append(r); }
   };
 
   const renderEvents = () => {
     const s = last; if (!s) return; const box = $('events'); box.textContent = '';
-    if (!s.events?.length) { box.innerHTML = '<div class="muted">sin datos todavía</div>'; return; }
-    for (const e of s.events) {
+    const inv = s.invasion; const iv = document.createElement('div');
+    if (inv?.status === 'active' && inv.total) {
+      iv.className = 'ev inv active';
+      iv.innerHTML = '<div><b>Invasión dorada activa</b><div class="chips" style="margin-top:4px"></div></div><div class="t"></div>';
+      iv.querySelector('.t').textContent = inv.total + ' vivos';
+      for (const m of [...inv.maps].sort((a, b) => b.alive - a.alive)) { const c = document.createElement('span'); c.className = 'chip gold'; c.innerHTML = '<b></b> '; c.querySelector('b').textContent = m.alive; c.append(m.name); iv.querySelector('.chips').append(c); }
+    } else {
+      iv.className = 'ev inv'; const next = inv?.nextAt ?? null;
+      iv.innerHTML = '<div><b>Invasión dorada</b><div class="muted" style="font-size:12px"></div></div><div class="t"></div>';
+      iv.querySelector('.muted').textContent = next ? `próxima ${hhmm(next)}` : 'sin datos';
+      if (next) { const sec = Math.max(0, Math.round((next - Date.now()) / 1000)); iv.querySelector('.t').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }
+    }
+    box.append(iv);
+    for (const e of s.events ?? []) {
       const row = document.createElement('div'); let t = '—';
       if (e.minutes === 0) { row.className = 'ev open'; t = 'ABIERTO'; }
       else if (e.opensAt) { row.className = 'ev'; const sec = Math.max(0, Math.round((e.opensAt - Date.now()) / 1000)); t = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; }
@@ -246,49 +329,42 @@
       row.append(l, r); box.append(row);
     }
   };
-  const renderInvasion = (inv) => {
-    const el = $('invasion');
-    if (!inv) { el.textContent = '—'; return; }
-    const next = inv.nextAt ? `próxima ${hhmm(inv.nextAt)}` : '';
-    if (inv.status !== 'active' || !inv.total) { el.innerHTML = ''; el.textContent = `sin invasión activa · ${next}`; return; }
-    el.textContent = '';
-    const head = document.createElement('div'); head.innerHTML = `<b class="ok"></b> vivos`; head.querySelector('b').textContent = inv.total; el.append(head);
-    const wrap = document.createElement('div'); wrap.className = 'inv';
-    for (const m of [...inv.maps].sort((a, b) => b.alive - a.alive)) { const c = document.createElement('span'); c.className = 'chip'; c.innerHTML = '<b></b> '; c.querySelector('b').textContent = m.alive; c.append(m.name); wrap.append(c); }
-    el.append(wrap);
-  };
   const renderTickets = (t) => {
     const el = $('tickets'); el.textContent = '';
-    const entries = Object.entries(t ?? {}); if (!entries.length) return;
-    for (const [k, n] of entries) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = `${k} ×${n}`; el.append(c); }
+    for (const [k, n] of Object.entries(t ?? {})) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = `${k} ×${n}`; el.append(c); }
   };
   const MARKS = [20, 50, 100, 200, 300, 350, 400];
   const renderCycle = (s) => {
     const solo = (s.cycles ?? []).filter((c) => !c.tag && c.min);
     const best = solo.reduce((b, c) => (!b || c.min < b.min ? c : b), null);
-    $('best').textContent = best ? best.min.toFixed(1) : '—';
-    const c = s.cycle; $('cycMin').textContent = c?.min != null ? c.min.toFixed(1) : '—';
+    const c = s.cycle;
+    $('cycInfo').textContent = `actual ${c?.min != null ? c.min.toFixed(1) : '—'} min · mejor ${best ? best.min.toFixed(1) : '—'} min · ${s.resetsPerDay == null ? '—' : Math.round(s.resetsPerDay)} resets/día`;
     const tr = $('tramos'); tr.textContent = '';
     let prev = 0, prevB = 0, prevLvl = 10;
     for (const lv of MARKS) {
       const at = c?.marks?.[lv], bAt = best?.marks?.[lv];
       const seg = at != null ? at - prev : null, bSeg = bAt != null ? bAt - prevB : null;
-      const d = document.createElement('div'); d.className = 'tramo' + (seg != null && bSeg != null ? (seg <= bSeg ? ' better' : ' worse') : '');
+      const d = document.createElement('div'); d.className = 'stat'; d.style.flex = '1 1 60px';
       d.innerHTML = '<small></small><b></b><small></small>';
       d.children[0].textContent = `${prevLvl}→${lv}`; d.children[1].textContent = seg != null ? seg.toFixed(1) : '…'; d.children[2].textContent = bSeg != null ? `mejor ${bSeg.toFixed(1)}` : '';
+      if (seg != null && bSeg != null) d.children[1].style.color = seg <= bSeg ? 'var(--ok)' : 'var(--bad)';
       tr.append(d); if (at != null) prev = at; if (bAt != null) prevB = bAt; prevLvl = lv;
     }
     const tb = $('cycles').querySelector('tbody'); tb.textContent = '';
-    for (const r of [...(s.cycles ?? [])].reverse().slice(0, 12)) {
+    for (const r of [...(s.cycles ?? [])].reverse().slice(0, 10)) {
       const tr2 = document.createElement('tr');
       const cells = [hhmm(r.start), r.min?.toFixed(1) ?? '—', r.min ? Math.round(1440 / r.min) : '—', r.marks?.[100] ?? '—', r.marks?.[200] ?? '—', r.marks?.[300] ?? '—', r.marks?.[400] ?? '—'];
       for (const v of cells) { const td = document.createElement('td'); td.textContent = v; tr2.append(td); }
       const tag = document.createElement('td'); tag.className = 'tag'; tag.textContent = r.tag ?? ''; tr2.append(tag); tb.append(tr2);
     }
   };
-  setInterval(renderEvents, 1000);
+  setInterval(() => {
+    renderEvents();
+    // Sin estado nuevo en 5 s con el socket abierto: el bot está colgado o desconectado del juego.
+    if (ws?.readyState === 1 && lastMsgAt && Date.now() - lastMsgAt > 5000) { $('conn').textContent = `sin novedades del bot hace ${Math.round((Date.now() - lastMsgAt) / 1000)} s`; $('connDot').className = 'dot'; }
+  }, 1000);
 
-  const setConn = (ok, txt) => { $('conn').textContent = txt; if (!ok) { const m = $('mode'); m.textContent = 'sin conexión'; m.className = 'pill off'; } };
+  const setConn = (ok, txt) => { $('conn').textContent = txt; $('connDot').className = 'dot' + (ok ? ' on' : ''); if (!ok) { const m = $('mode'); m.textContent = 'sin conexión'; m.className = 'pill off'; } };
   const connect = () => {
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + (location.host || '127.0.0.1:8787');
     setConn(false, 'conectando…');
@@ -297,19 +373,97 @@
     ws.onclose = () => { setConn(false, 'sin conexión · reintento en 3 s'); setTimeout(connect, 3000); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === 'panel-state') { render(m.state); window.dispatchEvent(new CustomEvent('panel-state', { detail: m.state })); }
+      if (m.type === 'panel-state') { if ($('connDot').className !== 'dot on') setConn(true, 'conectado'); render(m.state); window.dispatchEvent(new CustomEvent('panel-state', { detail: m.state })); }
       else if (m.type === 'log') addLog(m.text, m.at);
       else if (m.type === 'decision') addLog(`${m.decision.kind}: ${m.decision.what}`, Date.parse(m.decision.at) || Date.now());
-      else if (m.type === 'history') for (const d of m.decisions.slice(-60)) addLog(`${d.kind}: ${d.what}`, Date.parse(d.at) || Date.now());
+      else if (m.type === 'history') for (const d of m.decisions.slice(-40)) addLog(`${d.kind}: ${d.what}`, Date.parse(d.at) || Date.now());
       else if (m.type === 'command-result') { addLog(`← ${m.ok ? 'ok' : 'rechazada'}: ${m.msg}`, Date.now(), m.ok ? 'ok' : 'bad'); toast(m.msg); }
       else if (m.type === 'hello') addLog(`bot ${m.botVersion} · órdenes: ${(m.commands ?? []).join(', ')}`);
     };
   };
   connect();
+
+  // ---- Mapa: terreno real (paredes y zona segura del .att del cliente, servido por el bot en
+  // /terrain/<mapa>) + lo que el bot tiene en scope. Zoom: cerca (40 tiles), zona (90), mapa (256).
+  const cv = $('mapCanvas'), ctx = cv.getContext('2d'), tip = $('tip');
+  const terrain = new Map(); let terrainFor = null;
+  async function loadTerrain(map) {
+    terrainFor = map; if (terrain.has(map)) return;
+    terrain.set(map, null);
+    try {
+      const r = await fetch(`/terrain/${map}`); if (!r.ok) throw 0;
+      const g = new Uint8Array(await r.arrayBuffer());
+      const img = new ImageData(256, 256);
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+        const v = g[y * 256 + x], i = ((255 - y) * 256 + x) * 4;
+        const wall = v & 0x0c, safe = v & 0x01, water = v & 0x10;
+        const [R, G, B] = wall ? [22, 18, 14] : safe ? [38, 66, 44] : water ? [34, 52, 78] : [86, 72, 54];
+        img.data[i] = R; img.data[i + 1] = G; img.data[i + 2] = B; img.data[i + 3] = 255;
+      }
+      terrain.set(map, await createImageBitmap(img));
+    } catch { terrain.set(map, false); }
+  }
+  let zoom = 40;
+  for (const [id, z] of [['zoomNear', 40], ['zoomMid', 90], ['zoomFull', 256]]) $(id).addEventListener('click', () => { zoom = z; for (const b of ['zoomNear', 'zoomMid', 'zoomFull']) $(b).classList.toggle('on', b === id); });
+  let view = { x0: 0, y0: 0, span: 256 };
+  const toPx = (x, y) => { const k = cv.width / view.span; return [(x - view.x0 + 0.5) * k, (view.y0 + view.span - y - 0.5) * k]; };
+  function draw() {
+    const s = last; const W = cv.width; ctx.fillStyle = '#070605'; ctx.fillRect(0, 0, W, W);
+    if (!s) return;
+    if (s.where.map !== terrainFor) loadTerrain(s.where.map);
+    const span = zoom, cx = s.where.x, cy = s.where.y;
+    const x0 = span >= 256 ? 0 : Math.max(0, Math.min(256 - span, cx - span / 2)), y0 = span >= 256 ? 0 : Math.max(0, Math.min(256 - span, cy - span / 2));
+    view = { x0, y0, span }; const k = W / span;
+    const t = terrain.get(s.where.map);
+    ctx.imageSmoothingEnabled = false;
+    if (t) ctx.drawImage(t, x0, 256 - y0 - span, span, span, 0, 0, W, W);
+    else { ctx.strokeStyle = '#1c1712'; ctx.lineWidth = 1; for (let i = 0; i <= span; i += Math.max(1, Math.round(span / 16))) { ctx.beginPath(); ctx.moveTo(i * k, 0); ctx.lineTo(i * k, W); ctx.moveTo(0, i * k); ctx.lineTo(W, i * k); ctx.stroke(); } }
+    const r = (base) => Math.max(3, Math.min(base, k * 0.6));
+    const trail = s.trail ?? [];
+    if (trail.length > 1) { ctx.strokeStyle = 'rgba(246,212,143,.55)'; ctx.lineWidth = Math.max(2, k * 0.25); ctx.beginPath(); trail.forEach(([x, y], i) => { const [a, b] = toPx(x, y); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke(); }
+    if (s.camp) { const [a, b] = toPx(...s.camp); ctx.strokeStyle = '#58b36a'; ctx.lineWidth = 3; ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.arc(a, b, Math.max(10, k * 1.5), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      const [mx, my] = toPx(s.where.x, s.where.y); ctx.strokeStyle = 'rgba(88,179,106,.5)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(a, b); ctx.stroke(); }
+    const e = s.entities;
+    if (e) {
+      for (const d of e.drops) { if (!d.valuable && span > 90) continue; const [a, b] = toPx(d.x, d.y), q = r(d.valuable ? 9 : 5); ctx.fillStyle = d.valuable ? '#b07cf0' : d.money ? '#c9a24a' : '#6c6258'; ctx.fillRect(a - q / 2, b - q / 2, q, q); }
+      for (const p of e.players) { const [a, b] = toPx(p.x, p.y); ctx.fillStyle = '#5aa7e6'; ctx.beginPath(); ctx.arc(a, b, r(9), 0, Math.PI * 2); ctx.fill(); }
+      for (const m of e.monsters) {
+        const [a, b] = toPx(m.x, m.y);
+        if (m.gold) { const q = r(14) * 1.4; ctx.fillStyle = '#ffd23a'; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = 14; star(a, b, q); ctx.shadowBlur = 0; }
+        else { ctx.fillStyle = '#e05a4a'; ctx.beginPath(); ctx.arc(a, b, r(7), 0, Math.PI * 2); ctx.fill(); }
+        if (m.target) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(a, b, r(7) + 6, 0, Math.PI * 2); ctx.stroke(); const [mx, my] = toPx(s.where.x, s.where.y); ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(a, b); ctx.stroke(); }
+      }
+    }
+    const [a, b] = toPx(s.where.x, s.where.y), pulse = Math.max(10, k) + 6 * Math.sin(Date.now() / 250);
+    ctx.fillStyle = 'rgba(227,176,90,.22)'; ctx.beginPath(); ctx.arc(a, b, pulse + 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffdf8a'; ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(a, b, Math.max(8, Math.min(16, k * 0.7)), 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    $('mapLbl').textContent = `${s.where.mapName} · (${s.where.x}, ${s.where.y})`;
+    $('mapInfo').textContent = t === false ? 'sin terreno para este mapa' : t ? `${span >= 256 ? 'mapa entero' : span + '×' + span + ' tiles'}` : 'cargando terreno…';
+  }
+  function star(x, y, R) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const rr = i % 2 ? R * 0.45 : R, an = -Math.PI / 2 + i * Math.PI / 5; ctx.lineTo(x + rr * Math.cos(an), y + rr * Math.sin(an)); } ctx.closePath(); ctx.fill(); }
+  (function loop() { requestAnimationFrame(loop); draw(); })();
+  // Tooltip: qué hay bajo el mouse (monstruo, jugador, drop) y la coordenada.
+  cv.addEventListener('mousemove', (ev) => {
+    const s = last; if (!s) return; const rc = cv.getBoundingClientRect(), sx = (ev.clientX - rc.left) * cv.width / rc.width, sy = (ev.clientY - rc.top) * cv.height / rc.height;
+    const k = cv.width / view.span, gx = Math.floor(view.x0 + sx / k), gy = Math.floor(view.y0 + view.span - sy / k);
+    let txt = `(${gx}, ${gy})`; const e = s.entities;
+    if (e) { const near = (o) => Math.abs(o.x - gx) <= 1 && Math.abs(o.y - gy) <= 1; const m = e.monsters.find(near), p = e.players.find(near), d = e.drops.find(near);
+      if (m) txt = `${m.gold ? '★ ' : ''}${m.name} ${txt}${m.target ? ' · objetivo' : ''}`; else if (p) txt = `jugador ${txt}`; else if (d) txt = `${d.name}${d.valuable ? ' (valioso)' : ''} ${txt}`; }
+    tip.textContent = txt; tip.style.display = 'block'; tip.style.left = (ev.clientX - rc.left + 12) + 'px'; tip.style.top = (ev.clientY - rc.top + 12) + 'px';
+  });
+  cv.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
 })();
 </script>
 <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
-<script type="module">
+<script>
+// El modelo 3D (three.js desde CDN) se carga solo al abrir "Modelo 3D": el mapa y el estado
+// funcionan sin él y sin internet.
+document.getElementById('modelBox').addEventListener('toggle', (e) => {
+  if (!e.target.open || window.__viewerLoaded) return; window.__viewerLoaded = true;
+  const s = document.createElement('script'); s.type = 'module'; s.textContent = document.getElementById('viewerSrc').textContent; document.body.append(s);
+});
+</script>
+<script type="text/plain" id="viewerSrc">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -412,44 +566,8 @@ async function buildCharacter(classId, equipment) {
 }
 const extraMixers = [];
 (function loop() { requestAnimationFrame(loop); const dt = clock.getDelta(); mixer?.update(dt); for (const m of extraMixers) m.update(dt); controls.update(); renderer.render(scene, camera); })();
-
-// ---- Minimapa ----
-const WORLD = (map) => ({ 83: 7, 84: 7, 85: 7 })[map] ?? map + 1;
-const cv = document.getElementById('mapCanvas'), ctx = cv.getContext('2d');
-const mapHint = document.getElementById('mapHint'), mapLbl = document.getElementById('mapLbl');
-let mapImg = null, mapFor = null;
-async function loadMinimap(map) {
-  mapFor = map; mapImg = null; mapHint.textContent = 'cargando mapa…';
-  try {
-    const buf = new Uint8Array(await (await fetch(`${ASSETS}World${WORLD(map)}/mini_map.OZT`)).arrayBuffer());
-    // OZT = 4 bytes de cabecera + TGA sin comprimir (32 bpp, BGRA).
-    const t = buf.subarray(4), idl = t[0], w = t[12] | (t[13] << 8), h = t[14] | (t[15] << 8), bpp = t[16] >> 3, topLeft = (t[17] & 0x20) !== 0;
-    const img = new ImageData(w, h); let o = 18 + idl;
-    for (let y = 0; y < h; y++) { const row = topLeft ? y : h - 1 - y; for (let x = 0; x < w; x++) { const i = (row * w + x) * 4; img.data[i] = t[o + 2]; img.data[i + 1] = t[o + 1]; img.data[i + 2] = t[o]; img.data[i + 3] = 255; o += bpp; } }
-    mapImg = await createImageBitmap(img); mapHint.textContent = '';
-  } catch { mapHint.textContent = 'sin minimapa para este mapa'; }
-}
-function drawMap(s) {
-  const W = cv.width, k = W / 256; ctx.fillStyle = '#0b0907'; ctx.fillRect(0, 0, W, W);
-  if (mapImg) ctx.drawImage(mapImg, 0, 0, W, W);
-  // Coordenadas del juego (x, y) → píxel del minimapa.
-  const px = (x, y) => [x * k, (255 - y) * k];
-  const trail = s.trail ?? [];
-  if (trail.length > 1) { ctx.strokeStyle = 'rgba(246,212,143,.75)'; ctx.lineWidth = 6; ctx.beginPath(); trail.forEach(([x, y], i) => { const [a, b] = px(x, y); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke(); }
-  if (s.camp) { const [a, b] = px(...s.camp); ctx.strokeStyle = '#58b36a'; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(a, b, 26, 0, Math.PI * 2); ctx.stroke(); }
-  const [a, b] = px(s.where.x, s.where.y), pulse = 18 + 8 * Math.sin(Date.now() / 250);
-  ctx.fillStyle = 'rgba(227,176,90,.25)'; ctx.beginPath(); ctx.arc(a, b, pulse + 12, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#ffdf8a'; ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(a, b, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-}
-let lastState = null;
-window.addEventListener('panel-state', (ev) => {
-  const s = ev.detail; lastState = s;
-  mapLbl.textContent = `${s.where.mapName} · (${s.where.x}, ${s.where.y})`;
-  if (s.where.map !== mapFor) loadMinimap(s.where.map);
-  buildCharacter(s.char.classId, s.equipment).catch((e) => { hint.textContent = 'no pude cargar el modelo: ' + e.message; });
-  // Animación: la elige el usuario con los botones; por defecto, quieto.
-});
-(function mapLoop() { requestAnimationFrame(mapLoop); if (lastState) drawMap(lastState); })();
+const ASSETS_LAST = { s: null };
+window.addEventListener('panel-state', (ev) => { ASSETS_LAST.s = ev.detail; buildCharacter(ev.detail.char.classId, ev.detail.equipment).catch((e) => { hint.textContent = 'no pude cargar el modelo: ' + e.message; }); });
 </script>
 </body>
 </html>

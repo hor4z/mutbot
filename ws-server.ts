@@ -17,6 +17,7 @@
  * Contrato completo en panel-protocol.ts. Mismo patrón que proxy.ts: Bun.serve
  * con upgrade a WebSocket.
  */
+import { terrainOf } from './terrain';
 import { homedir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { PANEL_COMMANDS, isPanelCommand, type PanelCommand, type PanelServerMessage, type PanelState } from './panel-protocol';
@@ -180,6 +181,13 @@ export function startStatusServer(opts: { port: number; assetsDir?: string }): S
         const file = Bun.file(PANEL_FILE);
         if (await file.exists()) return new Response(file, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
         return new Response('No hay panel.html en la raíz del repo.', { status: 404 });
+      }
+      // Terreno del mapa (EncTerrainN.att descifrado, 256×256 bytes de atributos): paredes y zona
+      // segura para dibujar el mapa en el panel aunque no haya minimapa (Arenas).
+      const tm = url.pathname.match(/^\/terrain\/(\d{1,3})$/);
+      if (tm) {
+        const grid = terrainOf(Number(tm[1]));
+        return grid ? new Response(grid, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'max-age=3600' } }) : new Response('Sin terreno para ese mapa.', { status: 404 });
       }
       if (url.pathname.startsWith('/assets/')) {
         const path = resolveAssetPath(assetsDir, url.pathname.slice('/assets'.length));

@@ -145,6 +145,7 @@ import {
   MasterSkillLevelUpdatePacket,
 } from './packets';
 import monstersData from './data/monsters.json';
+import skillsData from './data/skills.json';
 import itemsData from './data/items.json';
 
 // TypeNumber reales de monstruos (del propio dataset del juego), para no confundir
@@ -1297,7 +1298,25 @@ function checkSurvival(): boolean {
 // Skills de área (AreaSkill 0x1E). El resto se manda como TargetedSkill.
 // 41 (Twisting Slash) verificado en una captura del cliente real; 42 (Rageful
 // Blow) es área en OpenMU, sin verificar todavía.
-const AREA_SKILLS = new Set([41, 42]);
+// Tabla de skills del cliente web (data/skills.json, sacada del bundle de mu.mormon.garden): tipo
+// (DirectHit / AreaSkillAutomaticHits / AreaSkillExplicitTarget / Buff / Other) y distancia de cast.
+// Sin esto Evil Spirit (9) e Inferno (14) iban como TargetedSkill y el server no hacía nada: Melu sin
+// navegador caminaba entre monstruos sin ganar exp (2026-10-11).
+type SkillRow = { num: number; name: string; type: string; distance: number; damage: number; mana: number };
+const SKILL_TABLE = new Map<number, SkillRow>((skillsData as SkillRow[]).map((r) => [r.num, r]));
+const AREA_SKILLS = new Set([41, 42, ...[...SKILL_TABLE.values()].filter((r) => r.type.startsWith('AreaSkill')).map((r) => r.num)]);
+// Mago (DW/SM): Evil Spirit primero (pedido del usuario), después Decay, Inferno, Hellfire...
+const MAGE_ATTACK_SKILLS = [9, 38, 14, 10, 12, 13, 5, 17, 11, 7, 4, 3, 2, 1];
+const isMage = () => world.skills.has(9) || world.skills.has(14) || world.skills.has(38);
+// Distancia desde la que se tira cada skill. Los de área de mago se tiran sin acercarse al cuerpo a
+// cuerpo (el browser mide ~5 tiles útiles para Evil Spirit); los de DK, pegado.
+function castReach(num: number): number {
+  const r = SKILL_TABLE.get(num);
+  if (!r) return 1;
+  if (num === 9) return 5;
+  if ([41, 42, 43, 19].includes(num)) return 1;
+  return Math.max(1, Math.min(r.distance, 5));
+}
 // Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
 const SKILL_MIN_MANA = 0.15;
 
@@ -1305,7 +1324,7 @@ function pickAttackSkill(): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
   // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
   // así que no se filtra por nivel.
-  for (const num of ATTACK_SKILL_POOL) {
+  for (const num of ATTACK_SKILLS.length ? ATTACK_SKILLS : isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
     const known = world.skills.get(num);
     if (known) return known;
   }
@@ -2524,6 +2543,19 @@ function updateTrail(now: number) {
   if (trail.length > TRAIL_MAX) trail.shift();
 }
 
+// Lo que el bucle autónomo cuenta en variables locales, expuesto al panel (sesión y objetivo).
+let loopView: (() => { kills: number; deaths: number; casts: number; exp: number; target: number | null }) | null = null;
+const sessionStart = { at: Date.now(), level: 0 };
+
+function buildPanelEntities(): NonNullable<PanelState['entities']> {
+  const tgt = loopView?.().target ?? null;
+  return {
+    monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), gold: GOLDEN_TYPES.has(n.type), target: n.id === tgt })),
+    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y })),
+    drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
+  };
+}
+
 function buildPanelState(now: number): PanelState {
   const cycles = cycleLog.done.slice(-20).map((c) => toPanelCycle(c));
   const equipment = [...world.inventory.values()]
@@ -2560,6 +2592,12 @@ function buildPanelState(now: number): PanelState {
     equipment,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: goalPoint,
+    entities: buildPanelEntities(),
+    session: (() => {
+      const v = loopView?.();
+      const skill = pickAttackSkill();
+      return { since: sessionStart.at, level0: sessionStart.level || world.level, kills: v?.kills ?? 0, deaths: v?.deaths ?? 0, casts: v?.casts ?? 0, exp: v?.exp ?? 0, loot: lootCount, skill: skill ? (SKILL_TABLE.get(skill.number)?.name ?? `skill ${skill.number}`) : 'golpe' };
+    })(),
   };
 }
 
@@ -2717,6 +2755,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   const unreachable = new Set<number>();
   let target: number | null = null;
+  loopView = () => ({ kills, deaths, casts: skillsUsed, exp: totalExpGained, target });
+  if (!sessionStart.level) sessionStart.level = world.level;
   let stuckCount = 0;
   let lastX = world.x;
   let lastY = world.y;
@@ -3241,8 +3281,9 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
       phase = 'fight';
       doing = `${hunting ? 'cazando: ' : ''}peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
-      if (dist <= 1) {
-        // A distancia de golpe: skill si hay (respetando SKILL_PACE_MS desde el
+      const reachSkill = pickAttackSkill();
+      if (dist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
+        // A distancia de golpe (o de cast, para un mago): skill si hay (respetando SKILL_PACE_MS desde el
         // último cast, también los del camino), si no el hit normal.
         const sinceCast = Date.now() - lastCastAt;
         if (sinceCast < SKILL_PACE_MS && pickAttackSkill()) {
@@ -3253,9 +3294,11 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
           lastCastAt = Date.now();
           skillsUsed++;
           await sleep(SKILL_PACE_MS);
-        } else {
+        } else if (dist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
           await sleep(ATTACK_PACE_MS);
+        } else {
+          await sleep(SKILL_PACE_MS); // sin maná para el skill: esperar en vez de pegar de lejos
         }
         continue;
       }
