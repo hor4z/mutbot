@@ -83,7 +83,11 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
 
 - **Qué es:** `RedDragonInvasionPlugIn` de OpenMU. ~5 dragones (monstruo **tipo 44**, el cliente lo muestra
   como "Golden Dragon") en **uno solo** de Lorencia / Noria / Devias, elegido al azar.
-- **Aviso:** mensaje dorado en el centro ("el dragón rojo está invadiendo"), sin decir el mapa.
+- **Aviso:** mensaje dorado en el centro. El de OpenMU por defecto dice el mapa (`[Lorencia] Red Dragon
+  invasion!`); el cazador lo lee si viene así.
+- **Dónde aparecen:** en puntos caminables **al azar** del mapa (`RandomWalkableCoordinate`), no en
+  lugares fijos. No hay aviso de muerte ni cuenta de vivos: el estado del mapa sigue "activo" los
+  **30 min** que dura, aunque ya los hayan matado a todos. Solo se ven dentro del rango de vista.
 - **Cómo saber el mapa:** paquete `MapEventState` `C1 05 0B <on> <tipo>` (tipo 1 = Dragón Rojo). Llega
   al arrancar y al terminar a los que están en ese mapa, y a cada uno que entra mientras dura.
   Medido 2026-10-10 23:23: Melu entró a Lorencia y llegó `c1 05 0b 01 01`.

@@ -87,6 +87,9 @@
     __eventBus.on('ServerMessage', (raw) => {
       try {
         const txt = new TextDecoder('latin1').decode(bytes(raw).slice(4));
+        // Mensajes por defecto de OpenMU: "[{mapName}] Red Dragon invasion!" / "... has ended." (30 min).
+        const named = { lorencia: 0, noria: 3, devias: 2 }[(txt.match(/\[(\w+)\]/)?.[1] ?? '').toLowerCase()];
+        if (/drag[oó]n rojo|red dragon/i.test(txt) && named != null) jset('mubot:red', /ended|termin/i.test(txt) ? { map: named, on: false, endedAt: Date.now() } : { map: named, on: true, at: Date.now(), by: 'anuncio' });
         if (/drag[oó]n rojo|red dragon/i.test(txt)) { localStorage.setItem('mubot:red-announced', String(Date.now())); window.__ai?.L?.(`HUNTER: anuncio "${txt.replace(/\0/g, '').trim().slice(0, 80)}"`); }
       } catch {}
     });
