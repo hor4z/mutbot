@@ -69,7 +69,11 @@
     const REQ = { 0: 0, 3: 10, 2: 20, 6: 50, 83: 100, 84: 200, 85: 300 };
     // Tampoco seguirlo si el líder va por debajo de ella (Horaz recién reseteado en Lorencia y Melu en
     // 150): la party rinde cuando el que mata es de nivel parecido o más alto.
-    if (pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
+    // Usuario: "que Horaz la ayude en niveles altos y, cuando tenga una buena suma de resets, vaya por
+    // su cuenta". Seguirlo solo desde nivel window.__followFromLevel (100) y mientras tenga menos de
+    // window.__followUntilResets (30) resets; si no, farmea sola.
+    const ownTime = pd.level < (window.__followFromLevel ?? 100) || (pd.resets ?? 0) >= (window.__followUntilResets ?? 30);
+    if (ownTime || pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
     if (F.solo) { F.solo = false; L(`nivel ${pd.level}: vuelvo con ${leader}`); }
     if (ai?.on) { ai.on = false; ai.target = null; w.attackTarget = null; }
     // Escapar: con poca vida, teleport a 7 tiles en dirección contraria al monstruo más cercano.
