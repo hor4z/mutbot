@@ -122,9 +122,9 @@
       const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
       let best = null, bn = 0;
       for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
-      // Campamento vacío 10 s (Melu quedó en (57,191), el "spot de arriba" del agente, con 0 monstruos):
+      // Campamento pobre (< 3 monstruos) 10 s (Melu quedó en (57,191), el "spot de arriba" del agente, con 0 monstruos):
       // ir al grupo más grande a <= 25 de la llegada, o al spot que usa Horaz, (69,181).
-      const campEmpty = ai.camp?.map === 2 && ![...w.byNetId.values()].some((e) => alive(e) && d(e.transform.pos, ai.camp) <= 10);
+      const campEmpty = ai.camp?.map === 2 && [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= 10).length < 3; // < 3: con 1-2 Yetis sueltos también rinde poco
       if (campEmpty) C.campEmptySince ??= Date.now(); else C.campEmptySince = null;
       if (C.campEmptySince && Date.now() - C.campEmptySince > 10000) {
         C.campEmptySince = null;
