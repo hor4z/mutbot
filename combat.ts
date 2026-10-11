@@ -91,8 +91,12 @@ export function castReach(num: number): number {
 // Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
 export const SKILL_MIN_MANA = 0.15;
 
-/** `prefer`: skill a usar si se lo conoce (ej. Decay con competencia en la esquina). */
-export function pickAttackSkill(prefer?: number): SkillInfo | undefined {
+// Arena 2 (la esquina; CORNER.map en corner.ts): el mago tira Decay (38) en todo, pelea, camino y lo que
+// muestra el panel. Usuario: "en el spot debe tirar Decay con todo" (Evil Spirit solo sin competidores).
+const DECAY_MAP = 83;
+
+/** `prefer`: skill a usar si se lo conoce. Por defecto, Decay para el mago en Arena 2. */
+export function pickAttackSkill(prefer: number | undefined = isMage() && world.map === DECAY_MAP ? 38 : undefined): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
   const preferred = prefer != null ? world.skills.get(prefer) : undefined;
   if (preferred) return preferred;
