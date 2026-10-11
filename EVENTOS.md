@@ -167,3 +167,11 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
   los 50 s y avisó; Horaz (nivel 17, en Noria) cambió solo de mapa, los mató y levantó 2 Box of Luck
   (y subió 17 → 34). La coordinación por avisos funciona. El Golden Dragon grande no apareció en las
   zonas recorridas.
+
+### Dónde salió el Golden Dragon (tipo 79)
+
+Avistamientos registrados: Lorencia **(149,168)** (salida sur del pueblo, camino al Lich), Devias
+**(110,161)** (a ~20 tiles de la entrada 7) y **(214,227)** (junto a la espera en (225,225)). El usuario
+los vio también "a la salida de Noria", en radios cortos de las entradas que usamos. El buscador de
+`hunter.js` revisa esos puntos antes que las celdas (`DRAGON_SPOTS`) y guarda cada dragón nuevo en
+`mubot-dragon-spots` (localStorage compartido entre pestañas, últimos 30 por mapa).

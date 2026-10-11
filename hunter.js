@@ -120,6 +120,8 @@
     if (b && !h.seen.has(b.netId)) {
       h.seen.add(b.netId); const p = b.transform.pos, k = cellOf(p.x, p.z);
       const g = (gold[w.mapIndex] ??= {}); g[k] = (g[k] ?? 0) + 1; jset(`mubot-gold:${me}`, gold);
+      // Punto exacto de cada Golden Dragon (tipo 79), compartido entre pestañas: el buscador los revisa primero.
+      if (b.npcType === 79) { const ds = jget('mubot-dragon-spots', {}); (ds[w.mapIndex] ??= []).push([Math.round(p.x), Math.round(p.z)]); ds[w.mapIndex] = ds[w.mapIndex].slice(-30); jset('mubot-dragon-spots', ds); }
       ai.L(`HUNTER: ${String(b.objectNameInWorld).trim()} en (${Math.round(p.x)},${Math.round(p.z)})${b.npcType === 44 ? ' (Dragón Rojo, tipo 44)' : ''}`);
     }
     // Un dragón a la vista se avisa al compañero (antes solo avisaba el explorador de Melu).
@@ -139,12 +141,20 @@
     return { x: near.x, z: near.y, kind: 'hunter:aviso', name: near.name };
   };
   // Próxima celda: primero donde ya aparecieron dorados (más vistas, más cerca), después el resto.
+  const DRAGON_SPOTS = { 0: [[149, 168]], 2: [[110, 161], [214, 227]], 3: [] };
   const nextCell = (P, w) => {
     h.visited.add(cellOf(P.x, P.z));
     const walk = (x, z) => { for (let r = 0; r < 10; r++) for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r]]) if (w.isWalkable(x + dx, z + dz)) return { x: x + dx, z: z + dz }; return null; };
     // Franja: la del CFG solo si hay un buscador activo (h.band la pisa; sin buscador, el mapa entero).
     const band = h.band ?? CFG.huntBand;
     const inBand = (x) => x >= band[0] && x < band[1];
+    // Primero los puntos donde ya salió un Golden Dragon (usuario: "aparecen en las entradas o salidas
+    // de los spots que usamos", radios cortos). Registrados: Lorencia (149,168) a la salida sur del
+    // pueblo; Devias (110,161) cerca de la entrada 7 y (214,227) junto a la espera (225,225).
+    // Noria ("a la salida") se aprende con `mubot-dragon-spots` cuando aparezca uno.
+    const ds = [...(DRAGON_SPOTS[w.mapIndex] ?? []), ...(jget('mubot-dragon-spots', {})[w.mapIndex] ?? [])];
+    const hot = ds.filter(([x, z]) => !h.visited.has(cellOf(x, z)) && inBand(x)).map(([x, z]) => walk(x, z)).filter(Boolean);
+    if (hot.length) { hot.sort((a, b) => dist(a, P) - dist(b, P)); return { ...hot[0], kind: 'hunter:dragón' }; }
     const known = Object.entries(gold[w.mapIndex] ?? {}).filter(([k]) => !h.visited.has(k) && inBand(Number(k.split(',')[0]) * 25 + 12)).map(([k, n]) => { const [cx, cz] = k.split(',').map(Number); return { n, p: walk(cx * 25 + 12, cz * 25 + 12) }; }).filter((x) => x.p);
     if (known.length) { known.sort((a, b) => b.n / (1 + dist(b.p, P) / 40) - a.n / (1 + dist(a.p, P) / 40)); return { ...known[0].p, kind: 'hunter:conocido' }; }
     let best = null, bd = 1e9;
