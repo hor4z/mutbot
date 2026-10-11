@@ -16,7 +16,7 @@ export class Defense {
   private hitBy = new Map<number, number>();
   private avoid = new Map<number, number>();
 
-  constructor(readonly friends: ReadonlySet<string> = new Set(['Horaz', 'Melu'])) {}
+  constructor(readonly friends: ReadonlySet<string> = new Set(['horaz', 'melu'])) {}
 
   /** Un jugador (id) me pegó. Devuelve true si es nuevo (para avisarlo una vez). */
   hit(id: number, now: number): boolean {
@@ -32,7 +32,7 @@ export class Defense {
     let bd = Infinity;
     for (const p of players) {
       const at = this.hitBy.get(p.id);
-      if (at == null || now - at > DEFENSE.memoryMs || (p.name && this.friends.has(p.name))) continue;
+      if (at == null || now - at > DEFENSE.memoryMs || (p.name && this.friends.has(p.name.toLowerCase()))) continue;
       const d = Math.hypot(p.x - me.x, p.y - me.y); // euclídea, como defense.js y el resto
       if (d <= DEFENSE.chaseTiles && d < bd) { bd = d; best = p; }
     }

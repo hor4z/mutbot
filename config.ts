@@ -26,7 +26,7 @@ for (let i = 0; i < argv.length; i++) {
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
   '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
-  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt',
+  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -128,3 +128,5 @@ export const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.
 
 // Cazador automático de invasiones (panel-logic.ts, AUTO_HUNT): prendido salvo --no-auto-hunt.
 export const AUTO_HUNT_ON = !args.has('--no-auto-hunt');
+// Party: rechazada siempre salvo --party-mates (acepta solo de un compañero). Ver world.ts.
+export const PARTY_MATES = args.has('--party-mates');

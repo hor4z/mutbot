@@ -196,6 +196,8 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
   env.MUBOT_GOLD_URL = `http://127.0.0.1:${PORT}/api/gold`;
+  // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
+  env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
   const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, stdin: 'ignore', stdout: fd, stderr: fd,
   });

@@ -91,7 +91,7 @@ export const world = {
   inventory: new Map<number, ItemSlot>(), // por slot de inventario
   npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
   // Otros jugadores en scope (para no competirles el objetivo, ver farming.ts).
-  players: new Map<number, { x: number; y: number }>(),
+  players: new Map<number, { x: number; y: number; name?: string }>(),
   resets: null as number | null, // CharacterResets del server (packet propio)
   grandResets: 0,
   // NPC de pueblo/servicio (TypeNumber 200-299) en scope: no son monstruos.
@@ -135,6 +135,8 @@ export const bot = {
   resetting: false,
   // El loop descarta su objetivo en el próximo tick (cambio de modo).
   retarget: false,
+  // En party (PartyList recibido; RemovePartyMember lo saca).
+  inParty: false,
   // Frase corta de lo que hace ahora (la pone el loop).
   doing: 'conectando',
   // Punto al que va ahora (campamento, salida, celda de la cacería).
@@ -164,3 +166,10 @@ export const learned = {
   hunger: new Hunger(),
   cycleLog: new CycleLog(Date.now()),
 };
+
+// Personajes propios (compañeros): no son rivales (esquina, lados, defensa) y con ellos sí hay party.
+// La estación los pasa en MUBOT_MATES (todos sus personajes); sin eso, Horaz y Melu.
+export const MATES: ReadonlySet<string> = new Set(
+  (process.env.MUBOT_MATES ?? 'Horaz,Melu').split(',').map((n) => n.trim().toLowerCase()).filter((n) => n && n !== CHAR_NAME.toLowerCase()),
+);
+export const isMate = (name: string) => MATES.has(name.toLowerCase());

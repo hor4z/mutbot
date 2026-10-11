@@ -145,8 +145,21 @@ export class CornerSides {
   readonly stats = new Map<string, { exp: number; ms: number; rate: number; windows: number }>();
   private statAt: number | null = null;
 
-  /** El lado donde esperar ahora (puede cambiar si pasaron SIDE.dwellMs). */
-  pick(now: number, players: readonly Pos[]): Side {
+  /**
+   * El lado donde esperar ahora (puede cambiar si pasaron SIDE.dwellMs). `players` = rivales (sin los
+   * compañeros). Con un compañero en la esquina (usuario: "si Horaz detecta que está Melu en un spot,
+   * que ataque el otro"): los lados que él ocupa no se eligen y se cambia ya, sin esperar; el DK
+   * (`preferCorner`) se planta en la esquina (2,10) si está libre.
+   */
+  pick(now: number, players: readonly Pos[], mates: readonly Pos[] = [], preferCorner = false): Side {
+    const taken = (s: Side) => mates.some((m) => dist(m, s) <= SIDE.near);
+    const free = SIDES.filter((s) => !taken(s));
+    if (mates.some((m) => inCorner(m)) && free.length) {
+      if (preferCorner && free.includes(SIDES[0])) return this.choose(SIDES[0], now);
+      if (taken(this.side)) return this.choose(this.bestOf(free, players), now);
+      if (now - this.since < SIDE.dwellMs) return this.side;
+      return this.choose(this.bestOf(free, players, this.side), now);
+    }
     if (now - this.since < SIDE.dwellMs) return this.side;
     this.since = now;
     const known = [...this.stats.values()].map((s) => s.rate).filter((r) => r > 0);
@@ -160,6 +173,26 @@ export class CornerSides {
     let pick = this.side;
     for (const s of SIDES) if (score(s) > score(pick) * SIDE.switchAt) pick = s;
     this.side = pick;
+    return pick;
+  }
+
+  private choose(s: Side, now: number): Side {
+    if (s !== this.side) this.since = now;
+    this.side = s;
+    return s;
+  }
+
+  /** El mejor de `options` por exp/min medida (con castigo por rivales); `keep` gana si no lo supera por SIDE.switchAt. */
+  private bestOf(options: readonly Side[], players: readonly Pos[], keep?: Side): Side {
+    const known = [...this.stats.values()].map((s) => s.rate).filter((r) => r > 0);
+    const best = known.length ? Math.max(...known) : 1;
+    const score = (s: Side) => {
+      const st = this.stats.get(s.name);
+      const r = st?.windows ? st.rate : best * SIDE.untried;
+      return r / (1 + SIDE.rivalPenalty * players.filter((p) => dist(p, s) <= SIDE.near).length);
+    };
+    let pick = keep && options.includes(keep) ? keep : options[0];
+    for (const s of options) if (score(s) > score(pick) * (pick === keep ? SIDE.switchAt : 1)) pick = s;
     return pick;
   }
 

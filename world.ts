@@ -24,8 +24,9 @@ import { scheduleEventPolls } from './events';
 import { isMonsterType, isTownNpcType } from './explore';
 import { drops } from './loot';
 import { EventBus } from './net/eventBus';
-import { PARTY_DECLINE_DELAY_MS, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
-import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo } from './state';
+import { PARTY_MATES } from './config';
+import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
+import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
 
 // ---------------------------------------------------------------------------
@@ -152,7 +153,8 @@ function parseNpcs095(raw: any): Array<{ Id: number; TypeNumber: number; Current
 // leer basura. SIN VERIFICAR contra el server real.
 const CHAR_DATA_095_LENGTH = 31;
 const CHAR_DATA_075_LENGTH = 27;
-function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number }> {
+// Nombre: 10 bytes en 14 (formato 075, 27 bytes) o en 18 (095, 31 bytes), según el XML del cliente.
+function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number; name: string }> {
   const bytes = toBytes(raw);
   const count = bytes[4];
   if (!count) return [];
@@ -165,7 +167,11 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number 
   const out = [];
   for (let i = 0; i < count; i++) {
     const base = 5 + i * stride;
-    out.push({ id: ((bytes[base] << 8) | bytes[base + 1]) & 0x7fff, x: bytes[base + 2], y: bytes[base + 3] });
+    const nameAt = base + (stride === CHAR_DATA_095_LENGTH ? 18 : 14);
+    const nb = bytes.subarray(nameAt, nameAt + 10);
+    const end = nb.indexOf(0);
+    const name = Buffer.from(end >= 0 ? nb.subarray(0, end) : nb).toString('latin1');
+    out.push({ id: ((bytes[base] << 8) | bytes[base + 1]) & 0x7fff, x: bytes[base + 2], y: bytes[base + 3], name });
   }
   return out;
 }
@@ -352,7 +358,7 @@ export function trackWorld() {
   EventBus.on('AddCharactersToScope', (raw: any) => {
     for (const c of parseCharacters095(raw)) {
       if (c.id === bot.playerId) continue;
-      world.players.set(c.id, { x: c.x, y: c.y });
+      world.players.set(c.id, { x: c.x, y: c.y, name: c.name });
     }
   });
   EventBus.on('MapObjectOutOfScope', onRemove);
@@ -377,17 +383,22 @@ export function trackWorld() {
     onMapArrival();
   });
 
-  // Invitaciones a party: rechazar siempre (pedido del usuario), con un
-  // respiro humano antes de contestar (ver protocol097.ts).
+  // Invitaciones a party: se rechazan (con party la exp se reparte: en el navegador los ciclos de
+  // Horaz pasaron de ~9 a ~13,6 min; con spots complementarios cada uno se queda con lo suyo). Con
+  // --party-mates se acepta solo de un compañero (MUBOT_MATES, por nombre). Con un respiro humano.
   EventBus.on('PartyRequest', (raw: any) => {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
+    const from = world.players.get(id)?.name;
+    const mate = PARTY_MATES && from != null && isMate(from);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
-      sendToGS(new DataView(buildPartyDecline(id).buffer));
-      log(`Party rechazada (de #${id}).`);
+      sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
+      log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
+  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, () => { bot.inParty = true; });
+  EventBus.on('RemovePartyMember', () => { bot.inParty = false; });
 }
 
 // --- Zen -----------------------------------------------------------

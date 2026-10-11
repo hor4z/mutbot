@@ -78,5 +78,19 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('lados: tres posiciones', SIDES.length === 3 && SIDE.dwellMs === 40_000);
 }
 
+// --- Esquina en dúo (compañero en un lado) -----------------------------------------------------
+{
+  const melu = { x: 7, y: 11 }; // Melu en el medio
+  const dk = new CornerSides();
+  ok('dúo: el DK se planta en la esquina (2,10) con Melu en el medio', dk.pick(0, [], [melu], true).name === 'esquina');
+  ok('dúo: y se queda aunque haya rivales en la esquina', dk.pick(100_000, [{ x: 2, y: 10 }, { x: 2, y: 11 }, { x: 3, y: 10 }], [melu], true).name === 'esquina');
+  const mage = new CornerSides();
+  ok('dúo: con Horaz en la esquina, el mago toma otro lado (ya, sin esperar)', mage.pick(0, [], [{ x: 2, y: 10 }], false).name !== 'esquina');
+  const dk2 = new CornerSides();
+  dk2.pick(0, [], [], true);
+  ok('dúo: si el compañero ocupa su lado, cambia ya', dk2.pick(1000, [], [{ x: 2, y: 10 }], true).name !== 'esquina');
+  ok('solo (sin compañero): elige normal y respeta los 40 s', new CornerSides().pick(0, [], [], true).name === 'esquina');
+}
+
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE LA ESQUINA PASARON' : `\n${fails} TEST(S) DE LA ESQUINA FALLARON`);
 process.exit(fails ? 1 : 0);

@@ -14,7 +14,7 @@ import {
 } from './panel-logic';
 import type { BotMode, EventTimer, PanelCommand, PanelState } from './panel-protocol';
 import { WARP_SPOTS } from './route';
-import { GOLDEN_TYPES, bot, expLog, learned, monsterName, world } from './state';
+import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
 import { chebyshev } from './util';
 import type { CommandResult } from './ws-server';
 
@@ -150,7 +150,7 @@ function buildPanelEntities(): NonNullable<PanelState['entities']> {
   const tgt = loopView?.().target ?? null;
   return {
     monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), gold: GOLDEN_TYPES.has(n.type), target: n.id === tgt })),
-    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y })),
+    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y, ...(p.name ? { name: p.name, mate: isMate(p.name) } : {}) })),
     drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
   };
 }

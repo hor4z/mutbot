@@ -8,10 +8,10 @@ const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
   raw instanceof Uint8Array ? raw : raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw);
 
 // ---------------------------------------------------------------------------
-// Party: rechazar siempre (pedido del usuario). PartyRequest (C1 05 40) trae el
-// id del que invita en el byte 3 (BE). La respuesta es PartyInviteResponse
-// C1 06 41 <aceptado=0> <id BE>, como la manda el agente web (con un respiro
-// humano de 0.6-1.5 s antes de contestar, que pone el bot).
+// Party: se rechaza; con --party-mates se acepta solo de los personajes propios (MUBOT_MATES).
+// PartyRequest (C1 05 40) trae el id del que invita en el byte 3 (BE). La respuesta es
+// PartyInviteResponse C1 06 41 <aceptado 0/1> <id BE>, como la manda el agente web (con un respiro
+// humano de 0.6-1.5 s antes de contestar, que pone el bot). Invitar: PartyInviteRequest C1 05 40 <id BE>.
 // ---------------------------------------------------------------------------
 export function parsePartyRequest(raw: Uint8Array | DataView | ArrayBuffer): number | null {
   const b = u8(raw);
@@ -21,6 +21,10 @@ export function parsePartyRequest(raw: Uint8Array | DataView | ArrayBuffer): num
 
 export function buildPartyDecline(requesterId: number): Uint8Array {
   return Uint8Array.from([0xc1, 0x06, 0x41, 0x00, (requesterId >> 8) & 0xff, requesterId & 0xff]);
+}
+
+export function buildPartyAccept(requesterId: number): Uint8Array {
+  return Uint8Array.from([0xc1, 0x06, 0x41, 0x01, (requesterId >> 8) & 0xff, requesterId & 0xff]);
 }
 
 export const PARTY_DECLINE_DELAY_MS: readonly [number, number] = [600, 1500];
