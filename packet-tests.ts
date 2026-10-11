@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -280,6 +280,8 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('0x11 de 8 bytes: id 512 en (135,152)', f?.id === 512 && f.x === 135 && f.y === 152, f);
   ok('0x11 de 10 bytes (ObjectHit de season 6) → null', parsePositionFix(Uint8Array.from([0xc1, 10, 0x11, 2, 0, 0, 5, 0, 0, 0])) === null);
 }
+
+ok('PartyInviteRequest: C1 05 40 + id big-endian', buildPartyInvite(0x1234).join(',') === [0xc1, 5, 0x40, 0x12, 0x34].join(','));
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);
 process.exit(fails ? 1 : 0);

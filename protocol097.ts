@@ -27,6 +27,11 @@ export function buildPartyAccept(requesterId: number): Uint8Array {
   return Uint8Array.from([0xc1, 0x06, 0x41, 0x01, (requesterId >> 8) & 0xff, requesterId & 0xff]);
 }
 
+/** PartyInviteRequest (C1 05 40, id big-endian): invitar a party a un jugador. */
+export function buildPartyInvite(targetId: number): Uint8Array {
+  return Uint8Array.from([0xc1, 0x05, 0x40, (targetId >> 8) & 0xff, targetId & 0xff]);
+}
+
 export const PARTY_DECLINE_DELAY_MS: readonly [number, number] = [600, 1500];
 
 // ---------------------------------------------------------------------------
