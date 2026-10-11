@@ -49,7 +49,9 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('llena: 3 jugadores, > 60 s, rinde < 80 % de 60M', cornerFull({ rivals: 3, inCornerSince: now - 61_000, now, rate1m: 40e6 }));
   ok('no llena: rinde bien', !cornerFull({ rivals: 5, inCornerSince: now - 61_000, now, rate1m: 200e6 }));
   ok('no llena: recién llegado', !cornerFull({ rivals: 5, inCornerSince: now - 30_000, now, rate1m: 0 }));
-  ok('no llena: 2 jugadores', !cornerFull({ rivals: 2, inCornerSince: now - 61_000, now, rate1m: 0 }));
+  ok('no llena: 2 jugadores y 61 s', !cornerFull({ rivals: 2, inCornerSince: now - 61_000, now, rate1m: 0 }));
+  ok('no rinde 90 s aunque no haya nadie: se va', cornerFull({ rivals: 0, inCornerSince: now - 91_000, now, rate1m: 30e6 }));
+  ok('rinde bien sin nadie: se queda', !cornerFull({ rivals: 0, inCornerSince: now - 300_000, now, rate1m: 300e6 }));
   ok('llena: compara con la Arena de afuera si rinde más', cornerFull({ rivals: 3, inCornerSince: 0, now, rate1m: 100e6, altRate: 200e6 }));
   ok('afuera: Arena 2 / 3 / 4 por nivel', altWarp(150) === 24 && altWarp(250) === 25 && altWarp(350) === 26);
   ok('activa desde 100 y antes del reset', cornerActive({ level: 100, resetLevel: 400, awayUntil: 0, now }) &&

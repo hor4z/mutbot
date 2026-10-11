@@ -32,6 +32,9 @@ export const CORNER = {
   altMinRate: 60e6,
   altFrac: 0.8,
   awayMs: 5 * 60_000,
+  // Esquina que no rinde aunque no haya gente (usuario: "cuando la esquina no rendía cambiaba"): más de
+  // esto adentro y el último minuto debajo de altFrac de la Arena de afuera → también se va.
+  poorAfterMs: 90_000,
   // Cerca del reset no vale la pena volver (el camino a la esquina lleva ~1 min).
   noReturnLevel: 360,
   // Con 2+ jugadores a <= 6, no caminar hacia los monstruos (cuando llega ya los mataron): pegar solo
@@ -111,9 +114,12 @@ export const altWarp = (level: number) => (level >= 300 ? 26 : level >= 200 ? 25
 
 /** ¿La esquina está llena y conviene irse un rato? */
 export function cornerFull(inp: { rivals: number; inCornerSince: number | null; now: number; rate1m: number; altRate?: number }): boolean {
-  if (inp.rivals < CORNER.fullRivals || inp.inCornerSince == null || inp.now - inp.inCornerSince <= CORNER.fullAfterMs) return false;
+  if (inp.inCornerSince == null) return false;
+  const inside = inp.now - inp.inCornerSince;
   const alt = Math.max(inp.altRate ?? 0, CORNER.altMinRate);
-  return inp.rate1m < alt * CORNER.altFrac;
+  const poor = inp.rate1m < alt * CORNER.altFrac;
+  // Llena (3+ jugadores, 60 s) y rindiendo poco, o rindiendo poco 90 s aunque no haya nadie.
+  return poor && ((inp.rivals >= CORNER.fullRivals && inside > CORNER.fullAfterMs) || inside > CORNER.poorAfterMs);
 }
 
 /** ¿Va (o vuelve) a la esquina? Afuera por estar llena hasta `awayUntil`; cerca del reset no vuelve. */
