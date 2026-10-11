@@ -305,7 +305,8 @@
     if (!C.on || !ai.on || ai.busy || ai.looting || ai.target || S.uiState !== 5 || S.sceneLoading || window.__defense?.engaged) return;
     if (!(S.skills ?? []).some((k) => k.number === 6)) return;
     const w = W(), pe = w?.playerEntity, dst = ai.explore; if (!pe || !dst || w.castRequest) return;
-    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 3 || Date.now() - (C.tpAt ?? 0) < 2000) return;
+    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 8 || Date.now() - (C.tpAt ?? 0) < 2000) return;
+    if (w.mapIndex === C.map && d(P, C.home) <= C.radius + 5) return; // en la esquina no (pegada al borde del mapa, "veía" paredes)
     // Solo para entrar o salir de los corrales (usuario: "si no, es más lento que volar"): teleport
     // únicamente si en los próximos 7 tiles en línea recta hay una pared; con camino libre, caminar.
     const blocked = (() => { for (let t = 1; t <= Math.min(7, dd); t++) { const x = Math.round(P.x + (dst.x - P.x) * t / dd), z = Math.round(P.z + (dst.z - P.z) * t / dd); if (w.isWalkable?.(x, z) === false) return true; } return false; })();
@@ -366,7 +367,10 @@
       // Solo mapas de su tramo (requisito >= 40% de su nivel): a las 3:21 Melu en 198 cedió Arena 2 y la
       // mandó a Devias 4 (nivel 20) con ~1M/min. Sin mapa de su tramo: mismo mapa, el mejor spot medido
       // a >= 30 tiles del otro.
-      const to = opts.find(([, mp, req]) => lv >= req && req >= lv * 0.4 && mp !== q.map);
+      let to = opts.find(([, mp, req]) => lv >= req && req >= lv * 0.4 && mp !== q.map);
+      // Los dos en Devias (recién reseteados): la otra entrada, lejos (Devias 3 si el otro está en la
+      // llegada de Devias 4, y al revés). Antes buscaba un spot "lejano" del mismo mapa y se perdía.
+      if (!to && w.mapIndex === 2 && lv >= 20) to = d(q, { x: 70, z: 181 }) <= 30 ? [6, 2, 20] : [7, 2, 20];
       if (!to) {
         const far = (ai.campHist?.[w.mapIndex] ?? []).filter((k) => !k.seed && k.rate > 0 && d(k, q) >= 30).sort((a, b) => b.rate - a.rate)[0];
         if (!far) continue;
