@@ -22,6 +22,7 @@ const colors = {
   player: 0x77c6f1,
   drop: 0xc6a0ff,
   camp: 0x6ad7b0,
+  zone: 0xffd361,
 };
 function makeRadar(
   el: HTMLDivElement,
@@ -126,6 +127,40 @@ function makeRadar(
   let trail = new T.Line(new T.BufferGeometry(), lineMat);
   entities.add(trail);
   const pool = new Map<string, T.Group>();
+  // Zonas de avistamiento de dragones (de la base): discos dorados en el piso con su cantidad.
+  const zoneGroup = new T.Group();
+  scene.add(zoneGroup);
+  const zoneMat = new T.MeshBasicMaterial({ color: 0xffd361, transparent: true, opacity: 0.18, depthWrite: false, side: T.DoubleSide });
+  const zoneRingMat = new T.MeshBasicMaterial({ color: 0xffd361, transparent: true, opacity: 0.55, depthWrite: false, side: T.DoubleSide });
+  let zoneKey = "";
+  function drawZones(s: PanelState) {
+    const key = `${s.where.map}:${JSON.stringify(s.zones ?? [])}:${!!real}`;
+    if (key === zoneKey) return;
+    zoneKey = key;
+    for (const c of [...zoneGroup.children]) {
+      zoneGroup.remove(c);
+      (c.getObjectByName("tag") as CSS2DObject | undefined)?.element.remove();
+      c.traverse((o) => { if (o instanceof T.Mesh) o.geometry.dispose(); });
+    }
+    for (const z of s.zones ?? []) {
+      const g = new T.Group();
+      const r = 6;
+      const disc = new T.Mesh(new T.CircleGeometry(r, 40), zoneMat);
+      const edge = new T.Mesh(new T.RingGeometry(r - 0.25, r, 40), zoneRingMat);
+      disc.rotation.x = edge.rotation.x = -Math.PI / 2;
+      g.add(disc, edge);
+      const div = document.createElement("div");
+      div.className = "radar-tag radar-tag-gold";
+      div.textContent = `Dragones ×${z.n}`;
+      const t = new CSS2DObject(div);
+      t.name = "tag";
+      t.position.y = 1.2;
+      g.add(t);
+      g.position.set(z.x, elevation(z.x, z.y) + 0.12, -z.y);
+      g.userData.label = `Zona de dragones · ${z.x}, ${z.y} · ${z.n} avistamientos`;
+      zoneGroup.add(g);
+    }
+  }
   // Lo que falta mover de la cámara para seguir al personaje (se aplica de a poco en animate).
   const follow = new T.Vector3();
   const sphere = new T.SphereGeometry(0.42, 12, 8),
@@ -392,6 +427,7 @@ function makeRadar(
       }
     }
     buildGround();
+    drawZones(s);
     pool.forEach((g) => (g.visible = false));
     marker(
       "self",
@@ -700,6 +736,7 @@ export function Radar({ state }: { state: PanelState | null }) {
             ["gold", "Dorados"],
             ["player", "Jugadores"],
             ["drop", "Objetos"],
+            ["zone", "Zonas de dragones"],
           ].map(([key, label]) => (
             <span key={key}>
               <i

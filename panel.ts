@@ -16,6 +16,7 @@ import type { BotMode, EventTimer, PanelCommand, PanelState } from './panel-prot
 import { WARP_SPOTS } from './route';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
 import { chebyshev } from './util';
+import { dragonZones } from './zones';
 import type { CommandResult } from './ws-server';
 
 export function currentMode(): BotMode {
@@ -193,6 +194,7 @@ export function buildPanelState(now: number): PanelState {
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: bot.goalPoint,
     entities: buildPanelEntities(),
+    zones: dragonZones(world.map),
     session: (() => {
       const v = loopView?.();
       const skill = pickAttackSkill();

@@ -6,6 +6,7 @@
 import { askHelp, newRequests, teammates } from './team';
 import { track, trackEvent } from './telemetry';
 import { isPriorityChar } from './knowledge';
+import { dragonZones, nextZone } from './zones';
 import { DRAGON_TYPES } from './golden';
 import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
@@ -839,6 +840,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           const d = chebyshev(world.x, world.y, sp.x, sp.y);
           if (now - sp.at > HUNT_SPOT_TTL_MS || (d <= 4 && !ctx.npcs.has(id))) { spots.delete(id); continue; }
           if (d < md) { md = d; mem = { id, x: sp.x, y: sp.y }; }
+        }
+      }
+      // Sin dorado recordado: la zona de dragones más cercana sin visitar (zones.ts, de la base).
+      if (!mem && world.map === bot.hunting.hunt.map) {
+        const visited = (bot.hunting.zonesVisited ??= new Set());
+        for (const z of dragonZones(world.map)) if (chebyshev(world.x, world.y, z.x, z.y) <= 6) visited.add(`${z.x},${z.y}`);
+        const z = nextZone(dragonZones(world.map), { x: world.x, y: world.y }, visited);
+        if (z) {
+          bot.goalPoint = [z.x, z.y];
+          bot.doing = `cazando dorados en ${bot.hunting.hunt.name}: voy a la zona de dragones (${z.x},${z.y}) (${z.n} avistamientos)`;
+          ctx.phase = 'walk';
+          castOnTheWay(ctx);
+          await walkTowards(ctx, z.x, z.y);
+          continue;
         }
       }
       if (mem) {

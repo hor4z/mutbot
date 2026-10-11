@@ -84,6 +84,8 @@ export type PanelState = {
     players: { id: number; x: number; y: number; name?: string; mate?: boolean }[];
     drops: { x: number; y: number; name: string; money: boolean; valuable: boolean }[];
   };
+  /** zonas donde se vieron dragones en este mapa (de la base, v_dragon_zones): n = avistamientos */
+  zones?: { x: number; y: number; n: number }[];
   /** desde que arrancó el bot: kills, muertes, skills tirados, exp ganada, loot, skill de ataque actual */
   session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
 };

@@ -89,3 +89,11 @@ SELECT name, toDate(ts) AS day, max(resets) - min(resets) AS resets_gained,
        round((max(resets) - min(resets)) / greatest(1, dateDiff('minute', min(ts), max(ts)) / 60), 2) AS per_hour,
        argMax(pos, ts) AS pos
 FROM ranking GROUP BY name, day;
+
+-- Zonas de avistamiento de dragones (Golden Dragon 79, Dragón Rojo 44): celdas de 15 tiles con el
+-- centro promedio de donde se vieron. Las usa la cacería (ir primero ahí) y el radar.
+CREATE OR REPLACE VIEW v_dragon_zones AS
+SELECT map, round(avg(JSONExtractInt(data, 'gx'))) AS x, round(avg(JSONExtractInt(data, 'gy'))) AS y,
+       count() AS n, uniq(char, num2) AS dragons, max(ts) AS last
+FROM events WHERE kind = 'golden_seen' AND num1 IN (44, 79) AND JSONExtractInt(data, 'gx') > 0
+GROUP BY map, intDiv(JSONExtractInt(data, 'gx'), 15), intDiv(JSONExtractInt(data, 'gy'), 15);

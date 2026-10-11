@@ -1,3 +1,4 @@
+import { nextZone } from './zones';
 /**
  * Tests offline de golden.ts (regla fuerte de dorados). Sin red, reloj simulado.
  *
@@ -31,6 +32,15 @@ const me = { x: 100, y: 100 };
   ok('un id que dejó de verse se olvida (reaparece con el mismo id)', g2.pick(me, [{ id: 7, x: 110, y: 100, type: 78 }], golden, 10 * GOLDEN_RULE.giveUpMs)?.id === 7);
   ok('2 min sin matarlo: se deja', g.pick(me, [goblin], golden, GOLDEN_RULE.giveUpMs + 1) === null);
   ok('sin dorados: null', new GoldenRule().pick(me, [common], golden, 0) === null);
+}
+
+// --- Zonas de dragones (zones.ts) -------------------------------------------------------------------
+{
+  const zs = [{ x: 229, y: 176, n: 5 }, { x: 223, y: 218, n: 2 }, { x: 240, y: 183, n: 1 }];
+  const me = { x: 222, y: 210 };
+  ok('zonas: la más cercana sin visitar', nextZone(zs, me, new Set())?.y === 218);
+  ok('zonas: salta las visitadas', nextZone(zs, me, new Set(['223,218']))?.x === 240);
+  ok('zonas: todas visitadas → null', nextZone(zs, me, new Set(['223,218', '229,176', '240,183'])) === null);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE DORADOS PASARON' : `\n${fails} TEST(S) DE DORADOS FALLARON`);
