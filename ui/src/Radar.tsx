@@ -118,6 +118,8 @@ function makeRadar(
   let trail = new T.Line(new T.BufferGeometry(), lineMat);
   entities.add(trail);
   const pool = new Map<string, T.Group>();
+  // Lo que falta mover de la cámara para seguir al personaje (se aplica de a poco en animate).
+  const follow = new T.Vector3();
   const sphere = new T.SphereGeometry(0.42, 12, 8),
     body = new T.CylinderGeometry(0.28, 0.45, 0.85, 8),
     cone = new T.ConeGeometry(0.6, 1.5, 6),
@@ -181,7 +183,11 @@ function makeRadar(
       entities.add(group);
     }
     group.visible = true;
-    group.position.set(x, elevation(x, y) + 0.02, -y);
+    // Destino: el animate lo desliza hasta ahí (la posición llega una vez por segundo; sin esto los
+    // personajes saltaban de tile en tile). Uno nuevo aparece directo en su lugar.
+    const to = new T.Vector3(x, elevation(x, y) + 0.02, -y);
+    if (!group.userData.to) group.position.copy(to);
+    group.userData.to = to;
     // Characters keep their world size and are occluded by the actual scenery.
     const scale = kind === "self" || kind === "player" ? 1 : Math.max(1, span / 65);
     group.scale.setScalar(scale);
@@ -286,11 +292,14 @@ function makeRadar(
           elevation(previous.where.x, previous.where.y),
         previous.where.y - s.where.y,
       );
-      controls.target.add(delta);
-      camera.position.add(delta);
+      // La cámara sigue al personaje deslizándose (follow se aplica de a poco en animate).
+      follow.add(delta);
     }
     if (map !== s.where.map) {
       map = s.where.map;
+      // Mapa nuevo: nada se desliza desde el mapa anterior (aparece directo en su lugar).
+      pool.forEach((g) => delete g.userData.to);
+      follow.set(0, 0, 0);
       realAbort?.abort();
       if (real) {
         scene.remove(real.group);
@@ -468,7 +477,22 @@ function makeRadar(
   function animate(t: number) {
     frame = requestAnimationFrame(animate);
     if (!visible || document.hidden || t - lastDraw < 32) return;
+    const dt = Math.min(200, t - lastDraw);
     lastDraw = t;
+    // Deslizar hacia el destino (~90 % en 0,7 s: llega antes de la próxima posición).
+    const k = 1 - Math.exp(-dt / 300);
+    for (const g of pool.values()) {
+      const to = g.userData.to as T.Vector3 | undefined;
+      if (to) g.position.lerp(to, k);
+    }
+    const self = pool.get("self");
+    if (self) halo.position.set(self.position.x, self.position.y + 0.04, self.position.z);
+    if (follow.lengthSq() > 1e-6) {
+      const step = follow.clone().multiplyScalar(k);
+      controls.target.add(step);
+      camera.position.add(step);
+      follow.sub(step);
+    }
     controls.update();
     renderer.render(scene, camera);
   }

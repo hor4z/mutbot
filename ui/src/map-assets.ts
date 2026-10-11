@@ -148,7 +148,9 @@ export async function loadRealMap(
       const i = y * 257 + x;
       positions.set([x, height(x, y), -y], i * 3);
       uvs.set([x / 256, y / 256], i * 2);
-      if (x < 256 && y < 256 && !(flags[y * 256 + x] & 8)) {
+      // Suelo: los tiles con suelo y también los caminables marcados "sin suelo" (puentes y
+      // pasarelas cuyo modelo puede faltar: sin esto los personajes quedaban flotando en el aire).
+      if (x < 256 && y < 256 && (!(flags[y * 256 + x] & 8) || !(flags[y * 256 + x] & 4))) {
         bounds[0] = Math.min(bounds[0], x);
         bounds[1] = Math.min(bounds[1], y);
         bounds[2] = Math.max(bounds[2], x + 1);
