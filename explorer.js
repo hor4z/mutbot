@@ -13,7 +13,8 @@
  *
  * Datos: localStorage `mubot-atlas:<pj>` y, cada minuto, POST al servidor local (/atlas) que lo
  * guarda en ~/.mubot/atlas-<pj>.json. Los dorados también van a /gold (el cazador de Horaz los lee).
- * Pelea (X.fight, por defecto sí): Evil Spirit contra lo que tenga a <= 5 tiles, dorados primero.
+ * Pelea solo para medir (no farmea): Evil Spirit contra lo que tenga a <= 5 tiles, hasta 3 kills por
+ * tipo y mapa (X.sampleKills); dorados siempre.
  * Durante la invasión: búsqueda pasiva, solo dorados chicos (Goblin, Budge Dragon, Soldier, Vepar,
  * Wheel); los grandes (Golden Dragon, Titan, Lizard King, Tantallos) solo se avisan para Horaz.
  * Seguridad: poción bajo 60 % de vida, se aleja del monstruo más cercano bajo 50 %, y bajo 30 % sin
@@ -41,7 +42,7 @@
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
   if (window.__atlas?.statTimer) window.clearInterval(window.__atlas.statTimer);
-  const X = (window.__atlas = { danger: {}, clusterMin: 6, clusterRadius: 5, statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  const X = (window.__atlas = { sampleKills: 3, danger: {}, clusterMin: 6, clusterRadius: 5, statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -177,6 +178,8 @@
         if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue;
         const nm = String(e.objectNameInWorld ?? ''), gold = /gold/i.test(nm);
         if (X.invMode && (!gold || /Golden Dragon|Titan|Lizard|Tantal/i.test(nm))) continue;
+        // Solo prueba de daño, no farmeo (usuario): cada tipo hasta sampleKills kills por mapa.
+        if (!gold && (atlas.fights?.[w.mapIndex]?.[e.npcType]?.kills ?? 0) >= X.sampleKills) continue;
         const d = dist(P, e.transform.pos) - (gold ? 3 : 0); if (d < td) { td = d; tgt = e; }
       }
       if (tgt && td <= X.fightRange) {
