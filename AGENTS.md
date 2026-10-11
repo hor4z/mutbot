@@ -530,7 +530,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
   - Espera en el lado (esquina / medio / este) que más exp/min midió.
   - Prioriza a los monstruos que le pegaron (aggro, 0x18/0x19) a ≤ 15 tiles.
-  - Compite si rinde (con 2+ jugadores encima no camina, gira con lo que entra). Se va 5 min a la Arena de su nivel si rinde menos que esa Arena medida (piso 60M): llena (3+ jugadores, 60 s) o sin rendir (90 s, aunque no haya nadie). Nunca debajo del 200 (afuera sería Arena 2 misma) ni con un compañero en la esquina.
+  - Compite si rinde (con 2+ jugadores encima no camina, gira con lo que entra; **el prioritario sí camina a disputar el grupo**: quieto, los rivales se llevaban el 66-87 % de las kills del sector). Se va 5 min a la Arena de su nivel si rinde menos que esa Arena medida (piso 60M): llena (3+ jugadores, 60 s) o sin rendir (90 s, aunque no haya nadie). Nunca debajo del 200 (afuera sería Arena 2 misma) ni con un compañero en la esquina.
 - **Dúo en la esquina** (pedido del usuario: Horaz plantado en la esquina y Melu al lado se quedan con el sector):
   - Los compañeros (`MUBOT_MATES`, que la estación pasa con todos sus personajes; por defecto Horaz y Melu) se reconocen por el nombre, que viene en `AddCharactersToScope`: byte 14 en el formato 075 de 27 bytes, byte 18 en el 095 de 31.
   - No cuentan como rivales: ni para "esquina llena", ni para la elección de lado, ni para la defensa.
