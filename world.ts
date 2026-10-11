@@ -25,6 +25,7 @@ import { isMonsterType, isTownNpcType } from './explore';
 import { drops } from './loot';
 import { EventBus } from './net/eventBus';
 import { PARTY_MATES } from './config';
+import { parsePositionFix } from './protocol097';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
@@ -290,6 +291,29 @@ export function trackWorld() {
   // (0,0)", probablemente por confiar en este packet para el jugador sin
   // verificarlo. Conservador: solo actualiza NPCs ya trackeados, nunca al
   // jugador, hasta confirmar el campo/formato con más cuidado.
+  // 0x11 de 8 bytes: "estás en (x, y)" (ver parsePositionFix). Con el id propio, corrige la
+  // posición del bot (si no, cada paso salía de una posición equivocada y el server lo rechazaba);
+  // con otro id, la de ese monstruo o jugador.
+  let lastFixLog = 0;
+  EventBus.on('ObjectHit', (raw: any) => {
+    const f = parsePositionFix(toBytes(raw));
+    if (!f) return;
+    if (f.id === (bot.playerId & 0x7fff)) {
+      if ((world.x !== f.x || world.y !== f.y) && Date.now() - lastFixLog > 10_000) {
+        lastFixLog = Date.now();
+        log(`Posición corregida por el server: (${world.x},${world.y}) → (${f.x},${f.y}).`);
+      }
+      world.x = f.x;
+      world.y = f.y;
+      return;
+    }
+    const o = world.npcs.get(f.id) ?? world.players.get(f.id);
+    if (o) {
+      o.x = f.x;
+      o.y = f.y;
+    }
+  });
+
   EventBus.on('ObjectMoved', (raw: any) => {
     if (!isObjectMovedPacket(toBytes(raw))) return; // 0.97d: con 10 bytes es el daño de un golpe
     const p = new ObjectMovedPacket(raw);

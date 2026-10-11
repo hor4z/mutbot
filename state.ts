@@ -137,6 +137,8 @@ export const bot = {
   retarget: false,
   // En party (PartyList recibido; RemovePartyMember lo saca).
   inParty: false,
+  // La sesión terminó por ceguera (farm-loop): la reconexión espera más (el server suelta la vieja).
+  blind: false,
   // Frase corta de lo que hace ahora (la pone el loop).
   doing: 'conectando',
   // Punto al que va ahora (campamento, salida, celda de la cacería).

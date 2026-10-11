@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, attackerOf, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -272,6 +272,13 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('aggro: un curado o buff (Heal 26) a mí no es un ataque', attackerOf(Uint8Array.from([0xc3, 8, 0x19, 26, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === null);
   ok('aggro: a otro → null', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2b]), 0x2a) === null);
   ok('aggro: área 0x1E → null', attackerOf(Uint8Array.from([0xc1, 9, 0x1e, 0, 0, 0, 0, 0, 0x2a]), 0x2a) === null);
+}
+
+// --- 0x11 de 8 bytes: "estás en (x, y)" (bytes reales de Horaz) ------------------------------------
+{
+  const f = parsePositionFix(Uint8Array.from([0xc1, 0x08, 0x11, 0x02, 0x00, 0x87, 0x98, 0x00]));
+  ok('0x11 de 8 bytes: id 512 en (135,152)', f?.id === 512 && f.x === 135 && f.y === 152, f);
+  ok('0x11 de 10 bytes (ObjectHit de season 6) → null', parsePositionFix(Uint8Array.from([0xc1, 10, 0x11, 2, 0, 0, 5, 0, 0, 0])) === null);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);

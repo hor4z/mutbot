@@ -240,3 +240,16 @@ export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number)
   if (b[2] === 0x19 && b.length >= 9) return u16(7) === me && !FRIENDLY_SKILLS.has(u16(3)) ? u16(5) : null;
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// 0x11 S2C de 8 bytes en este server: C1 08 11 <id u16 BE> <x> <y> <?> = "estás en (x, y)". Llega
+// repetido cuando el server rechaza los pasos (el bot caminó desde una posición equivocada) y lo
+// devuelve a su lugar real. Ignorarlo dejaba al bot creyendo que caminaba, con cada paso rechazado,
+// clavado en el pueblo sin monstruos cerca ni exp (Horaz y Melu en Lorencia, 2026-10-11). En el XML
+// (season 6) el 0x11 es ObjectHit de 10 bytes: por eso se distingue por el largo.
+// ---------------------------------------------------------------------------
+export function parsePositionFix(raw: Uint8Array | DataView | ArrayBuffer): { id: number; x: number; y: number } | null {
+  const b = u8(raw);
+  if (b.length !== 8 || b[0] !== 0xc1 || b[2] !== 0x11) return null;
+  return { id: ((b[3] << 8) | b[4]) & 0x7fff, x: b[5], y: b[6] };
+}

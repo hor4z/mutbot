@@ -184,3 +184,16 @@ export function freshGolds(golds: Map<string, GoldSignal>, now: number): GoldSig
   for (const [k, g] of golds) if (now - g.at > GOLD_TTL_MS) golds.delete(k);
   return [...golds.values()].sort((a, b) => b.at - a.at);
 }
+
+/** Pedido de ayuda entre personajes propios (equipo, ver team.ts). */
+export type TeamRequest = { from: string; kind: 'corner' | 'golden'; map: number; x: number; y: number; note: string; at: number };
+export const TEAM_REQUEST_TTL_MS = 2 * 60_000;
+
+/** Valida un pedido de ayuda de un bot; null si no es válido. */
+export function parseTeamRequest(body: unknown, now: number): TeamRequest | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+  const from = typeof b.from === 'string' ? b.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 10) : '';
+  if (!from || (b.kind !== 'corner' && b.kind !== 'golden') || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
+  return { from, kind: b.kind, map: b.map, x: b.x, y: b.y, note: String(b.note ?? '').slice(0, 80), at: now };
+}
