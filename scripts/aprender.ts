@@ -20,6 +20,7 @@ table('Exp/min por lado de la esquina (Arena 2)', (await query<{ char: string; s
   "SELECT char, side, sum(ticks) AS n, round(sum(v_exp_spot.exp_min * v_exp_spot.ticks) / sum(v_exp_spot.ticks)) AS rate FROM v_exp_spot WHERE map = 83 AND side != '' GROUP BY char, side ORDER BY char, rate DESC FORMAT JSONEachRow",
 )).map((r) => ({ char: r.char, side: r.side, ticks: r.n, exp_min: M(r.rate) })));
 table('Skill confirmado por el server, con y sin rivales', (await query<{ exp_min: number }>('SELECT * FROM v_skill ORDER BY char, contested, exp_min DESC FORMAT JSONEachRow')).map((r) => ({ ...r, exp_min: M(r.exp_min) })));
+table('Resultado de las decisiones (exp/min 5 min después contra 5 min antes)', (await query<{ avg_delta: number | null }>('SELECT char, decision, n, avg_delta, pct_better FROM v_outcome_type WHERE n >= 2 ORDER BY n DESC LIMIT 20 FORMAT JSONEachRow')).map((r) => ({ ...r, avg_delta: r.avg_delta == null ? '-' : M(r.avg_delta) })));
 table('Quién nos mata', await query('SELECT killer, player, deaths, victims, last FROM v_killers ORDER BY deaths DESC LIMIT 15 FORMAT JSONEachRow'));
 table('Rivales más vistos', await query('SELECT name, map, sum(seen) AS seen, max(last) AS last FROM v_rivals GROUP BY name, map ORDER BY seen DESC LIMIT 15 FORMAT JSONEachRow'));
 table('Ciclos de reset', await query('SELECT * FROM v_cycles FORMAT JSONEachRow'));
