@@ -26,11 +26,14 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts + panel-tests.ts + atlas-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts + panel-tests.ts + atlas-tests.ts + estacion-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
 bun run tsc
+
+# Estación: conectar/desconectar personajes y elegir su rutina desde el navegador (http://127.0.0.1:8787)
+bun run estacion
 
 # Proxy WebSocket -> TCP (escucha en 127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
 bun run proxy
@@ -48,6 +51,10 @@ Otros flags: `--build str:50,ene:33,vit:17` (reparto fijo; sin él, `planStats`)
 `--stat-batch 200` (puntos mínimos para frenar a repartir), `--free-route` (la
 regla vieja de spots por exp/min en vez de la ruta fija), `--spots`, `--warp`.
 
+`--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
+sale con código 3 en vez de reintentar. Después de un corte sí reintenta (el server tarda en soltar
+la sesión vieja del propio bot). Lo pasa la estación.
+
 Flag inexistente = el bot arranca con defaults y se cuelga esperando `LoginResponse`.
 Los reales son `--user`, `--pass`, `--char` (no `--account`/`--character`). Esto ya
 pasó una vez y costó tres intentos de debugging.
@@ -57,6 +64,8 @@ pasó una vez y costó tres intentos de debugging.
 | Archivo | Qué es |
 |---|---|
 | `headless-bot.ts` | El bot. Login, mundo, loop autónomo, economía, capa de decisión. |
+| `estacion.ts` / `estacion.html` | Estación: lanza y corta los bots de cada personaje (`.env*`) y les pone una rutina. Ver "Estación". |
+| `estacion-logic.ts` | Lado puro de la estación: personajes, argumentos del bot, rutinas, pedidos, detección de bots que ya corren. Tests en `estacion-tests.ts`. |
 | `ws-server.ts` | Server del panel detrás de `--ws-port` (solo 127.0.0.1): WebSocket de estado + órdenes de lista cerrada, `panel.html` y `/assets/`. Ver "Panel externo". |
 | `panel-protocol.ts` | Contrato bot ↔ panel (tipos, `PANEL_COMMANDS`, `isPanelCommand`). |
 | `panel-logic.ts` | Lado bot del panel en lógica pura: 0x91, 0xFD, tickets, ciclos, cacería y buscador de dorados. |
@@ -830,6 +839,42 @@ el estado real del server, que es más confiable que cualquier reimplementación
 packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
 camino corto. No se usa ahora porque no acepta control externo: las decisiones
 quedan fijas en el C#.
+## Estación (conectar personajes desde el navegador)
+
+`bun run estacion` → `http://127.0.0.1:8787/panel` (también `/`). Lista los personajes, los conecta o desconecta sin
+navegador, les pone una rutina y muestra adentro el panel de cada bot (iframe a su `--ws-port`) o
+su consola.
+
+- **Personajes:** cada `.env` / `.env.<nombre>` de la raíz con `MUBOT_USER`, `MUBOT_PASS` y
+  `MUBOT_CHAR` (`.env.example` no cuenta). La estación no lee ni pasa la contraseña: lanza
+  `bun --env-file=<archivo> run headless-bot.ts --allow-remote --proxy … --auto-seconds 0
+  --ws-port 879x --exit-if-in-use` sin heredar ningún `MUBOT_*` propio. Servidor por defecto el
+  de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` / `MUBOT_CS_PORT` lo cambian.
+- **Puertos:** estación 8787 (`ESTACION_PORT`), agente del navegador 8788, bots 8791, 8792…
+  (por orden alfabético del archivo de env).
+- **Rutinas** (`estacion-logic.ts:routineCommands`): se traducen a órdenes del panel y se mandan por
+  el WebSocket del bot cuando entra al mundo (`mode` ≠ `connecting` y nivel > 0). Farmear = `farm`;
+  spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); explorar = `farm` + `atlas`; pausa =
+  `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en
+  el panel del bot.
+- **Los bots sobreviven a la estación:** corren con `setsid` y escriben en
+  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas). Al arrancar
+  (y cada 2 s) la estación busca en `/proc` los `headless-bot.ts` de cada cuenta (`--user`,
+  `--env-file`, `MUBOT_USER` o, sin nada, el `.env`) y los adopta con su `--ws-port`; uno sin
+  `--ws-port` solo se puede desconectar. Desconectar = `SIGTERM` (el bot guarda el atlas y sale).
+- **Nunca dos sesiones de una cuenta:** no lanza si ya corre un bot con esa cuenta, y con
+  `--exit-if-in-use` el bot no insiste si la cuenta está abierta en el navegador: la estación lo
+  muestra como "cuenta abierta". Igual cerrá la pestaña antes de conectar. Excepción: si se lo desconectó desde la
+  estación hace menos de 90 s, va sin `--exit-if-in-use` (la sesión vieja todavía figura abierta y
+  el bot reintenta con backoff).
+- **Seguridad:** solo 127.0.0.1. `POST /api/do` exige `Origin` de la propia estación (si no, 403),
+  `content-type: application/json` y un pedido de lista cerrada (`parseStationRequest`: `connect`,
+  `disconnect`, `routine`, sin campos de más). No exponerla con ngrok ni similares.
+
+**Probado:** tests offline, y la estación contra un server inexistente (lanzar, adoptar al reiniciar
+la estación, desconectar, Origin ajeno rechazado). **Falta en vivo:** conectar contra el server real
+y ver la rutina aplicada al entrar.
+
 ## Panel externo
 
 `panel.html` (lo mantiene otra persona; no se toca desde el bot) se conecta al
@@ -979,7 +1024,8 @@ bun --env-file=.env.melu run headless-bot.ts --allow-remote --proxy wss://mu.mor
   `scout` se rechazan; `farm`/`pause` lo terminan y queda en pausa (`atlas` lo
   vuelve a arrancar). Sin `--atlas`, la orden `{ cmd: 'atlas' }` lo arranca en
   cualquier momento y `farm` vuelve a farmear.
-- **Pociones antes de salir** (y al empezar otra vuelta si se acabaron): va a
+- **Pociones antes de salir** (solo con `--buy-potions`; sin él no compra nada, ni farmeando ni
+  en el atlas: el usuario no pidió compras) (y al empezar otra vuelta si se acabaron): va a
   Lorencia, habla con los merchants conocidos y los NPC de pueblo en scope, y en el
   primero cuyo catálogo (`StoreItemList`) tenga pociones de curación compra de a
   una (600 ms entre compras) hasta 40, grandes si hay, si no medianas, si no chicas

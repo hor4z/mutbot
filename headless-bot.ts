@@ -78,6 +78,7 @@ import {
 import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './explore';
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
 import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
+import { isSafeZone } from './terrain';
 import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
@@ -1632,7 +1633,9 @@ function findShopSlotFor(group: number, num: number): number | undefined {
 async function ensurePotions(): Promise<boolean> {
   if (haveHealingPotions()) return false;
   if (openedNpcId == null) {
-    const merchant = knownMerchants.values().next().value;
+    // Solo un merchant que esté en scope: los conocidos quedan de otros mapas (en la Arena le hablaba
+    // al de Lorencia cada 25 ticks, sin respuesta).
+    const merchant = [...knownMerchants].find((id) => world.townNpcs.has(id));
     if (merchant == undefined) return false;
     talkToNpc(merchant);
     await sleep(600); // tiempo para que llegue NpcWindowResponse + StoreItemList
@@ -2328,6 +2331,13 @@ function advanceAtlas(a: AtlasState, reason: string, now: number) {
 const inventoryFull = () => [...world.inventory.keys()].filter((k) => k >= 12 && k < 76).length >= 64;
 const BUY_PACE_MS = 600;
 
+// Comprar pociones (viaje a Lorencia farmeando, merchant en scope, antes del atlas): apagado salvo
+// --buy-potions. El usuario no lo pidió y con los ítems de 5 bytes sin leer solo hacía perder tiempo.
+const BUY_POTIONS = args.has('--buy-potions');
+// Viaje a Lorencia por pociones farmeando: cada cuánto como mucho, y tras un viaje que no compró nada.
+const POTION_TRIP_EVERY_MS = 5 * 60_000;
+const POTION_TRIP_AFTER_FAIL_MS = 60 * 60_000;
+
 /**
  * Antes de salir a explorar: hasta `max` pociones de curación (grandes, si no
  * medianas, si no chicas) en Lorencia. El merchant se busca entre los conocidos
@@ -2341,13 +2351,13 @@ async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: n
     const lor = ATLAS_WARPS.find((m) => m.map === ATLAS_SAFE_MAP)!;
     doing = 'yendo a Lorencia a comprar pociones';
     const spot: Spot = { index: lor.warp, name: 'Lorencia (pociones)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-    if (!(await decide({ kind: 'travel', what: 'warp a Lorencia a comprar pociones (--atlas)', detail: { warp: lor.warp, map: lor.map, reason: 'atlas' } }))) return none;
+    if (!(await decide({ kind: 'travel', what: 'warp a Lorencia a comprar pociones', detail: { warp: lor.warp, map: lor.map, reason: 'atlas' } }))) return none;
     if (!(await warpAndWait(spot, false))) return none;
     await sleep(3000); // que lleguen los NPC en scope
   }
   const ids = [...new Set([...knownMerchants, ...[...world.townNpcs.values()].filter((n) => !isJunkType(n.type)).map((n) => n.id)])];
   if (!ids.length) {
-    panelLog('Atlas: no veo ningún NPC de pueblo para comprar pociones; salgo igual (huyo antes).');
+    panelLog('Pociones: no veo ningún NPC de pueblo que las venda.');
     return none;
   }
   for (const id of ids) {
@@ -2382,7 +2392,7 @@ async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: n
     const shopSlot = slot;
     const what = num ? `poción ${POTION_GROUP}/${num}` : `slot ${shopSlot} (--buy-slot)`;
     const zen0 = lastMoney;
-    if (!(await decide({ kind: 'buy', what: `comprar hasta ${max} × ${what} antes de explorar (--atlas)`, detail: { npcId: id, shopSlot, num, max, money: zen0 }, autoOk: false }))) {
+    if (!(await decide({ kind: 'buy', what: `comprar hasta ${max} × ${what} en Lorencia`, detail: { npcId: id, shopSlot, num, max, money: zen0 }, autoOk: false }))) {
       closeNpc();
       return none;
     }
@@ -2402,7 +2412,7 @@ async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: n
     try {
       while (bought < max && fails < 2 && openedNpcId != null && !kicked) {
         if (inventoryFull()) {
-          log('Atlas: mochila llena, dejo de comprar.');
+          log('Pociones: mochila llena, dejo de comprar.');
           break;
         }
         const before = lastMoney;
@@ -2421,10 +2431,10 @@ async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: n
       closeNpc();
     }
     const zen = Math.max(0, zen0 - lastMoney);
-    panelLog(`Atlas: compré ${bought} × ${what} al NPC ${id}, gasté ${zen} zen (quedan ${lastMoney}).`);
+    panelLog(`Pociones: compré ${bought} × ${what} al NPC ${id}, gasté ${zen} zen (quedan ${lastMoney}).`);
     return { bought, zen };
   }
-  panelLog('Atlas: ningún NPC en scope vende pociones (o no llegó el catálogo); salgo igual (huyo antes).');
+  panelLog('Pociones: ningún NPC en scope las vende (o no llegó el catálogo).');
   return none;
 }
 
@@ -2684,7 +2694,14 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
   log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta=${FIXED_ROUTE_ON ? 'fija por tramo' : 'libre'}`);
 
-  const npcs = world.npcs;
+  // Monstruos atacables: los de world.npcs que NO están en zona segura. Después del reset Horaz quedó
+  // pegándole a unos Lord centurion parados en el pueblo de Lorencia (en zona segura no hay daño):
+  // 0 exp hasta que se lo cortó. Se recalcula al inicio de cada tick; el panel sigue viendo todos.
+  let npcs = new Map<number, ScopedNpc>();
+  const refreshAttackable = () => {
+    npcs = new Map();
+    for (const [id, n] of world.npcs) if (!isSafeZone(world.map, n.x, n.y)) npcs.set(id, n);
+  };
   let totalExpGained = 0;
   let kills = 0;
   let potionsDrunk = 0;
@@ -2697,7 +2714,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastCastAt = 0;
-  let lastPotionTrip = 0;
+  let nextPotionTrip = 0;
   let lastBarrierAt = 0;
   // Fase de la iteración anterior: el tiempo hasta la próxima se le atribuye.
   let phase: TimeKind = 'other';
@@ -2732,6 +2749,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === target;
+    world.npcs.delete(p.KilledId & 0x7fff);
     npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === playerId) {
       onDeath('ObjectGotKilled');
@@ -2832,6 +2850,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   };
 
   while ((deadline <= 0 || Date.now() < deadline) && !kicked) {
+    refreshAttackable();
     ticks++;
     {
       const t = Date.now();
@@ -2863,13 +2882,14 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
     //    compras son caras de confirmar y no queremos spamearlas.
-    if (!atlasRun && ticks % 25 === 0 && !haveHealingPotions()) {
+    if (BUY_POTIONS && !atlasRun && ticks % 25 === 0 && !haveHealingPotions()) {
       // Sin pociones no se farmea (Melu murió en Arena 4 sin ninguna, 2026-10-11): a Lorencia a comprar
-      // y el cambio de spot la devuelve a su mapa. Como mucho una vez cada 5 min.
-      if (Date.now() - lastPotionTrip > 5 * 60_000) {
-        lastPotionTrip = Date.now();
+      // y el cambio de spot la devuelve a su mapa. Como mucho una vez cada 5 min; si el viaje no compró
+      // nada, una vez por hora (Horaz iba y volvía de Arena 2 cada 5 min sin comprar: tiempo perdido).
+      if (Date.now() >= nextPotionTrip) {
         const r = await stockAtlasPotions(40);
-        panelLog(r.bought ? `Pociones: compré ${r.bought} en Lorencia.` : 'Pociones: no pude comprar (sigo sin pociones).');
+        nextPotionTrip = Date.now() + (r.bought ? POTION_TRIP_EVERY_MS : POTION_TRIP_AFTER_FAIL_MS);
+        panelLog(r.bought ? `Pociones: compré ${r.bought} en Lorencia.` : `Pociones: no pude comprar; no vuelvo a Lorencia por ${POTION_TRIP_AFTER_FAIL_MS / 60_000} min.`);
         if (world.map === ATLAS_SAFE_MAP) { currentSpot = null; canAdopt = false; }
         continue;
       }
@@ -3027,12 +3047,12 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // Pociones antes de salir (y al empezar otra vuelta si se acabaron).
       if (!at.potionsTried) {
         at.potionsTried = true;
-        if (!haveHealingPotions()) {
+        if (BUY_POTIONS && !haveHealingPotions()) {
           doing = 'comprando pociones antes de explorar';
           const r = await stockAtlasPotions();
           at.cautious = r.bought === 0 && !haveHealingPotions();
           if (at.cautious) panelLog(`Atlas: salgo sin pociones; huyo con HP < ${Math.round(ATLAS_FLEE_CAUTIOUS.pct * 100)} % de monstruos a ≤ ${ATLAS_FLEE_CAUTIOUS.range}.`);
-        } else at.cautious = false;
+        } else at.cautious = !haveHealingPotions();
         at.since = Date.now();
         continue;
       }
@@ -3490,6 +3510,9 @@ const FATAL_LOGIN = new Set<number>([
   LoginResponseLoginResultEnum.WrongVersion,
 ]);
 
+// Código de salida de --exit-if-in-use (la estación lo muestra como "cuenta abierta en otro lado").
+const EXIT_IN_USE = 3;
+
 let worldTracked = false;
 let economyWatched = false;
 
@@ -3604,6 +3627,14 @@ async function main() {
         process.exit(1);
       }
       alreadyConnected = e instanceof LoginError && e.result === LoginResponseLoginResultEnum.AccountAlreadyConnected;
+      // --exit-if-in-use (lo pasa la estación): si en el PRIMER login la cuenta ya está conectada, es
+      // otra sesión (el navegador): no se insiste. Después de un corte sí se reintenta, porque el
+      // server tarda en soltar la sesión vieja del propio bot.
+      if (first && alreadyConnected && args.has('--exit-if-in-use')) {
+        console.error('La cuenta ya está conectada en otro lado (¿la pestaña del navegador?): no entro.');
+        closeSockets();
+        process.exit(EXIT_IN_USE);
+      }
       log(`Sesión #${sessions} terminó con error: ${(e as Error).message}`);
     }
     first = false;

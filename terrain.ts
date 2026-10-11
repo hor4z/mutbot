@@ -72,3 +72,10 @@ export function isWalkable(map: number, x: number, y: number): boolean {
   if (!g || x < 0 || y < 0 || x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return !g;
   return (g[y * TERRAIN_SIZE + x] & (TW.NoMove | TW.NoGround)) === 0;
 }
+
+/** ¿(x, y) es zona segura (pueblo)? Ahí los golpes no hacen daño. Sin datos del mapa: no. */
+export function isSafeZone(map: number, x: number, y: number): boolean {
+  const g = terrainOf(map);
+  if (!g || x < 0 || y < 0 || x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return false;
+  return (g[y * TERRAIN_SIZE + x] & TW.SafeZone) !== 0;
+}

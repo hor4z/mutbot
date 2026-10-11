@@ -17,7 +17,8 @@ bun run bot --allow-remote --proxy wss://mu.mormon.garden/ws --cs-host mu.mormon
 # Melu: lo mismo con  bun --env-file=.env.melu run headless-bot.ts ...
 ```
 
-Panel: `http://127.0.0.1:8787/panel` (el 8788 lo usa `bun run agent`, el servidor del agente del
+Más simple: `bun run estacion` y en `http://127.0.0.1:8787` Conectar con la rutina (ver AGENTS.md
+"Estación"). A mano, panel en `http://127.0.0.1:8787/panel` (el 8788 lo usa `bun run agent`, el servidor del agente del
 navegador). Para pararlo: matar el proceso `headless-bot.ts`. **Nunca** con la misma cuenta abierta
 en el navegador.
 
@@ -46,8 +47,9 @@ mismo que en el navegador), 0 paquetes perdidos.
    (wire `e` desde `o`): `r = e[0] | (e[3] & 0x80) << 1`, grupo `r >> 5`, número `r & 31`, nivel en
    `e[1]` (bits 3-6), opciones excelentes `e[3] & 0x7f`. Detectar el formato por largo: inventario y
    tienda `6 + n*(1+5)`, drops `5 + n*(4+5)`, ítem agregado `4+5`.
-2. **Pociones:** con el punto 1, comprar en Lorencia (el viaje ya está: `stockAtlasPotions`). Melu
-   murió en Arena 4 sin pociones.
+2. **Pociones: sin compras** (pedido del usuario, 2026-10-11). El bot no compra nada salvo con
+   `--buy-potions` (viaje a Lorencia farmeando, merchant en scope, antes del atlas). Antes Horaz iba y
+   volvía de Arena 2 a Lorencia cada 5 min sin poder comprar.
 3. **Horaz (DK) sin navegador**: lo que el agente del navegador ya hace y el headless no, por orden de
    impacto:
    - la esquina de Arena 2 (`corner.js`): quedarse en (5,11), Twisting Slash al grupo más grande,
@@ -63,9 +65,8 @@ mismo que en el navegador), 0 paquetes perdidos.
 4. **Melu (SM)**: modo mago completo (quieta en la esquina, Evil Spirit, Soul Barrier cada ~50 s; ya
    está el skill de área y el Soul Barrier), ceder el spot a Horaz por resets.
 5. **Panel**: que todo lo de arriba se vea en tiempo real (ya están el mapa, la sesión y las alertas).
-   Falta (pedido del usuario): **botones para conectar y desconectar** el personaje desde el panel
-   (hoy solo se corta matando el proceso). Ojo: conectar tiene que seguir chequeando que la cuenta no
-   esté abierta en el navegador.
+   **Conectar/desconectar y rutinas:** hecho con la estación (`bun run estacion`, ver AGENTS.md
+   "Estación"). Falta probarla en vivo contra el server.
 6. **Caza** (después de que el farmeo esté bien): ver "Caza conjunta" en EVENTOS.md.
 
 ## Lo que aprendimos del agente del navegador (para no repetirlo)

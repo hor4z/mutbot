@@ -20,7 +20,8 @@ Para "correlo", "arrancalo", "ponelo a jugar": skill **`correr-agente`**
 `browser-agent.js` → `tuner.js` en la pestaña del juego. Los pasos para el usuario están en `README.md`.
 
 Bot sin navegador (lo próximo): estado, lo aprendido y el plan en **[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**.
-Primero Horaz, después Melu.
+Primero Horaz, después Melu. Para conectarlos y elegir la rutina desde el navegador:
+`bun run estacion` (`http://127.0.0.1:8787`, ver "Estación" en AGENTS.md).
 
 Reglas rápidas:
 

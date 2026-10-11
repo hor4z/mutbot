@@ -14,6 +14,9 @@ bun install
 # 1. Tests offline (no tocan el server)
 bun run test
 
+# Estación: conectar personajes (.env, .env.melu) y elegir su rutina en http://127.0.0.1:8787/panel
+bun run estacion
+
 # Proxy WebSocket -> TCP hacia tu server (127.0.0.1:3000)
 bun run proxy
 
