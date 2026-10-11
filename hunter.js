@@ -42,7 +42,7 @@
   // (usuario: "seguir buscando tanto tiempo no es bueno") y se arranca solo con más de 25.
   // huntBand: Horaz barre la mitad este (x >= 128); la oeste la barre Melu (headless --scout, franja 1/2)
   // y avisa por /gold. Los dorados avisados se persiguen en cualquier mitad.
-  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, huntBand: [128, 256] };
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, huntBand: [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
@@ -124,7 +124,7 @@
       return ip(w, P, c);
     };
     const ng = ai.nextGoal;
-    ai.nextGoal = (P, w) => (h.on && w.mapIndex === h.map ? reportGoal(P, w) ?? nextCell(P, w) : null) ?? ng(P, w);
+    ai.nextGoal = (P, w) => (h.on && w.mapIndex === h.map ? reportGoal(P, w) ?? (h.pre && h.waitAt ? { ...h.waitAt, kind: 'hunter:espera' } : nextCell(P, w)) : null) ?? ng(P, w);
     ai.huntWrapped = true;
   }
 
@@ -151,8 +151,11 @@
     ai.L(`HUNTER: fin (${why}): ${min.toFixed(1)} min, ${kills} dorados vistos, nivel ${h.lvl0} → ${S.playerData.level}`);
   };
   h.history = () => hunts.slice(-10);
-  h.setPrepos = (map) => { h.prepos = map; jset(`mubot-hunt-prepos:${me}`, map); return map; };
-  h.prepos = jget(`mubot-hunt-prepos:${me}`, null);
+  // Mapa de espera, punto exacto (x, z) y gira de dragón (mapas a revisar si en tourSec no aparece
+  // nada en el actual). Usuario: "los dragones salen cerca" (Lorencia 149,168 a las 21:50; en Devias
+  // junto a la llegada de Devias 3 a las 19:50).
+  h.setPrepos = (map, x = null, z = null, tour = []) => { h.prepos = map; h.waitAt = x != null ? { x, z } : null; h.tour = tour; jset(`mubot-hunt-prepos:${me}`, { map, x, z, tour }); return { map, x, z, tour }; };
+  { const pp = jget(`mubot-hunt-prepos:${me}`, null); if (pp && typeof pp === 'object') { h.prepos = pp.map; h.waitAt = pp.x != null ? { x: pp.x, z: pp.z } : null; h.tour = pp.tour ?? []; } else h.prepos = pp; }
   h.setBand = (from, to) => { h.band = [from, to]; jset(`mubot-hunt-band:${me}`, h.band); return h.band; };
   h.band = jget(`mubot-hunt-band:${me}`, null);
   h.setAuto = (v) => { h.auto = !!v; jset(`mubot-hunt-auto:${me}`, h.auto); return h.auto; };
@@ -168,6 +171,12 @@
   (window.__mubotTimers ??= []).push(h.lingerTimer);
   h.pollTimer = window.setInterval(() => {
     if (!h.on && !h.auto) return; pollGold(); if (!h.on) return;
+    // Gira de dragón: arrancada la invasión, si en CFG.tourSec no hay dorados a la vista, saltar al
+    // siguiente mapa de h.tour (Melu: Lorencia → Noria). Se vuelve a medir en cada mapa.
+    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
+      if (inView) h.lastSeenGold = Date.now();
+      if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
+        const next = h.tour.shift(); if (MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
     // Devias: saltar entre sus 4 entradas (warps 6, 7, 5, 4) mira 4 zonas lejanas en segundos;
     // en cada una se queda 6 s si no hay dorados a la vista.
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
