@@ -24,6 +24,16 @@ const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit',
 // (2026-10-11: +13 niveles en 15 min). Si después de un reparto los puntos no bajaron, 15 min sin repartir.
 let statTry: { points: number; at: number } | null = null;
 let statOffUntil = 0;
+/**
+ * El seguimiento del último reparto (para detectar que el server no lo tomó: stats en el tope) arranca
+ * de cero en cada reset y en cada conexión. Si sobrevivía al reset, comparaba contra el reparto viejo,
+ * concluía "el server no tomó el reparto" y no repartía por 15 min (Melu, 21.000 puntos sin repartir).
+ */
+export function resetStatTracking() {
+  statTry = null;
+  statOffUntil = 0;
+}
+
 export async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
@@ -124,6 +134,7 @@ async function doResetSteps(): Promise<boolean> {
     return false;
   }
   log('Reset hecho. Vuelvo a entrar con el personaje.');
+  resetStatTracking();
   bot.inGameAt = 0;
   world.npcs.clear();
   world.townNpcs.clear();
