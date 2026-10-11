@@ -51,6 +51,15 @@
       }
     }
   };
+  // Cierra la pelea en curso: si el objetivo murió, anota la kill en atlas.fights[mapa][tipo].
+  const closeFight = () => {
+    const f = X.fightWith; X.fightWith = null; if (!f) return;
+    const dead = f.e.dying || (f.e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0;
+    const secs = (Date.now() - f.since) / 1000; if (!dead || secs > 120) return;
+    const pd = S.playerData, exp = Math.max(0, (pd.exp ?? 0) - f.exp0), lost = Math.max(0, f.hp0 - pd.currentHP);
+    const r = ((atlas.fights ??= {})[f.map] ??= {})[f.type] ??= { name: f.name, kills: 0, secs: 0, exp: 0, hpLost: 0 };
+    r.kills++; r.secs += secs; r.exp += exp; r.hpLost += lost;
+  };
   const nextCell = (w, P) => {
     X.visited.add(cellOf(P.x, P.z));
     const walk = (x, z) => { for (let r = 0; r < 10; r++) for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r]]) if (w.isWalkable(x + dx, z + dz)) return { x: x + dx, z: z + dz }; return null; };
@@ -82,10 +91,13 @@
       let tgt = null, td = 99;
       for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos) - (/gold/i.test(String(e.objectNameInWorld ?? '')) ? 3 : 0); if (d < td) { td = d; tgt = e; } }
       if (tgt && td <= X.fightRange) {
+        // Prueba de daño: cuánto tarda en matar cada tipo, la exp que da y la vida que pierde.
+        if (X.fightWith?.e !== tgt) { closeFight(); X.fightWith = { e: tgt, type: tgt.npcType, name: String(tgt.objectNameInWorld ?? '').trim(), map: w.mapIndex, since: now, hp0: pd.currentHP, exp0: pd.exp ?? 0 }; }
         if (!w.castRequest) { if (S.currentSkill !== X.skill) S.selectSkill(X.skill); const tp = tgt.transform.pos; w.castRequest = { target: tgt, point: { x: tp.x, y: tp.z }, forced: false }; }
         return;
       }
     }
+    closeFight();
     // Alejarse si está perdiendo vida con un monstruo encima.
     if (hp < 0.5) { let near = null, nd = 99; for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying) { const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } } if (near && nd <= 6) { const q = near.transform.pos, ax = Math.sign(P.x - q.x) || 1, az = Math.sign(P.z - q.z) || 1; ai.moveTo(pe, { x: Math.round(P.x + ax * 6), z: Math.round(P.z + az * 6) }); return; } }
     if (!X.goal || dist(P, X.goal) < 4 || now - X.goalSince > 45000) {
@@ -103,6 +115,9 @@
     return [ROUTE.find((r) => r[1] === +map)?.[2] ?? map, Object.values(tot).sort((a, b) => b.seen - a.seen).slice(0, 8).map((v) => `${v.name}×${v.seen}`)];
   }));
   X.goldens = () => atlas.goldens.slice(-20);
+  // Rendimiento por tipo: segundos por kill, exp por kill y por minuto, vida perdida por kill.
+  X.fights = () => Object.fromEntries(Object.entries(atlas.fights ?? {}).map(([map, types]) => [ROUTE.find((r) => r[1] === +map)?.[2] ?? map,
+    Object.values(types).map((v) => ({ name: v.name, kills: v.kills, segPorKill: +(v.secs / v.kills).toFixed(1), expPorKill: Math.round(v.exp / v.kills), expPorMin: Math.round((v.exp / v.secs) * 60), vidaPorKill: Math.round(v.hpLost / v.kills) })).sort((a, b) => b.expPorMin - a.expPorMin)]));
   X.timer = window.setInterval(X.tick, 400);
   (window.__mubotTimers ??= []).push(X.timer);
   return `explorador cargado (${route().map((r) => r[2]).join(', ')}): __atlas.start()`;
