@@ -30,7 +30,11 @@
   for (const cells of Object.values(atlas.maps)) for (const c of Object.values(cells)) for (const [t, v] of Object.entries(c)) if (/VIP Seller|Battle Royale|Alquimista/i.test(v.name)) delete c[t];
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(atlas)); } catch {} };
   // Mapas a recorrer: [warp, índice de mapa, nombre, nivel]. Lista de warps del cliente.
-  const ROUTE = [[2, 0, 'Lorencia', 10], [3, 3, 'Noria', 10], [6, 2, 'Devias', 20], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
+  // Primero los mapas de la ruta de Horaz (usuario: "que explore primero los mapas que usa Horaz para
+  // optimizar el farmeo"): Lorencia, Devias (las 4 entradas son el mismo mapa), Arena 2/3/4 según el
+  // nivel de Melu. Después el resto.
+  const ROUTE = [[2, 0, 'Lorencia', 10], [6, 2, 'Devias', 20], [24, 83, 'Arena 2', 100], [25, 84, 'Arena 3', 200], [26, 85, 'Arena 4', 300],
+    [3, 3, 'Noria', 10], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
   const X = (window.__atlas = { invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
