@@ -79,9 +79,11 @@
     if (!best || best.length < X.clusterMin) return;
     const cx = Math.round(best.reduce((a, e) => a + e.transform.pos.x, 0) / best.length), cz = Math.round(best.reduce((a, e) => a + e.transform.pos.z, 0) / best.length);
     const spots = (atlas.spots ??= []); const near = spots.find((sp) => sp.map === w.mapIndex && dist(sp, { x: cx, z: cz }) <= 10);
-    if (near) { if (best.length > (near.size ?? 0)) { near.size = best.length; near.at = Date.now(); } return; }
+    // Volver a ver el grupo en otra pasada (>= 30 min después) suma una confirmación: Horaz solo usa
+    // spots con historia (atlasMinConfirm, por defecto 3).
+    if (near) { const now2 = Date.now(); if (now2 - (near.lastConfirm ?? near.at) >= 30 * 60000) { near.confirmations = (near.confirmations ?? 1) + 1; near.lastConfirm = now2; save(); ai.L(`ATLAS: spot (${near.x},${near.z}) confirmado ${near.confirmations} veces`); } if (best.length > (near.size ?? 0)) near.size = best.length; return; }
     const types = {}; for (const e of best) { const n = String(e.objectNameInWorld ?? '').trim(); types[n] = (types[n] ?? 0) + 1; }
-    spots.push({ map: w.mapIndex, x: cx, z: cz, size: best.length, types, at: Date.now(), note: `auto: ${best.length} juntos` });
+    spots.push({ map: w.mapIndex, x: cx, z: cz, size: best.length, types, at: Date.now(), confirmations: 1, lastConfirm: Date.now(), note: `auto: ${best.length} juntos` });
     save(); ai.L(`ATLAS: spot en (${cx},${cz}): ${best.length} monstruos juntos (${Object.entries(types).map(([n, k]) => `${n}×${k}`).join(', ')})`);
   };
   const nextCell = (w, P) => {

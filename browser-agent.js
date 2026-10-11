@@ -57,7 +57,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       excursionMs: 2500, excursionScan: 20, excursionMax: 22,
-      vaultMinFree: 8, vaultAfterResetFree: 16,
+      vaultMinFree: 8, vaultAfterResetFree: 16, useAtlasHints: false, atlasMinConfirm: 3,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
       campUpgrade: 1.25, crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
@@ -813,7 +813,7 @@
         const map = WARP_MAP[sp[0]]; if (map == null) continue;
         const ref = ai.tierRef?.[`t${sp[2]}`] ?? 0; if (!ref) continue;
         const hints = [];
-        for (const s2 of a.spots ?? []) if (s2.map === map) hints.push({ x: s2.x, z: s2.z, w: 1.5 });
+        for (const s2 of a.spots ?? []) if (s2.map === map && (s2.confirmations ?? 1) >= ai.cfg.atlasMinConfirm) hints.push({ x: s2.x, z: s2.z, w: 1.5 });
         const list = (ai.campHist[map] ??= []);
         for (const h of hints) if (!list.some((e) => dist(e, h) <= 6)) { list.push({ x: h.x, z: h.z, rate: ref * h.w, n: 1, level: null, hint: k.slice(12) }); added++; }
         list.sort((x, y) => y.rate - x.rate); list.length = Math.min(list.length, 20);
@@ -822,7 +822,10 @@
     if (added) { try { localStorage.setItem(CAMPS_KEY, JSON.stringify(ai.campHist)); } catch {} L(`atlas: ${added} spot(s) nuevos de exploradores en la memoria`); }
     return added;
   };
-  ai.atlasTimer = setInterval(() => { try { ai.importAtlasHints(); } catch {} }, 60000);
+  // APAGADO por defecto (usuario: "no actualices a Horaz hasta tener buena información histórica;
+  // cuidado con afectarlo tan rápido"). Solo entran spots confirmados en >= atlasMinConfirm pasadas
+  // distintas del explorador (>= 30 min entre sí). Se prende con __ai.cfg.useAtlasHints = true.
+  ai.atlasTimer = setInterval(() => { try { if (ai.cfg.useAtlasHints) ai.importAtlasHints(); } catch {} }, 60000);
   ai.campMem = setInterval(() => {
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
     const cur = ai.camp;
