@@ -208,7 +208,11 @@ function makeRadar(
     group.scale.setScalar(scale);
     group.userData.label = label;
     const tagObj = group.getObjectByName("tag") as CSS2DObject;
-    tagObj.visible = cam && !!tag;
+    // En cámara, nombres solo cerca del personaje (a <= 9 tiles), el objetivo y los dorados: con todos
+    // a la vista la pantalla se llenaba de carteles.
+    const me = state?.where;
+    const near = !!me && Math.hypot(x - me.x, y - me.y) <= 9;
+    tagObj.visible = cam && !!tag && (kind === "self" || kind === "gold" || target || near);
     if (tag && tagObj.element.textContent !== tag) tagObj.element.textContent = tag;
     tagObj.element.classList.toggle("is-target", target);
     group.userData.target = target;
@@ -423,6 +427,9 @@ function makeRadar(
     for (const [key, g] of pool)
       if (!g.visible) {
         entities.remove(g);
+        // El CSS2DRenderer no saca del DOM el cartel de un objeto que ya no está en la escena: quedaban
+        // nombres viejos pegados en la cámara (monstruos de otro mapa, objetivos que ya murieron).
+        (g.getObjectByName("tag") as CSS2DObject | undefined)?.element.remove();
         pool.delete(key);
       }
     trail.geometry.dispose();
