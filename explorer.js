@@ -32,6 +32,7 @@
   // Limpiar lo anotado antes del filtro de NPCs.
   for (const cells of Object.values(atlas.maps)) for (const c of Object.values(cells)) for (const [t, v] of Object.entries(c)) if (/VIP Seller|Battle Royale|Alquimista/i.test(v.name)) delete c[t];
   atlas.spots = (atlas.spots ?? []).filter((sp) => !/kills en 60 s/.test(sp.note ?? ''));
+  atlas.goldens = (atlas.goldens ?? []).filter((g) => g.x > 1 || g.y > 1);
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(atlas)); } catch {} };
   // Mapas a recorrer: [warp, índice de mapa, nombre, nivel]. Lista de warps del cliente.
   // Primero los mapas de la ruta de Horaz (usuario: "que explore primero los mapas que usa Horaz para
@@ -55,7 +56,8 @@
       t.last = Date.now();
       if (!X.seenIds.has(id)) {
         X.seenIds.add(id); t.seen++;
-        if (/gold/i.test(name)) {
+        // Dorados de verdad: con vida y posición real (el cliente deja "Gold Warrior" fantasma en (0,0)).
+        if (/gold/i.test(name) && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && (p.x > 1 || p.z > 1)) {
           const inv = window.__invasion; const g = { map: w.mapIndex, x: Math.round(p.x), y: Math.round(p.z), type: e.npcType, name, at: Date.now(), duringInvasion: inv?.status === 1 && Date.now() - inv.at < 120000 };
           atlas.goldens.push(g); ai.L(`ATLAS: ${name} en ${ROUTE.find((r) => r[1] === w.mapIndex)?.[2] ?? w.mapIndex} (${g.x},${g.y})`);
           fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: g.map, x: g.x, y: g.y, name, id: e.netId & 0xffff, at: g.at }) }).catch(() => {});
