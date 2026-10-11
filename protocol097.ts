@@ -246,6 +246,18 @@ export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number)
   return null;
 }
 
+/**
+ * Skill de área (0x1E) que tiró `me`: en 0.97d C3 ?? 1E <skill u8> <jugador u16> <x> <y> <rot> (9 bytes;
+ * AreaSkillAnimation075); con 10+ bytes, skill u16 (season 6). null si no es mío.
+ */
+export function ownAreaSkill(raw: Uint8Array | DataView | ArrayBuffer, me: number): number | null {
+  const b = u8(raw);
+  if (b[2] !== 0x1e || b.length < 9) return null;
+  const u16 = (i: number) => ((b[i] << 8) | b[i + 1]) & 0x7fff;
+  if (b.length === 9) return u16(4) === me ? b[3] : null;
+  return u16(5) === me ? u16(3) : null;
+}
+
 // ---------------------------------------------------------------------------
 // 0x11 S2C de 8 bytes en este server: C1 08 11 <id u16 BE> <x> <y> <?> = "estás en (x, y)". Llega
 // repetido cuando el server rechaza los pasos (el bot caminó desde una posición equivocada) y lo
