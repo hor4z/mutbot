@@ -16,10 +16,10 @@ const table = (title: string, rows: Record<string, unknown>[]) => {
 
 const party = await query<PartyRow>('SELECT char, in_party, ticks, exp_min FROM v_party FORMAT JSONEachRow');
 table('Party en el dúo (Arena 2, compañero cerca)', party.map((r) => ({ ...r, exp_min: M(r.exp_min) })));
-table('Exp/min por lado de la esquina (Arena 2)', (await query<{ char: string; side: string; ticks: number; exp_min: number }>(
-  "SELECT char, side, sum(ticks) AS ticks, round(sum(exp_min * ticks) / sum(ticks)) AS exp_min FROM v_exp_spot WHERE map = 83 AND side != '' GROUP BY char, side ORDER BY char, exp_min DESC FORMAT JSONEachRow",
-)).map((r) => ({ ...r, exp_min: M(r.exp_min) })));
-table('Skill del mago con y sin rivales', (await query<{ exp_min: number }>('SELECT * FROM v_skill ORDER BY char, contested, exp_min DESC FORMAT JSONEachRow')).map((r) => ({ ...r, exp_min: M(r.exp_min) })));
+table('Exp/min por lado de la esquina (Arena 2)', (await query<{ char: string; side: string; n: number; rate: number }>(
+  "SELECT char, side, sum(ticks) AS n, round(sum(v_exp_spot.exp_min * v_exp_spot.ticks) / sum(v_exp_spot.ticks)) AS rate FROM v_exp_spot WHERE map = 83 AND side != '' GROUP BY char, side ORDER BY char, rate DESC FORMAT JSONEachRow",
+)).map((r) => ({ char: r.char, side: r.side, ticks: r.n, exp_min: M(r.rate) })));
+table('Skill confirmado por el server, con y sin rivales', (await query<{ exp_min: number }>('SELECT * FROM v_skill ORDER BY char, contested, exp_min DESC FORMAT JSONEachRow')).map((r) => ({ ...r, exp_min: M(r.exp_min) })));
 table('Quién nos mata', await query('SELECT killer, player, deaths, victims, last FROM v_killers ORDER BY deaths DESC LIMIT 15 FORMAT JSONEachRow'));
 table('Rivales más vistos', await query('SELECT name, map, sum(seen) AS seen, max(last) AS last FROM v_rivals GROUP BY name, map ORDER BY seen DESC LIMIT 15 FORMAT JSONEachRow'));
 table('Ciclos de reset', await query('SELECT * FROM v_cycles FORMAT JSONEachRow'));
