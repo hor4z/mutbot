@@ -57,7 +57,7 @@
       C.dragonSeen.add(best.netId); C.dragonFirst.set(best.netId, Date.now()); if (C.dragonFirst.size > 200) C.dragonFirst.clear(); const p = best.transform.pos, x = Math.round(p.x), z = Math.round(p.z);
       ai.L?.(`ESQUINA: ${best.npcType === 44 ? 'Dragón Rojo' : String(best.objectNameInWorld ?? '').trim()} a la vista en (${x},${z}), mapa ${w.mapIndex}: lo ataco`);
       if (best.npcType === 79) try { const ds = JSON.parse(localStorage.getItem('mubot-dragon-spots') || '{}'); (ds[w.mapIndex] ??= []).push([x, z]); ds[w.mapIndex] = ds[w.mapIndex].slice(-30); localStorage.setItem('mubot-dragon-spots', JSON.stringify(ds)); } catch {}
-      fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: S.playerData.name, map: w.mapIndex, x, y: z, name: String(best.objectNameInWorld ?? '').trim(), id: best.netId, at: Date.now() }) }).catch(() => {});
+      fetch('http://127.0.0.1:8787/api/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: S.playerData.name, map: w.mapIndex, x, y: z, name: String(best.objectNameInWorld ?? '').trim(), id: best.netId, at: Date.now() }) }).catch(() => {});
     }
     if (best) C.dragonUntil = Date.now() + 15000; // y 15 s más al morir: quedarse para que el looter levante las cajas
     return best;

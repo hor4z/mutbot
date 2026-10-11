@@ -956,6 +956,7 @@ function journal(kind: JournalKind, what: string, detail: Record<string, unknown
 const WALK_PACE_MS = 380;
 const ATTACK_PACE_MS = 500;
 const TARGET_NO_KILL_MS = 15_000;
+const UNREACHABLE_MS = 60_000;
 const SKILL_PACE_MS = 900;
 // El cliente web tiene cooldown de chat; 2.5s entre comandos queda cómodo.
 const CHAT_PACE_MS = 2500;
@@ -1856,7 +1857,16 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     economyWatched = true;
   }
 
-  const unreachable = new Set<number>();
+  // Objetivos abandonados (inalcanzables o que no mueren): se ignoran UNREACHABLE_MS. El server reusa
+  // los ids al respawnear, así que una lista para siempre achicaba el campamento durante la sesión.
+  const unreachableUntil = new Map<number, number>();
+  const unreachable = {
+    has: (id: number) => (unreachableUntil.get(id) ?? 0) > Date.now(),
+    add: (id: number) => {
+      unreachableUntil.set(id, Date.now() + UNREACHABLE_MS);
+      if (unreachableUntil.size > 500) for (const [k, t] of unreachableUntil) if (t <= Date.now()) unreachableUntil.delete(k);
+    },
+  };
   let target: number | null = null;
   loopView = () => ({ kills, deaths, casts: skillsUsed, exp: totalExpGained, target });
   if (!sessionStart.level) sessionStart.level = world.level;
@@ -1893,29 +1903,42 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const skill = pickAttackSkill();
     const r = spinRange(skill?.number);
     const mons = [...npcs.values()];
-    // Pegar: lo que deja más monstruos en el giro, a ritmo de skill.
-    const st = spinTarget(me, mons, r);
-    if (st && skill && Date.now() - lastCastAt >= SKILL_PACE_MS) {
-      phase = 'fight';
-      doing = `esquina de Arena 2: giro con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
-      if (useSkill(st.id)) {
-        lastCastAt = Date.now();
-        skillsUsed++;
-      }
-      await sleep(SKILL_PACE_MS);
-      return;
-    }
-    if (inCorner(me)) {
+    const here = inCorner(me);
+    if (here) {
       cornerSince ??= now;
       // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
       const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
-      if (cornerFull({ rivals, inCornerSince: cornerSince, now, rate1m: expLog.perMin(now, 60_000) })) {
+      const rate = expLog.perMin(now, 60_000);
+      if (cornerFull({ rivals, inCornerSince: cornerSince, now, rate1m: rate })) {
         cornerAwayUntil = now + CORNER.awayMs;
         cornerSince = null;
-        currentSpot = null;
-        panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(expLog.perMin(now, 60_000) / 1e6)}M/min el último minuto): voy a la Arena de mi nivel (warp ${altWarp(world.level)}) por ${CORNER.awayMs / 60_000} min.`);
+        target = null;
+        const alt = WARP_SPOTS.find((sp) => sp.index === altWarp(world.level))!;
+        panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M/min el último minuto): voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
+        journal('travel', `esquina llena: warp a ${alt.name}`, { warp: alt.index, reason: 'corner-full', rivals });
+        await warpAndWait(alt);
         return;
       }
+    } else cornerSince = null;
+    // Pegar: lo que deja más monstruos en el giro, a ritmo de skill. Viajando, solo lo que bloquea.
+    const st = here ? spinTarget(me, mons, r) : cornerTarget(me, mons, 0, r);
+    if (st && Date.now() - lastCastAt >= SKILL_PACE_MS) {
+      phase = 'fight';
+      doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
+      if (skill && useSkill(st.id)) {
+        lastCastAt = Date.now();
+        skillsUsed++;
+        await sleep(SKILL_PACE_MS);
+        return;
+      }
+      // Sin skill o sin maná: golpe normal al que esté pegado.
+      if (chebyshev(world.x, world.y, st.x, st.y) <= 1) {
+        sendHit(st.id, directionTowards(world.x, world.y, st.x, st.y));
+        await sleep(ATTACK_PACE_MS);
+        return;
+      }
+    }
+    if (here) {
       // Buff propio (Swell Life 48 / Mana Shield 16) cada ~55 s.
       const buff = [48, 16].map((k) => world.skills.get(k)).find((x) => x != null);
       if (buff && now - cornerBuffAt > CORNER.buffMs && now - lastCastAt >= SKILL_PACE_MS) {
@@ -1933,8 +1956,10 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
       const ct = cornerTarget(me, mons, playersNear, r);
       const goal = ct ?? CORNER.wait;
+      // Sin skill hay que llegar pegado para el golpe normal.
+      const reach = ct ? (skill ? r : 1) : 0.8;
       goalPoint = [goal.x, goal.y];
-      if (Math.hypot(goal.x - world.x, goal.y - world.y) > (ct ? r : 0.8)) {
+      if (Math.hypot(goal.x - world.x, goal.y - world.y) > reach) {
         phase = 'walk';
         doing = ct ? `esquina de Arena 2: voy al grupo de ${monsterName(ct.type)}` : 'esquina de Arena 2: espero la reaparición';
         await walkTowards(goal.x, goal.y);
@@ -1945,18 +1970,11 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(300);
       return;
     }
-    // Viajando por el camino de la llegada a la esquina (sin pelear salvo lo que bloquea).
-    cornerSince = null;
+    // Viajando por el camino de la llegada a la esquina.
     if (cornerRouteIdx == null || now - cornerRouteAt > 20_000) cornerRouteIdx = null;
     const wp = nextRoutePoint(me, cornerRouteIdx);
     cornerRouteIdx = wp.idx;
     cornerRouteAt = now;
-    const blocker = cornerTarget(me, mons, 0, r);
-    if (blocker && skill && Date.now() - lastCastAt >= SKILL_PACE_MS) {
-      if (useSkill(blocker.id)) lastCastAt = Date.now();
-      await sleep(SKILL_PACE_MS);
-      return;
-    }
     phase = 'walk';
     goalPoint = [wp.x, wp.y];
     doing = `camino a la esquina de Arena 2 (${wp.idx + 1}/${CORNER.route.length})`;
@@ -2275,7 +2293,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (attackTarget !== target) {
           attackTarget = target;
           attackSince = Date.now();
-        } else if (Date.now() - attackSince > TARGET_NO_KILL_MS) {
+        } else if (!isGolden(t) && Date.now() - attackSince > TARGET_NO_KILL_MS) {
+          // Los dorados tienen mucha vida: a esos no se los abandona por tiempo.
           log(`Objetivo ${target} (${monsterName(t.type)}) no muere en ${TARGET_NO_KILL_MS / 1000} s de golpes: lo abandono.`);
           unreachable.add(target);
           target = null;
@@ -2301,6 +2320,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         }
         continue;
       }
+      attackTarget = null; // fuera de alcance: el reloj de "no muere" vuelve a empezar al llegar
       if (stuckCount >= 8) {
         log(`Objetivo ${target} inalcanzable, lo abandono.`);
         unreachable.add(target);

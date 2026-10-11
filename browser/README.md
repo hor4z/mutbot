@@ -14,7 +14,7 @@ cuando quieras usarlo. No lo importa ningún `.ts` ni test del bot.
 | `corner.js`, `defense.js` | Esquina de Arena 2 y defensa propia. |
 | `duo.js`, `follow.js` | Dúo / seguidor entre dos pestañas. |
 | `mubot-loader.user.js` | Userscript que inyecta el agente al cargar la página. |
-| `serve-agent.ts` | `bun run agent`: sirve estos `.js` en 127.0.0.1:8788 (+ `/gold`, `/atlas`). |
+| `serve-agent.ts` | `bun run agent`: sirve estos `.js` en 127.0.0.1:8788. Las señales de dorados (`hunter.js`, `corner.js`, `explorer.js`) van a la estación: `127.0.0.1:8787/api/gold`. |
 | `PLAN-FARMEO.md` | Bitácora de ciclos del agente del navegador. |
 | `skill-correr-agente/` | La skill de Claude que lo arrancaba (ya no está activa en `.claude/skills`). |
 

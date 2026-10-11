@@ -14,7 +14,7 @@
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -68,14 +68,21 @@ function discover(): CharConfig[] {
 
 function refreshSlots() {
   const cfgs = discover();
-  cfgs.forEach((cfg, i) => {
+  for (const cfg of cfgs) {
     const s = slots.get(cfg.key);
-    if (s) s.cfg = cfg;
-    else slots.set(cfg.key, {
-      cfg, port: BOT_PORT_BASE + i, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
+    if (s) {
+      s.cfg = cfg;
+      continue;
+    }
+    // Puerto estable: el primero libre desde BOT_PORT_BASE (un .env nuevo no le roba el puerto a otro).
+    const used = new Set([...slots.values()].map((x) => x.port));
+    let port = BOT_PORT_BASE;
+    while (used.has(port)) port++;
+    slots.set(cfg.key, {
+      cfg, port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
       state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0,
     });
-  });
+  }
 }
 
 // --- Bots que ya corren (los nuestros o lanzados a mano) ------------------------------------
@@ -227,6 +234,7 @@ function disconnect(s: Slot): { ok: boolean; msg: string } {
 
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
   if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
+  if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
   if (!s.state || s.state.mode === 'connecting') {
     s.pending = r;
     return { ok: true, msg: `la aplico cuando ${s.cfg.char} entre al juego` };
@@ -250,11 +258,21 @@ function view() {
   });
 }
 
-function tail(path: string, lines: number): string {
+// Últimas líneas del log sin leerlo entero (los logs crecen sin rotación con bots corriendo días).
+function tail(path: string, lines: number, maxBytes = 64 * 1024): string {
+  let fd: number | null = null;
   try {
-    const text = readFileSync(path, 'utf8');
-    return text.split('\n').slice(-lines - 1).join('\n');
-  } catch { return ''; }
+    fd = openSync(path, 'r');
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, maxBytes);
+    const buf = Buffer.alloc(len);
+    readSync(fd, buf, 0, len, size - len);
+    return buf.toString('utf8').split('\n').slice(-lines - 1).join('\n');
+  } catch {
+    return '';
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
 }
 
 // Señales de dorados (POST /api/gold): de los bots (sin Origin) o del juego en el navegador.
@@ -262,7 +280,7 @@ const golds = new Map<string, GoldSignal>();
 const GOLD_CORS = {
   'access-control-allow-origin': GAME_ORIGIN,
   'access-control-allow-private-network': 'true',
-  'access-control-allow-methods': 'POST',
+  'access-control-allow-methods': 'GET, POST',
   'access-control-allow-headers': 'content-type',
 };
 
@@ -281,6 +299,8 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
+      // Los avistamientos vigentes, también para el cazador del navegador (CORS del juego).
+      if (url.pathname === '/api/gold') return new Response(JSON.stringify(freshGolds(golds, Date.now())), { headers: { ...GOLD_CORS, 'content-type': 'application/json', 'cache-control': 'no-store' } });
       if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });

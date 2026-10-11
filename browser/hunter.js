@@ -140,13 +140,13 @@
     // Un dragón a la vista se avisa al compañero (antes solo avisaba el explorador de Melu).
     if (b && prio(String(b.objectNameInWorld ?? '')) === 3 && Date.now() - (h.lastPost ?? 0) > 3000) {
       h.lastPost = Date.now(); const p = b.transform.pos;
-      fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: w.mapIndex, x: Math.round(p.x), y: Math.round(p.z), name: String(b.objectNameInWorld ?? '').trim(), id: b.netId & 0xffff, at: Date.now() }) }).catch(() => {});
+      fetch('http://127.0.0.1:8787/api/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: w.mapIndex, x: Math.round(p.x), y: Math.round(p.z), name: String(b.objectNameInWorld ?? '').trim(), id: b.netId & 0xffff, at: Date.now() }) }).catch(() => {});
     }
     return b;
   };
   // Avisos de los buscadores (headless-bot.ts --scout → POST /gold en el servidor local): cada 2 s.
   h.reports = [];
-  const pollGold = () => fetch('http://127.0.0.1:8788/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me && (!CFG.bigOnly || prio(g.name ?? '') >= 2)) : []; }).catch(() => {});
+  const pollGold = () => fetch('http://127.0.0.1:8787/api/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me && (!CFG.bigOnly || prio(g.name ?? '') >= 2)) : []; }).catch(() => {});
   const reportGoal = (P, w) => {
     const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }), p: prio(g.name ?? '') })).sort((a, b) => b.p - a.p || a.d - b.d)[0];
     if (!near || near.d < 4) return null;
