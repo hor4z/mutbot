@@ -70,7 +70,8 @@
 
   {
     // Al recargar se reemplaza el envoltorio (no se apila otro): el original queda en ai.cornerInner.
-    const inner = (ai.cornerInner ??= ai.pickTarget);
+    ai.cornerInner ??= ai.pickTarget;
+    const inner = (w, P, c) => ai.cornerInner(w, P, c); // dinámico: hunter.js puede reemplazar ai.cornerInner al recargarse
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
       // Primero, los monstruos que le pegaron en los últimos 5 s y están a <= 15 tiles (los que atacan de
