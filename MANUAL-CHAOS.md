@@ -68,3 +68,17 @@ vienen en el cliente** (las define el server, OpenMU). En MU, si una subida de
   Es la mejora grande de verdad; hace falta un ancient y juntar joyas.
 - **Le faltan los guantes** (10/1) para completar el set.
 - **Frutas** (Creation + Life): dan puntos de stat extra. Tiene 1 Creation.
+
+## Prueba real: armadura Dragon +11 → +12 (2026-10-10, 22:45)
+
+- Receta según el cliente: ítem +11 + Chaos + Bless + Soul + Creation (tipo de mezcla 22).
+- **El botón "Combinar" del cliente responde "Estos objetos no se combinan así"**: valida contra el tipo
+  de mezcla seleccionado (por defecto "Arma Chaos") y no manda nada.
+- **Mandando el paquete con el tipo correcto** (`C1 05 86 16 00`, lo mismo que manda el botón): el server
+  no respondió y no cambió nada (ni ítems ni zen). Este server, con el perfil 0.97d, parece tener solo
+  las subidas a +10 y +11 de OpenMU (Version095d/ChaosMixes.cs). Las piezas +13 de Horaz salieron de otro lado.
+- Sin pérdidas: todo volvió al inventario y la armadura se volvió a equipar.
+- Chances en OpenMU, por si el server las tiene: +10/+11 60 % (SeasonSix; 50/45 % en 0.95d), +12/+13 55 %,
+  +14/+15 50 %, más 25 % con luck. **Si falla, el ítem desaparece** (MixResult.Disappear).
+- Cómo se opera desde el bot: Chaos Goblin (NPC 238, Noria 180,103) → `talkToNpc` → `__store.autoMoveItem(0, slot, 3)`
+  por ítem → paquete de mezcla → `autoMoveItem(3, i, 0)` para sacar.
