@@ -228,9 +228,16 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Ciego: el server a veces deja de mandar el scope de monstruos (Horaz y Melu en Lorencia: 0
     // monstruos, 0 muertes, solo jugadores y paquetes 0x11). Reconectar lo arregla: con NINGÚN
     // monstruo a la vista (ni en zona segura) durante BLIND_RECONNECT_MS, se corta y se vuelve a entrar.
+    // También sin exp: con la sesión "fantasma" llegan monstruos pero ninguno muere y no entra exp.
+    const farming = !bot.paused && !bot.hunting && !bot.resetting && bot.inGameAt > 0;
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
-    else if (Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
-      decide(`Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto (el server dejó de mandar el scope).`);
+    const sinceIn = Date.now() - Math.max(bot.inGameAt, bot.lastArrivalAt);
+    const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(Date.now(), BLIND_RECONNECT_MS) === 0;
+    if (noExp || (Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS)) {
+      bot.blind = true;
+      decide(noExp
+        ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto (sesión trabada).`
+        : `Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto (el server dejó de mandar el scope).`);
       journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
       bot.kicked = true;
       closeSockets();

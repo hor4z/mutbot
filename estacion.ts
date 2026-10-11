@@ -28,6 +28,8 @@ import type { PanelServerMessage, PanelState } from './panel-protocol';
 
 const ROOT = import.meta.dir;
 const PORT = Number(process.env.ESTACION_PORT ?? 8787);
+// Entre desconectar y volver a conectar un personaje (ver connect).
+const RECONNECT_GAP_MS = 5_000;
 const LOG_DIR = join(homedir(), '.mubot', 'logs');
 const SERVER: GameServer = {
   proxy: process.env.MUBOT_PROXY ?? DEFAULT_SERVER.proxy,
@@ -51,6 +53,8 @@ type Slot = {
   waiting: Map<number, (r: { ok: boolean; msg: string }) => void>;
   /** cuándo se lo desconectó desde la estación */
   stoppedAt: number;
+  // conexión demorada (recién desconectado)
+  connectTimer: ReturnType<typeof setTimeout> | null;
 };
 const slots = new Map<string, Slot>();
 const say = (...a: unknown[]) => console.log('[estación]', ...a);
@@ -81,7 +85,7 @@ function refreshSlots() {
     while (used.has(port)) port++;
     slots.set(cfg.key, {
       cfg, port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
-      state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0,
+      state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0, connectTimer: null,
     });
   }
 }
@@ -189,6 +193,16 @@ const ownExits = new Set<number>();
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
+  // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba
+  // "fantasma" (sin muertes ni exp). Se espera RECONNECT_GAP_MS desde la desconexión y se conecta solo.
+  const waitMs = s.stoppedAt + RECONNECT_GAP_MS - Date.now();
+  if (waitMs > 0) {
+    if (s.connectTimer) clearTimeout(s.connectTimer);
+    s.status = 'starting';
+    s.msg = `espero ${Math.ceil(waitMs / 1000)} s a que el server suelte la sesión anterior…`;
+    s.connectTimer = setTimeout(() => { s.connectTimer = null; if (s.pid == null) connect(s, routine); }, waitMs);
+    return { ok: true, msg: `conecto a ${s.cfg.char} en ${Math.ceil(waitMs / 1000)} s (el server suelta la sesión anterior)` };
+  }
   mkdirSync(LOG_DIR, { recursive: true });
   const logPath = join(LOG_DIR, `${s.cfg.key}.log`);
   const fd = openSync(logPath, 'a');

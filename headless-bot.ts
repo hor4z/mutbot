@@ -80,6 +80,9 @@ import { startStatusServer } from './ws-server';
 // Código de salida de --exit-if-in-use (la estación lo muestra como "cuenta abierta en otro lado").
 const EXIT_IN_USE = 3;
 
+// Tras una sesión trabada (ciego), esto antes de volver a entrar.
+const BLIND_WAIT_MS = 5_000;
+
 let worldTracked = false;
 
 function clearScope() {
@@ -179,7 +182,9 @@ async function main() {
     first = false;
     closeSockets();
     if (deadline && Date.now() >= deadline) break;
-    const wait = backoff.next(Date.now() - t0, alreadyConnected);
+    // Sesión trabada (ciego): esperar a que el server suelte la vieja antes de volver a entrar.
+    const wait = bot.blind ? Math.max(BLIND_WAIT_MS, backoff.next(Date.now() - t0, alreadyConnected)) : backoff.next(Date.now() - t0, alreadyConnected);
+    bot.blind = false;
     if (deadline && Date.now() + wait >= deadline) break;
     log(`Reconecto en ${Math.round(wait / 1000)} s (sesión #${sessions} duró ${Math.round((Date.now() - t0) / 1000)} s).`);
     await sleep(wait);
