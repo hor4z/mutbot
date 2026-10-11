@@ -95,7 +95,12 @@
     // Ayudar sin moverse (usuario: "ya Melu puede ayudar un poco"): al lado del líder (<= 3 tiles), si
     // hay un monstruo a <= 5 tiles de ella, tirar su skill de área (Evil Spirit, 9) sin caminar hacia
     // él. Nunca se aleja de Horaz por pelear. window.__followHelp = false lo apaga.
-    if ((window.__followHelp ?? true) && dl <= 3 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 400) {
+    // Recibiendo mucho daño, no pegar (usuario): con < 70% de vida, o si perdió > 15% en los últimos
+    // 3 s, deja de atacar 8 s (pegar la vuelve objetivo de los monstruos).
+    F.hpHist = (F.hpHist ?? []).filter((x) => now - x.t < 3000); F.hpHist.push({ t: now, hp: pd.currentHP });
+    const lost = pd.maxHP ? (Math.max(...F.hpHist.map((x) => x.hp)) - pd.currentHP) / pd.maxHP : 0;
+    if (pd.maxHP && (pd.currentHP / pd.maxHP < 0.7 || lost > 0.15)) { if (!F.calmUntil || now > F.calmUntil) L(`recibo daño (${Math.round(pd.currentHP / pd.maxHP * 100)}%): dejo de pegar`); F.calmUntil = now + 8000; }
+    if ((window.__followHelp ?? true) && !(F.calmUntil && now < F.calmUntil) && dl <= 3 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 400) {
       const skill = [9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
       let m = null, md = 1e9;
       for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P); if (dd <= 5 && dd < md) { md = dd; m = e; } }
