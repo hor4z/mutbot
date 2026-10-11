@@ -16,7 +16,7 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
-export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number;
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; mateBuffAt: number; sides: CornerSides; expSeen: number;
   // compañeros que ya estaban en la esquina (para anunciar cuando llega uno)
   matesHere: Set<string>;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
@@ -26,7 +26,7 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
 const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -133,6 +133,19 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       corner.buffAt = now;
       ctx.lastCastAt = now;
       sendTargetedSkill(buff.index, bot.playerId);
+      await sleep(SKILL_PACE_MS);
+      return;
+    }
+    // En party, el mago le pone Soul Barrier (16) al compañero a <= 6 cada ~55 s (Swell Life del DK ya
+    // alcanza a la party sola: ImplicitParty). Solo en un hueco del giro: primero se ganan los monstruos.
+    const barrier = world.skills.get(16);
+    const mateNear = bot.inParty && barrier && isMage() && now - corner.mateBuffAt > CORNER.buffMs && now - ctx.lastCastAt >= SKILL_PACE_MS
+      ? [...world.players].find(([, q]) => q.name != null && isMate(q.name) && Math.hypot(q.x - me.x, q.y - me.y) <= 6) : undefined;
+    if (barrier && mateNear) {
+      corner.mateBuffAt = now;
+      ctx.lastCastAt = now;
+      sendTargetedSkill(barrier.index, mateNear[0]);
+      bot.doing = `esquina de Arena 2: Soul Barrier a ${mateNear[1].name}`;
       await sleep(SKILL_PACE_MS);
       return;
     }
