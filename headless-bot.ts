@@ -89,9 +89,6 @@ import {
   CharacterLevelUpdatePacket,
   MoneyDropped075Packet,
   InventoryMoneyUpdatePacket,
-  MasterStatsUpdatePacket,
-  MasterCharacterLevelUpdatePacket,
-  MasterSkillLevelUpdatePacket,
 } from './packets';
 import monstersData from './data/monsters.json';
 import skillsData from './data/skills.json';
@@ -266,16 +263,8 @@ const world = {
   players: new Map<number, { x: number; y: number }>(),
   resets: null as number | null, // CharacterResets del server (packet propio)
   grandResets: 0,
-  // NPC de pueblo/servicio (TypeNumber 200-299) en scope: candidatos para
-  // descubrir merchants. Antes no se guardaban en ningún lado y
-  // discoverMerchant() sondeaba monstruos.
+  // NPC de pueblo/servicio (TypeNumber 200-299) en scope: no son monstruos.
   townNpcs: new Map<number, ScopedNpc>(),
-  // Master skill tree: solo tracking pasivo por ahora (ver AGENTS.md,
-  // "Pendiente"). El perfil del server es V097D (pre-season); no sabemos si
-  // manda estos packets hasta verlo en un login real.
-  masterLevel: 0,
-  masterLevelUpPoints: 0,
-  masterSeen: false,
   // Clase cruda del CharacterList (ver parseCharacterList097); null = no se sabe.
   classId: null as number | null,
 };
@@ -299,7 +288,7 @@ const HEAL_POTION_NUMS = new Set([1, 2, 3]); // small / normal / large healing
 // Fire Ball (4), Lightning (3), Meteorite (2), Inferno (14 — mismo número que un DK, se usa el
 // que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
 // 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
-const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 48, 50, 51, 55, 9, 7, 17, 4, 3, 2];
+const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2];
 
 // ---------------------------------------------------------------------------
 // Métricas
@@ -560,29 +549,6 @@ function trackWorld() {
   EventBus.on('ItemAddedToInventory', (raw: any) => {
     const it = parseItemAdded(toBytes(raw));
     if (it) world.inventory.set(it.slot, it);
-  });
-
-  // Master skill tree: SOLO escucha, no manda nada (ver AGENTS.md, "Pendiente").
-  // Si el server no manda nunca estos tres eventos, confirma que el perfil
-  // V097D no tiene el sistema master activo para este personaje.
-  EventBus.on('MasterStatsUpdate', (raw: any) => {
-    const p = new MasterStatsUpdatePacket(raw);
-    world.masterSeen = true;
-    world.masterLevel = p.MasterLevel;
-    world.masterLevelUpPoints = p.MasterLevelUpPoints;
-    log(`Master stats: nivel ${p.MasterLevel}, ${p.MasterLevelUpPoints} punto(s) disponibles.`);
-  });
-  EventBus.on('MasterCharacterLevelUpdate', (raw: any) => {
-    const p = new MasterCharacterLevelUpdatePacket(raw);
-    world.masterSeen = true;
-    world.masterLevel = p.MasterLevel;
-    world.masterLevelUpPoints = p.CurrentMasterPoints;
-    log(`Master level up: nivel ${p.MasterLevel}, ${p.CurrentMasterPoints} punto(s) disponibles.`);
-  });
-  EventBus.on('MasterSkillLevelUpdate', (raw: any) => {
-    const p = new MasterSkillLevelUpdatePacket(raw);
-    world.masterSeen = true;
-    log(`MasterSkillLevelUpdate: success=${p.Success} índice=${p.MasterSkillIndex} nivel=${p.Level} puntos restantes=${p.MasterLevelUpPoints}`);
   });
 
   // El server re-sincroniza nuestra posición acá (rubber-band) cuando rechaza

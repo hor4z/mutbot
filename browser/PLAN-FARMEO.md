@@ -186,7 +186,7 @@ Horaz tiene **4 slots vacíos**: mascota, collar y los dos anillos (además de l
 | 7 | Alas nivel 3 | salto grande de daño | alas 2 + ancient + Chaos + 5 Bless + 5 Soul |
 | 8 | Frutas | puntos de stat extra | Creation + Life |
 
-Recetas en `MANUAL-CHAOS.md`. Comprar o arriesgar ítems: siempre con confirmación del usuario.
+Recetas en `MANUAL-CHAOS.md (en browser/)`. Comprar o arriesgar ítems: siempre con confirmación del usuario.
 
 ## 12. Después del farmeo pulido: cazar dorados y todo lo que tire cajas
 
