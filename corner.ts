@@ -77,14 +77,14 @@ export function nextRoutePoint(p: Pos, idx: number | null): { idx: number; x: nu
 const cluster = <M extends Pos>(m: M, all: readonly M[], r: number) => all.filter((o) => dist(o, m) <= r).length;
 
 /**
- * A quién tirarle el skill ahora: el monstruo a distancia de giro (r + 0,5) que deja más monstruos
- * adentro. null = nada a tiro.
+ * A quién tirarle el skill ahora: el monstruo a tiro (`reach`; por defecto la distancia de giro r + 0,5)
+ * que deja más monstruos adentro. null = nada a tiro.
  */
-export function spinTarget<M extends Pos>(me: Pos, monsters: readonly M[], r: number): M | null {
+export function spinTarget<M extends Pos>(me: Pos, monsters: readonly M[], r: number, reach = r + 0.5): M | null {
   let best: M | null = null;
   let bn = 0;
   for (const m of monsters) {
-    if (dist(m, me) > r + 0.5) continue;
+    if (dist(m, me) > reach) continue;
     const n = cluster(m, monsters, r);
     if (n > bn) { bn = n; best = m; }
   }

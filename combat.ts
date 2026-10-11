@@ -91,8 +91,11 @@ export function castReach(num: number): number {
 // Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
 export const SKILL_MIN_MANA = 0.15;
 
-export function pickAttackSkill(): SkillInfo | undefined {
+/** `prefer`: skill a usar si se lo conoce (ej. Decay con competencia en la esquina). */
+export function pickAttackSkill(prefer?: number): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
+  const preferred = prefer != null ? world.skills.get(prefer) : undefined;
+  if (preferred) return preferred;
   // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
   // así que no se filtra por nivel.
   for (const num of ATTACK_SKILLS.length ? ATTACK_SKILLS : isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
@@ -102,8 +105,7 @@ export function pickAttackSkill(): SkillInfo | undefined {
   return undefined;
 }
 
-export function useSkill(targetId: number): boolean {
-  const skill = pickAttackSkill();
+export function useSkill(targetId: number, skill = pickAttackSkill()): boolean {
   const t = world.npcs.get(targetId);
   if (skill == null || !t) return false;
   if (AREA_SKILLS.has(skill.number)) {
