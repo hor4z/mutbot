@@ -23,6 +23,9 @@
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
   const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, dwellMs: 40000, rivalPenalty: 0.25, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
+  // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
+  // misma clase que los magos que lideran la esquina).
+  C.spinR = ({ 9: 5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
   const hp = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
