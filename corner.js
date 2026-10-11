@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [1, 'Arena', 50], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -70,10 +70,10 @@
     }
     // Hasta 100: la ruta del usuario con Arena 1 desde nivel 50 (faltaba: se quedaba con los Yetis de
     // Devias, "muy esparcidos", del 20 al 100).
-    // Devias (nivel 20-50): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
+    // Devias (nivel 20-100): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
     // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15
     // tiles de la llegada; no salir de ahí persiguiendo Yetis sueltos (se iba hacia el este).
-    if (w.mapIndex === 2 && S.playerData.level < 50 && ai.arrival) {
+    if (w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.arrival) {
       const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
       let best = null, bn = 0;
       for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
