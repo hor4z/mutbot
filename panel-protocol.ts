@@ -80,7 +80,8 @@ export type PanelState = {
   /** lo que el bot ve en su scope (coordenadas del mapa actual): para dibujar el mapa en el panel */
   entities?: {
     monsters: { id: number; x: number; y: number; type: number; name: string; gold: boolean; target: boolean }[];
-    players: { id: number; x: number; y: number }[];
+    /** name: el del paquete del server (sin verificar en todos los casos); mate: compañero (MUBOT_MATES) */
+    players: { id: number; x: number; y: number; name?: string; mate?: boolean }[];
     drops: { x: number; y: number; name: string; money: boolean; valuable: boolean }[];
   };
   /** desde que arrancó el bot: kills, muertes, skills tirados, exp ganada, loot, skill de ataque actual */
