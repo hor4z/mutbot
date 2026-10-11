@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estación MU Bot</title>
+<style>
+  :root {
+    --bg: #0d0b09; --panel: #17130f; --panel2: #201a14; --line: #3a2f22;
+    --text: #eadfcc; --muted: #9c8e78; --gold: #e3b05a; --gold2: #f6d48f;
+    --ok: #58b36a; --warn: #e0a03a; --bad: #d4544a; --hp: #c8423a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-columns: 340px minmax(0, 1fr); }
+  @media (max-width: 900px) { body { grid-template-columns: 1fr; grid-template-rows: auto 80vh; } }
+  aside { border-right: 1px solid var(--line); background: linear-gradient(180deg, #1c160f, var(--bg)); padding: 14px; overflow: auto; display: grid; gap: 12px; align-content: start; }
+  h1 { margin: 0; font-size: 18px; color: var(--gold2); letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .card { background: linear-gradient(180deg, var(--panel), #120f0b); border: 1px solid var(--line); border-radius: 12px; padding: 12px; cursor: pointer; display: grid; gap: 8px; }
+  .card.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+  .top { display: flex; align-items: center; gap: 8px; }
+  .name { font-weight: 700; font-size: 16px; color: var(--gold2); flex: 1; }
+  .pill { padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid var(--line); background: var(--panel2); text-transform: uppercase; letter-spacing: .5px; }
+  .pill.on { color: var(--ok); border-color: #2f5d38; }
+  .pill.starting, .pill.stopping { color: var(--warn); border-color: #6a4c1e; }
+  .pill.off { color: var(--muted); }
+  .pill.failed, .pill.in-use, .pill.external { color: var(--bad); border-color: #6a2a25; }
+  .info { font-size: 13px; color: var(--muted); }
+  .info b { color: var(--text); font-weight: 600; }
+  .msg { font-size: 12px; color: var(--warn); }
+  .bar { height: 6px; border-radius: 4px; background: #2a221a; overflow: hidden; } .bar > i { display: block; height: 100%; background: var(--hp); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  select, button { font: inherit; font-size: 13px; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  select { flex: 1 1 140px; min-width: 0; }
+  button { cursor: pointer; font-weight: 600; } button:hover { border-color: var(--gold); }
+  button.primary { background: #3b2b12; border-color: #7a5a22; color: var(--gold2); }
+  button.danger { color: var(--bad); border-color: #6a2a25; }
+  button:disabled { opacity: .45; cursor: default; }
+  main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+  .tabs { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+  .tabs .t { color: var(--muted); font-size: 13px; margin-right: auto; }
+  iframe { border: 0; width: 100%; height: 100%; background: var(--bg); }
+  pre { margin: 0; padding: 12px; overflow: auto; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--text); white-space: pre-wrap; }
+  .empty { display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--gold); border-radius: 10px; padding: 8px 14px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>Estación</h1>
+    <div class="sub">Personajes sin navegador. Antes de conectar, cerrá su pestaña del juego.</div>
+  </div>
+  <div id="chars" style="display:grid;gap:12px"><div class="sub">cargando…</div></div>
+  <div class="card" style="cursor:default">
+    <div class="top"><span class="name" style="font-size:14px">Dorados vistos</span><span class="sub">último minuto</span></div>
+    <div id="golds" class="info">ninguno</div>
+  </div>
+</aside>
+<main>
+  <div class="tabs">
+    <span class="t" id="selName">—</span>
+    <button id="tabPanel">Panel</button>
+    <button id="tabLog">Consola</button>
+  </div>
+  <div id="view" style="min-height:0"><div class="empty">Elegí un personaje.</div></div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const STATUS = { on: 'jugando', starting: 'conectando', stopping: 'saliendo', off: 'desconectado', failed: 'error', 'in-use': 'cuenta abierta', external: 'fuera de la estación' };
+  // Rutinas: el valor se traduce a {kind, warp?}. Los spots son los mismos del panel del bot.
+  const ROUTINES = [
+    ['farm', 'Farmear (ruta normal)'],
+    ['spot:24', 'Farmear fijo en Arena 2'], ['spot:25', 'Farmear fijo en Arena 3'], ['spot:26', 'Farmear fijo en Arena 4'],
+    ['spot:7', 'Farmear fijo en Devias 4'], ['spot:6', 'Farmear fijo en Devias 3'], ['spot:2', 'Farmear fijo en Lorencia'],
+    ['pause', 'En pausa'],
+  ];
+  const toRoutine = (v) => v.startsWith('spot:') ? { kind: 'spot', warp: +v.slice(5) } : { kind: v };
+  const fromRoutine = (r) => !r ? 'farm' : r.kind === 'spot' ? `spot:${r.warp}` : r.kind;
+  const label = (r) => (ROUTINES.find(([v]) => v === fromRoutine(r)) ?? [, '—'])[1];
+  const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n ?? 0);
+
+  let chars = [], sel = null, tab = 'panel', framePort = null;
+  try { sel = localStorage.getItem('estacion:sel'); tab = localStorage.getItem('estacion:tab') || 'panel'; } catch {}
+  const choice = new Map(); // rutina elegida en el select (por personaje), para que el refresco no la pise
+
+  const toast = (t) => { const e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove('show'), 3500); };
+  async function act(body) {
+    try {
+      const r = await fetch('/api/do', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await r.json(); toast(j.msg);
+    } catch { toast('la estación no contesta'); }
+    poll();
+  }
+
+  function card(c) {
+    const el = document.createElement('div');
+    el.className = 'card' + (c.key === sel ? ' sel' : '');
+    el.onclick = (ev) => { if (ev.target.closest('select,button')) return; select(c.key); };
+    const top = document.createElement('div'); top.className = 'top';
+    const n = document.createElement('span'); n.className = 'name'; n.textContent = c.char;
+    const p = document.createElement('span'); p.className = 'pill ' + c.status; p.textContent = STATUS[c.status] ?? c.status;
+    top.append(n, p); el.append(top);
+    const g = c.game;
+    if (g) {
+      const i = document.createElement('div'); i.className = 'info';
+      i.innerHTML = `<b></b> · nivel <b>${g.level}</b>${g.resets != null ? ` · <b>${g.resets}</b> resets` : ''} · ${fmt(g.expPerMin)} exp/min<br><span></span>`;
+      i.querySelector('b').textContent = `${g.map} (${g.x},${g.y})`;
+      i.querySelector('span').textContent = g.doing || g.mode;
+      el.append(i);
+      const b = document.createElement('div'); b.className = 'bar'; const f = document.createElement('i');
+      f.style.width = (g.hp?.[1] ? Math.round(100 * g.hp[0] / g.hp[1]) : 0) + '%'; b.append(f); el.append(b);
+    }
+    if (c.routine || c.pending) {
+      const r = document.createElement('div'); r.className = 'info';
+      r.textContent = c.pending ? `rutina al entrar: ${label(c.pending)}` : `rutina: ${label(c.routine)}`;
+      el.append(r);
+    }
+    if (c.msg && c.status !== 'on') { const m = document.createElement('div'); m.className = 'msg'; m.textContent = c.msg; el.append(m); }
+    const row = document.createElement('div'); row.className = 'row';
+    const s = document.createElement('select'); s.setAttribute('aria-label', 'Rutina');
+    for (const [v, t] of ROUTINES) { const o = document.createElement('option'); o.value = v; o.textContent = t; s.append(o); }
+    s.value = choice.get(c.key) ?? fromRoutine(c.routine ?? c.pending);
+    s.onchange = () => choice.set(c.key, s.value);
+    row.append(s);
+    const running = c.pid != null;
+    if (!running) {
+      const b = document.createElement('button'); b.className = 'primary'; b.textContent = 'Conectar';
+      b.onclick = () => { choice.delete(c.key); select(c.key); act({ action: 'connect', char: c.key, routine: toRoutine(s.value) }); };
+      row.append(b);
+    } else {
+      const a = document.createElement('button'); a.className = 'primary'; a.textContent = 'Aplicar'; a.disabled = c.status === 'external' || c.status === 'stopping';
+      a.onclick = () => { choice.delete(c.key); act({ action: 'routine', char: c.key, routine: toRoutine(s.value) }); };
+      const d = document.createElement('button'); d.className = 'danger'; d.textContent = 'Desconectar'; d.disabled = c.status === 'stopping';
+      d.onclick = () => act({ action: 'disconnect', char: c.key });
+      row.append(a, d);
+    }
+    el.append(row);
+    return el;
+  }
+
+  function render() {
+    // Con un select abierto no se redibuja (se cerraría la lista en la mano).
+    if (document.activeElement?.tagName === 'SELECT' && $('chars').contains(document.activeElement)) { renderView(); return; }
+    const box = $('chars'); box.replaceChildren();
+    if (!chars.length) { box.innerHTML = '<div class="sub">No hay personajes: falta un <code>.env</code> (o <code>.env.&lt;nombre&gt;</code>) con MUBOT_USER, MUBOT_PASS y MUBOT_CHAR en la raíz del repo.</div>'; return; }
+    for (const c of chars) box.append(card(c));
+    if (!sel || !chars.some((c) => c.key === sel)) sel = chars[0].key;
+    renderView();
+  }
+
+  function select(key) { sel = key; try { localStorage.setItem('estacion:sel', key); } catch {} render(); }
+  function setTab(t) { tab = t; try { localStorage.setItem('estacion:tab', t); } catch {} framePort = null; renderView(); }
+  $('tabPanel').onclick = () => setTab('panel');
+  $('tabLog').onclick = () => setTab('log');
+
+  let logTimer = null;
+  function renderView() {
+    const c = chars.find((x) => x.key === sel);
+    $('selName').textContent = c ? `${c.char} · ${STATUS[c.status] ?? c.status}` : '—';
+    $('tabPanel').className = tab === 'panel' ? 'primary' : ''; $('tabLog').className = tab === 'log' ? 'primary' : '';
+    const v = $('view');
+    if (tab === 'log') {
+      if (!v.querySelector('pre') || v.dataset.key !== sel) { v.replaceChildren(document.createElement('pre')); v.dataset.key = sel; framePort = null; loadLog(true); }
+      return;
+    }
+    v.dataset.key = '';
+    // El panel de cada bot vive en su propio puerto: solo se recarga el iframe si cambia.
+    if (c && c.panel) {
+      if (framePort !== c.port) { framePort = c.port; const f = document.createElement('iframe'); f.src = `http://127.0.0.1:${c.port}/panel`; f.title = `Panel de ${c.char}`; v.replaceChildren(f); }
+    } else {
+      framePort = null;
+      const e = document.createElement('div'); e.className = 'empty';
+      e.textContent = !c ? 'Elegí un personaje.' : c.pid == null ? `${c.char} está desconectado. Elegí una rutina y tocá Conectar.` : `Esperando el panel de ${c.char}…`;
+      if (v.firstChild?.className !== 'empty' || v.textContent !== e.textContent) v.replaceChildren(e);
+    }
+  }
+
+  async function loadLog(scroll) {
+    const pre = $('view').querySelector('pre'); if (!pre || !sel) return;
+    try {
+      const t = await (await fetch(`/api/log/${sel}`)).text();
+      const atBottom = scroll || pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+      pre.textContent = t || '(sin salida todavía)';
+      if (atBottom) pre.scrollTop = pre.scrollHeight;
+    } catch {}
+  }
+
+  function renderGolds(golds) {
+    const box = $('golds'); box.replaceChildren();
+    if (!golds?.length) { box.textContent = 'ninguno'; return; }
+    for (const g of golds) {
+      const d = document.createElement('div');
+      d.textContent = `★ ${g.name} · ${g.mapName} (${g.x},${g.y}) · lo vio ${g.from} hace ${Math.max(0, Math.round((Date.now() - g.at) / 1000))} s`;
+      box.append(d);
+    }
+  }
+
+  async function poll() {
+    try { const st = await (await fetch('/api/state')).json(); chars = st.chars; renderGolds(st.golds); render(); } catch { $('chars').innerHTML = '<div class="msg">La estación no contesta (¿se cerró <code>bun run estacion</code>?).</div>'; }
+  }
+  poll();
+  setInterval(poll, 2000);
+  setInterval(() => { if (tab === 'log') loadLog(false); }, 2000);
+</script>
+</body>
+</html>

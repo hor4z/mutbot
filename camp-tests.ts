@@ -5,7 +5,7 @@
  *
  *   bun run camp-tests.ts
  */
-import { CAMP, CampManager, CampMemory, DOWN_ZONE_DEFAULT, Hunger, START_CAMPS, castCandidate, downZone, type PickInput } from './camp';
+import { CAMP, CampManager, CampMemory, DOWN_ZONE_DEFAULT, Hunger, START_CAMPS, castCandidate, type PickInput } from './camp';
 import { ExpLog, MonsterTypeStats, type Candidate } from './farming';
 
 let fails = 0;
@@ -170,7 +170,9 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   let r = h.check({ now: 30 * S, tier: 20, recentRate: 2e6, lastWarpAt: 0, rivalsNear: 1 });
   ok('recién llegado (< 45 s): no hay hambre', !r.starving);
   r = h.check({ now: 50 * S, tier: 20, recentRate: 2e6, lastWarpAt: 0, rivalsNear: 1 });
-  ok('sin referencia: < 5M/min con un jugador cerca → hambre', r.starving && r.ref === null, r);
+  ok('sin referencia: ganando algo (2M/min) con un jugador cerca → no hay hambre (aprende primero)', !r.starving && r.ref === null, r);
+  r = h.check({ now: 50 * S, tier: 20, recentRate: 0, lastWarpAt: 0, rivalsNear: 1 });
+  ok('sin referencia: 0 exp con un jugador cerca → hambre', r.starving && r.ref === null, r);
   ok('primer minuto tras el warp no entra en la referencia', h.ref.t20 === undefined);
   r = h.check({ now: 50 * S, tier: 20, recentRate: 2e6, lastWarpAt: 0, rivalsNear: 0 });
   ok('sin jugadores cerca: no hay hambre', !r.starving);
@@ -183,17 +185,13 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   ok('referencia por tramo', h.check({ now: 400 * S, tier: 300, recentRate: 0, lastWarpAt: 0, rivalsNear: 0 }).ref === null);
 }
 
-// --- Skill de área en el camino y zona de abajo ---------------------------------------------------
+// --- Skill de área en el camino ---------------------------------------------------
 {
   const me = { x: 10, y: 10 };
   const a = { x: 12, y: 10 }, b = { x: 11, y: 11 }, c = { x: 16, y: 10 };
   ok('cualquier monstruo a <= 3 (el más cercano)', castCandidate(me, [a, b, c], null) === b);
   ok('el objetivo si está a <= 3', castCandidate(me, [a, b, c], a) === a);
   ok('nada a <= 3: no gira en el aire', castCandidate(me, [c], c) === null);
-  // Grilla sintética: caminable el triángulo x − y >= 0 hasta 100; "abajo" = mayor x − y.
-  const z = downZone((x, y) => x <= 100 && y >= 10 && y <= x);
-  ok('zona de abajo: mayor x − y entre lo caminable', z != null && z.x > 80 && z.y < 30, z);
-  ok('sin grilla caminable: null', downZone(() => false) === null);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE CAMPAMENTOS PASARON' : `\n${fails} TEST(S) DE CAMPAMENTOS FALLARON`);

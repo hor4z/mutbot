@@ -26,6 +26,42 @@
   // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
   // misma clase que los magos que lideran la esquina).
   C.spinR = ({ 9: 5, 14: 3, 38: 3.5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
+  // Skill de un instante (buff, teleport): se guarda el skill de ataque aparte. Antes cada uno
+  // guardaba "el skill actual" y lo restauraba a los 900 ms; si un buff y un teleport se pisaban,
+  // el segundo guardaba el del primero y Melu quedó "atacando" con Mana Shield (16) sin ganar exp.
+  const TEMP = [6, 16, 18, 48];
+  C.tempSkill = (k) => {
+    if (!TEMP.includes(ai.cfg.skill)) C.baseSkill = ai.cfg.skill;
+    ai.cfg.skill = k; S.selectSkill(k);
+    setTimeout(() => { if (TEMP.includes(ai.cfg.skill) && C.baseSkill != null) ai.cfg.skill = C.baseSkill; }, 900);
+  };
+  C.isMage = () => [9, 10, 14, 38].includes(ai.cfg.skill);
+  // Regla fuerte (usuario: "si aparece un dragón o lo que sea dorado lo matás y recogés las cajas"; y
+  // después: "si se topan con cualquier dorado lo matan igual"): dorado vivo a <= 20 tiles mientras
+  // farmea, primero Golden Dragon (tipo 79) o Dragón Rojo (44), después el más cercano.
+  // Mientras haya uno, la esquina se corre (sin correa, sin campamento) y el agente no cambia de mapa
+  // ni resetea; el objetivo es el dorado. Al morir, 15 s más quieto para que el looter (radio 12)
+  // levante las cajas.
+  C.dragonSeen = C.dragonSeen ?? new Set();
+  C.dragonFirst = C.dragonFirst ?? new Map();
+  C.dragon = () => {
+    const w = W(), pe = w?.playerEntity; if (!pe) return null; const P = pe.transform.pos;
+    let best = null, bd = 21; // los dragones restan 30: van primero aunque haya un dorado chico más cerca
+    for (const e of w.byNetId.values()) {
+      const big = e.npcType === 79 || e.npcType === 44;
+      if (Date.now() - (C.dragonFirst.get(e.netId) ?? Date.now()) > 120000) continue; // 2 min sin matarlo (pared, otro lo tiene): seguir farmeando
+      if (!(big || /^golden /i.test(String(e.objectNameInWorld ?? '').trim())) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 1) <= 0 || !ai.isMonster(e)) continue;
+      const dd = Math.hypot(e.transform.pos.x - P.x, e.transform.pos.z - P.z) - (big ? 30 : 0); if (dd < bd) { bd = dd; best = e; }
+    }
+    if (best && !C.dragonSeen.has(best.netId)) {
+      C.dragonSeen.add(best.netId); C.dragonFirst.set(best.netId, Date.now()); if (C.dragonFirst.size > 200) C.dragonFirst.clear(); const p = best.transform.pos, x = Math.round(p.x), z = Math.round(p.z);
+      ai.L?.(`ESQUINA: ${best.npcType === 44 ? 'Dragón Rojo' : String(best.objectNameInWorld ?? '').trim()} a la vista en (${x},${z}), mapa ${w.mapIndex}: lo ataco`);
+      if (best.npcType === 79) try { const ds = JSON.parse(localStorage.getItem('mubot-dragon-spots') || '{}'); (ds[w.mapIndex] ??= []).push([x, z]); ds[w.mapIndex] = ds[w.mapIndex].slice(-30); localStorage.setItem('mubot-dragon-spots', JSON.stringify(ds)); } catch {}
+      fetch('http://127.0.0.1:8787/api/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: S.playerData.name, map: w.mapIndex, x, y: z, name: String(best.objectNameInWorld ?? '').trim(), id: best.netId, at: Date.now() }) }).catch(() => {});
+    }
+    if (best) C.dragonUntil = Date.now() + 15000; // y 15 s más al morir: quedarse para que el looter levante las cajas
+    return best;
+  };
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
   const hp = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
@@ -34,12 +70,19 @@
 
   {
     // Al recargar se reemplaza el envoltorio (no se apila otro): el original queda en ai.cornerInner.
-    const inner = (ai.cornerInner ??= ai.pickTarget);
+    ai.cornerInner ??= ai.pickTarget;
+    const inner = (w, P, c) => ai.cornerInner(w, P, c); // dinámico: hunter.js puede reemplazar ai.cornerInner al recargarse
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
       // Primero, los monstruos que le pegaron en los últimos 5 s y están a <= 15 tiles (los que atacan de
       // lejos en Arena 4 lo desgastaban mientras él esperaba en el campamento; usuario: "tiene que
       // limpiar todo, estos atacan de distancia").
+      // Modo mago (Evil Spirit / Inferno / Decay / Hellfire pegan en círculo alrededor del mago): no
+      // elegir objetivo, así el agente no camina hacia cada monstruo como un DK (usuario: "farmea como
+      // DK, se mueve mucho y no usa bien el Spirit"). Los tiros los hace C.fast, desde donde está.
+      if (window.__hunt?.on) return inner(w, P, c); // cazando manda el cazador (solo dorados), nada de correa ni campamento
+      if (C?.on && !window.__hunt?.on) { const dg = C.dragon(); if (dg) return dg; }
+      if (C?.on && C.isMage() && !window.__hunt?.on) return null;
       if (C?.on && !window.__hunt?.on) {
         const now = Date.now(); let ag = null, ad = 1e9;
         for (const [id, t] of C.aggro ?? []) { if (now - t > 5000) { C.aggro.delete(id); continue; } const e = w.getByNetId?.(id) ?? [...w.byNetId.values()].find((x) => (x.netId & 0x7fff) === id); if (!e || !alive(e)) continue; const dd = d(e.transform.pos, P); if (dd <= 15 && dd < ad) { ad = dd; ag = e; } }
@@ -75,7 +118,7 @@
         // al DK en la esquina o ganá en el medio").
         const now = Date.now(), cur = C.sides.find((x) => x.name === C.side) ?? C.sides[0];
         if (now - C.sideAt < C.dwellMs) return cur;
-        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity);
+        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && !(window.__corner?.mates ?? []).includes(e.objectNameInWorld));
         const known = Object.values(C.sideStats).map((x) => x.rate).filter((x) => x > 0);
         const best = known.length ? Math.max(...known) : 1;
         const score = (sd) => { const st = C.sideStats[sd.name]; const r = st?.rate > 0 ? st.rate : best * 1.1; return r / (1 + C.rivalPenalty * others.filter((e) => d(e.transform.pos, sd) <= 4).length); };
@@ -87,7 +130,7 @@
       // Con mucha competencia (2+ jugadores a <= 6 tiles), no caminar hacia los monstruos: cuando llega
       // ya los mataron (usuario: "zigzag con mucha competencia no sirve, no llego a pegar"). Quieto en
       // el puesto, pegar solo lo que entra en el giro.
-      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && d(e.transform.pos, P) <= 6).length;
+      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && !(window.__corner?.mates ?? []).includes(e.objectNameInWorld) && d(e.transform.pos, P) <= 6).length;
       if (crowd >= 2) return mons.filter((e) => d(e.transform.pos, P) <= C.spinR + 0.5).sort((a, b) => d(a.transform.pos, P) - d(b.transform.pos, P))[0] ?? null;
       const sideMons = mons.filter((e) => d(e.transform.pos, side) <= C.sideR);
       const local = sideMons.length ? sideMons : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius && d(e.transform.pos, P) <= 4);
@@ -107,6 +150,7 @@
 
   C.timer = setInterval(() => {
     if (!C.on || !ai.on || ai.busy || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on) return;
+    if (C.dragon() || Date.now() < (C.dragonUntil ?? 0)) return;
     const w = W(), pe = w?.playerEntity; if (!pe) return;
     // El warp a Arena 2 pide nivel 100 ("You need to be level 100 in order to warp", probado en nivel
     // 10 a 14) y el reset manda a Lorencia (MoveHome de OpenMU). Hasta 100, la ruta normal.
@@ -118,13 +162,27 @@
     // del pueblo (atlas de Melu: 35 Lich vistos ahí; (132,193) medido 207k/min contra 47k de (149,171),
     // que elegía por estar más cerca). Usuario: "hacés el peor
     // recorrido en Lorencia".
-    if (w.mapIndex === 0 && S.playerData.level < 20 && (ai.camp?.x !== C.lorencia.x || ai.camp?.z !== C.lorencia.z)) {
-      ai.camp = { ...C.lorencia, map: 0, since: Date.now(), lastSeen: Date.now(), known: true };
-      if (!ai.target) { ai.explore = { ...C.lorencia, kind: 'camp' }; ai.moveTo(pe, C.lorencia); }
+    // Salida variada (usuario: "es lo más eficiente, pero agregaría cambio de rutina de salida"): en
+    // cada reset se sortea por dónde baja (directo, apenas por el oeste o por el este del camino) y en
+    // qué punto del grupo de Lich para, a pocos tiles del medido. Cuesta 1-3 s más que la línea recta.
+    if (w.mapIndex === 0 && S.playerData.level < 20 && !C.lorPlan) {
+      const r = (n) => Math.round((Math.random() * 2 - 1) * n);
+      const ok = (q) => w.isWalkable?.(q.x, q.z) !== false;
+      let camp = { x: C.lorencia.x + r(3), z: C.lorencia.z + r(3) }; if (!ok(camp)) camp = { ...C.lorencia };
+      const vias = [null, { x: 130 + r(2), z: 150 + r(4) }, { x: 141 + r(2), z: 165 + r(4) }, null];
+      let via = vias[Math.floor(Math.random() * vias.length)]; if (via && !ok(via)) via = null;
+      C.lorPlan = { camp, via }; ai.L?.(`ESQUINA: salida de Lorencia ${via ? 'por (' + via.x + ',' + via.z + ')' : 'directa'} al Lich (${camp.x},${camp.z})`);
     }
-    if (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0) {
+    if (w.mapIndex !== 0 || S.playerData.level >= 20) C.lorPlan = null;
+    const LP = C.lorPlan;
+    if (LP && (ai.camp?.x !== LP.camp.x || ai.camp?.z !== LP.camp.z)) {
+      ai.camp = { ...LP.camp, map: 0, since: Date.now(), lastSeen: Date.now(), known: true };
+    }
+    if (LP && ai.camp?.map === 0) {
+      if (LP.via && d(pe.transform.pos, LP.via) <= 3) LP.via = null;
+      const goal = LP.via ?? ai.camp;
       if (ai.target && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
-      if (!ai.target && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
+      if (!ai.target && d(pe.transform.pos, goal) > 3 && (pe.playerMoveTo.handled || ai.explore?.x !== goal.x || ai.explore?.z !== goal.z)) { ai.explore = { x: goal.x, z: goal.z, kind: 'camp' }; ai.moveTo(pe, goal); }
     }
     // Devias (nivel 20-100): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
     // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15
@@ -183,7 +241,7 @@
       // Al cruzar 200/300 estando afuera, subir de Arena: se fue a Arena 3 en nivel 2xx y en 305 seguía
       // ahí con 103M/min (Arena 4 rindió hasta 881M).
       const want = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24;
-      if (ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] !== want && want > ai.cfg.spots[0][0]) {
+      if (!(C.yieldAt && nowA - C.yieldAt < 180000) && ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] !== want && want > ai.cfg.spots[0][0]) { // (cediendo a un compañero, no volver a su Arena)
         ai.cfg.spots = C.ROUTE.filter((x) => x[0] === want); ai.spot = want; ai.lastWarp = nowA; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = nowA;
         S.warpCommandRequest(want); L(`nivel ${S.playerData.level}: paso a ${want === 26 ? 'Arena 4' : 'Arena 3'}`); return;
       }
@@ -206,7 +264,7 @@
     if (C.awayUntil && nowA >= C.awayUntil && S.playerData.level >= 360) C.awayUntil = nowA + 60000;
     if (C.awayUntil && nowA >= C.awayUntil) { C.awayUntil = 0; L('vuelvo a mirar la esquina'); }
     if (w.mapIndex === C.map && d(pe.transform.pos, C.home) <= C.radius + 3) {
-      const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && d(e.transform.pos, C.home) <= 15).length;
+      const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && !C.mates.includes(e.objectNameInWorld) && d(e.transform.pos, C.home) <= 15).length;
       const rate = ai.expLog.filter((x) => x.t > nowA - 60000).reduce((a, x) => a + x.added, 0);
       C.inCornerSince ??= nowA;
       const alt = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24; // 24: Arena 2 fuera de la esquina
@@ -272,8 +330,7 @@
     if (d(P, C.home) <= C.radius + 3 && now - C.swellAt > 55000 && !w.castRequest && buffSkill != null) {
       // El agente vuelve a elegir su skill cada 400 ms: se le cambia el suyo un instante para que no
       // pise a Swell Life antes de que el cliente lo tire.
-      C.swellAt = now; const sk = ai.cfg.skill; ai.cfg.skill = buffSkill; S.selectSkill(buffSkill); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
-      setTimeout(() => { if (ai.cfg.skill === buffSkill) ai.cfg.skill = sk; }, 900);
+      C.swellAt = now; C.tempSkill(buffSkill); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
     }
     ai.camp.lastSeen = Date.now();
     // Apariciones: netId nuevo, con la vida llena, cerca de la esquina.
@@ -290,30 +347,39 @@
   // ya (el agente revisa cada 400 ms y el mago de al lado borra la tanda en ~1 s).
   if (window.__corner?.fast) clearInterval(window.__corner.fast);
   C.fast = setInterval(() => {
-    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (C.awayUntil && Date.now() < C.awayUntil)) return;
-    const w = W(), pe = w?.playerEntity; if (!pe || w.mapIndex !== C.map || w.castRequest) return;
-    const P = pe.transform.pos; if (d(P, C.home) > C.radius + C.fill) return;
+    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (!C.isMage() && C.awayUntil && Date.now() < C.awayUntil)) return;
+    if (C.dragon()) return;
+    if (C.isMage() && ai.cfg.castRange !== C.spinR) ai.cfg.castRange = C.spinR; // el caster del agente tampoco apunta más lejos (el cliente caminaba hasta el objetivo)
+    const w = W(), pe = w?.playerEntity; if (!pe || w.castRequest) return;
+    const P = pe.transform.pos;
+    if (!C.isMage() && (w.mapIndex !== C.map || d(P, C.home) > C.radius + C.fill)) return;
+    // Mago: tira desde donde está en cualquier mapa, y mientras haya monstruos cerca del campamento,
+    // el campamento sigue "con monstruos" para el agente (si no, lo daba por vacío y se iba).
+    if (C.isMage() && ai.camp && [...w.byNetId.values()].some((e) => alive(e) && d(e.transform.pos, ai.camp) <= 8)) ai.camp.lastSeen = Date.now();
     let best = null, bn = 0;
     for (const e of w.byNetId.values()) { if (!alive(e) || d(e.transform.pos, P) > C.spinR + 0.5) continue; const n = [...w.byNetId.values()].filter((o) => alive(o) && d(o.transform.pos, e.transform.pos) <= C.spinR).length; if (n > bn) { bn = n; best = e; } }
     if (!best) return;
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false }; C.fastCasts = (C.fastCasts ?? 0) + 1;
   }, 100);
-  // Teleport de viaje (magos con skill 6, Melu): yendo a un destino a > 12 tiles sin pelear, saltar 7
-  // tiles hacia él cada ~1,3 s en vez de caminar (usuario: "Melu es mago, puede llegar más rápido a
-  // los spots usando teleport").
+  // Teleport de viaje (magos con skill 6, Melu): solo para pasar una pared (entrar/salir de corrales).
   if (window.__corner?.tpTimer) clearInterval(window.__corner.tpTimer);
   C.tpTimer = setInterval(() => {
     if (!C.on || !ai.on || ai.busy || ai.looting || ai.target || S.uiState !== 5 || S.sceneLoading || window.__defense?.engaged) return;
     if (!(S.skills ?? []).some((k) => k.number === 6)) return;
     const w = W(), pe = w?.playerEntity, dst = ai.explore; if (!pe || !dst || w.castRequest) return;
-    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 12 || Date.now() - (C.tpAt ?? 0) < 2000) return; // > 12 tiles y cada 2 s (más seguido se veía torpe)
+    if (!C.teleport) return; // usuario 2026-10-11: "el teleport no sirve, quedó parado, no lo uses" (se prende con __corner.teleport = true)
+    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 8 || Date.now() - (C.tpAt ?? 0) < 2000) return;
+    if (w.mapIndex === C.map && d(P, C.home) <= C.radius + 5) return; // en la esquina no (pegada al borde del mapa, "veía" paredes)
+    // Solo para entrar o salir de los corrales (usuario: "si no, es más lento que volar"): teleport
+    // únicamente si en los próximos 7 tiles en línea recta hay una pared; con camino libre, caminar.
+    const blocked = (() => { for (let t = 1; t <= Math.min(7, dd); t++) { const x = Math.round(P.x + (dst.x - P.x) * t / dd), z = Math.round(P.z + (dst.z - P.z) * t / dd); if (w.isWalkable?.(x, z) === false) return true; } return false; })();
+    if (!blocked) return;
     const pd = S.playerData; if ((pd.currentMana ?? 100) < 30) return;
     const k = 7 / dd, x = Math.round(P.x + (dst.x - P.x) * k), z = Math.round(P.z + (dst.z - P.z) * k);
     if (w.isWalkable?.(x, z) === false) return;
     if ([...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, { x, z }) <= 3).length >= 3) return; // no caer en medio de un grupo
-    C.tpAt = Date.now(); const sk = ai.cfg.skill; ai.cfg.skill = 6; S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
-    setTimeout(() => { if (ai.cfg.skill === 6) ai.cfg.skill = sk; }, 900);
+    C.tpAt = Date.now(); C.tempSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
   }, 300);
   // Quién le pega a Horaz: ObjectAnimation (C1 09 18 [atacante] [dir] [anim] [objetivo]) y
   // SkillAnimation (C3 09 19 [skill] [atacante] [objetivo]) con objetivo = este personaje.
@@ -326,6 +392,69 @@
     for (const n of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) __eventBus.on(n, (raw) => { try { const u = bytes(raw); if (u[2] === 0x19 && u.length >= 9 && (((u[7] << 8) | u[8]) & 0x7fff) === me()) mark(((u[5] << 8) | u[6]) & 0x7fff); } catch {} });
     window.__cornerAggroHooked = true;
   }
+  // Personajes propios (2026-10-11, usuario: "nunca puede pasar que luchen los dos por el spot de abajo;
+  // si necesitan pelear ahí, hagan party"). Cada pestaña publica su posición; si los dos están en la
+  // esquina de Arena 2, el primero por orden alfabético invita y el otro acepta. No se cuentan como
+  // rivales entre ellos. Si 60 s no coinciden en la esquina, el que aceptó sale del grupo (la party
+  // reparte la exp: a Horaz le subió el ciclo de ~9 a ~13,6 min).
+  const me = S.playerData?.name;
+  C.mates = window.__cornerMates ?? ({ Horaz: ['Melu'], Melu: ['Horaz'] })[me] ?? [];
+  window.__partyAllow = [...new Set([...(window.__partyAllow ?? []), ...C.mates])];
+  const send = (b) => S.sendToGS(new DataView(Uint8Array.from(b).buffer));
+  if (!window.__cornerPartyHooked) {
+    __eventBus.on('PartyRequest', (raw) => { try {
+      const u = raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw.buffer ?? raw);
+      const id = ((u[3] << 8) | u[4]) & 0x7fff; let from = null; for (const e of W().byNetId.values()) if ((e.netId & 0x7fff) === id) from = e.objectNameInWorld;
+      if ((window.__corner?.mates ?? []).includes(from)) setTimeout(() => send([0xc1, 0x06, 0x41, 0x01, id >> 8, id & 0xff]), 400);
+    } catch {} });
+    __eventBus.on('PartyList', () => { window.__inParty = true; });
+    __eventBus.on('RemovePartyMember', () => { window.__inParty = false; });
+    window.__cornerPartyHooked = true;
+  }
+  if (window.__corner?.mateTimer) clearInterval(window.__corner.mateTimer);
+  C.mateTimer = setInterval(() => {
+    const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || !me) return;
+    const P = pe.transform.pos, now = Date.now();
+    try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(P.x), z: Math.round(P.z), level: S.playerData.level, resets: S.playerData.resets ?? 0, at: now })); } catch {}
+    if (window.__hunt?.on || C.dragon() || ai.busy) return; // cazando, con un dorado a la vista o reseteando no se cede (Melu se fue a Devias en plena invasión)
+    const inCorner = (q) => q && q.map === C.map && d(q, C.home) <= 20;
+    // Prioridad (usuario: "por ningún spot puede luchar Melu con Horaz; Horaz por cantidad de resets
+    // tiene prioridad"): el de menos resets cede. Si el otro está en su mapa a <= 20 tiles, se va 3 min
+    // al mapa más alto que le dé el nivel y donde el otro no esté.
+    for (const m of C.mates) {
+      let q = null; try { q = JSON.parse(localStorage.getItem(`mubot:pos:${m}`) || 'null'); } catch {}
+      if (!q || now - q.at > 10000 || window.__follow?.timers?.length) continue;
+      const mineR = S.playerData.resets ?? 0, theirs = q.resets ?? 0;
+      const iYield = theirs > mineR || (theirs === mineR && me > m);
+      if (!iYield || q.map !== w.mapIndex || d(q, P) > 20 || ai.busy || (C.yieldAt && now - C.yieldAt < 15000)) continue;
+      const lv = S.playerData.level, opts = [[26, 85, 300], [25, 84, 200], [24, 83, 100], [7, 2, 20], [6, 2, 20], [2, 0, 0]];
+      // Solo mapas de su tramo (requisito >= 40% de su nivel): a las 3:21 Melu en 198 cedió Arena 2 y la
+      // mandó a Devias 4 (nivel 20) con ~1M/min. Sin mapa de su tramo: mismo mapa, el mejor spot medido
+      // a >= 30 tiles del otro.
+      let to = opts.find(([, mp, req]) => lv >= req && req >= lv * 0.4 && mp !== q.map);
+      // Los dos en Devias (recién reseteados): la otra entrada, lejos (Devias 3 si el otro está en la
+      // llegada de Devias 4, y al revés). Antes buscaba un spot "lejano" del mismo mapa y se perdía.
+      if (!to && w.mapIndex === 2 && lv >= 20) to = d(q, { x: 70, z: 181 }) <= 30 ? [6, 2, 20] : [7, 2, 20];
+      if (!to) {
+        const far = (ai.campHist?.[w.mapIndex] ?? []).filter((k) => !k.seed && k.rate > 0 && d(k, q) >= 30).sort((a, b) => b.rate - a.rate)[0];
+        if (!far) continue;
+        C.yieldAt = now; C.awayUntil = now + 180000; C.inCornerSince = null;
+        ai.camp = { x: far.x, z: far.z, map: w.mapIndex, since: now, lastSeen: now, known: true }; ai.target = null; w.attackTarget = null; ai.explore = { x: far.x, z: far.z, kind: 'camp' }; ai.moveTo(pe, far);
+        L(`${m} (${theirs} resets) está acá: le dejo la zona, voy a (${far.x},${far.z}) ~${Math.round(far.rate / 1e6)}M/min`);
+        return;
+      }
+      C.yieldAt = now; C.awayUntil = now + 180000; C.inCornerSince = null;
+      ai.cfg.spots = [[to[0], `cedo a ${m}`, 0]]; ai.spot = to[0]; ai.lastWarp = now; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = now;
+      S.warpCommandRequest(to[0]); L(`${m} (${theirs} resets) está acá: le dejo el spot, voy al warp ${to[0]}`);
+      return;
+    }
+    // Sin party automática (usuario 2026-10-11: "Melu ya es capaz de resetear sola; quitemos eso, no
+    // tiene sentido"): cada uno farmea por su cuenta y el de menos resets cede el spot (arriba). Si
+    // quedó una party armada de antes, el segundo en orden alfabético sale.
+    if (window.__inParty && C.mates.length && me > C.mates[0] && !window.__follow?.timers?.length && now - (C.leftAt ?? 0) > 30000) {
+      C.leftAt = now; window.__inParty = false; send([0xc1, 0x04, 0x43, 0x01]); L('sin party automática: salgo de la party');
+    }
+  }, 1000);
   C.report = (min = 10) => {
     const since = Date.now() - min * 60000, sp = C.spawns.filter((s) => s.t >= since);
     const cells = {}; for (const s of sp) { const k = `${Math.round(s.x / 3) * 3},${Math.round(s.z / 3) * 3}`; cells[k] = (cells[k] ?? 0) + 1; }

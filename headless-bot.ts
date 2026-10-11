@@ -1,97 +1,58 @@
 /**
- * Bot headless de MU — autonomous farming + progression, SIN GUI.
+ * Bot de MU sin navegador: hace progresar a un personaje solo (pelea, sube nivel, reparte puntos,
+ * resetea en 400, levanta cajas) hablando el protocolo real del cliente 0.97d, a ritmo humano.
+ * Lo normal es lanzarlo desde la estación (`bun run estacion`), que le pasa todo esto.
  *
- * Juega usando el protocolo real del cliente (mismos packets y cifrado que
- * src/store.ts), pero sin interfaz ni eventos de mouse/teclado. Corre un
- * personaje que progresa solo: pelea, sube exp y stats, recoge loot, vende la
- * basura y repone pociones, siempre a ritmo humano.
+ * Solo contra infraestructura propia o con permiso (--allow-remote para hosts no locales).
  *
- * Solo para TU propio OpenMU de prueba, con una cuenta de prueba.
- *
- *   bun run headless-bot.ts [opciones]
+ *   bun run headless-bot.ts [opciones]      (credenciales en .env: MUBOT_USER/PASS/CHAR)
  *
  * Conexión:
- *   --proxy ws://127.0.0.1:3000        proxy WebSocket (WS -> TCP)
+ *   --proxy ws://127.0.0.1:3000          proxy WebSocket (WS -> TCP)
  *   --cs-host 127.0.0.1 --cs-port 44405  connect server
- *   --user test1 --pass test1 --char test1Dk
- *   --allow-remote       permite apuntar a hosts no locales
+ *   --user u --pass p --char c           (mejor por .env)
+ *   --allow-remote                       permite apuntar a hosts no locales
+ *   --exit-if-in-use                     si la cuenta ya está conectada al entrar, sale con código 3
  *
- * Loop autónomo (juega solo, sin GUI, sin flood):
- *   --auto-seconds 600  cuánto tiempo corre el loop autónomo (0 = sin límite:
- *                       farmea y encadena resets indefinidamente, reconectando
- *                       con backoff si se corta la conexión)
- *   --reset-level 400   nivel al que hace /reset (default 400)
- *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: el del agente
- *                       web, planStats: energía hasta fuerza − 2000, después
- *                       mitad/mitad, 5% vitalidad)
- *   --max-stat 300      tope por atributo (default 10000 = sin tope)
- *   --heal-at 60        usa potion cuando HP% <= este valor
- *   --skills 41,42      números de skill de ataque, en orden de preferencia
- *                       (default: los conocidos de DEFAULT_ATTACK_SKILLS)
+ * Farmeo:
+ *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea, resetea y reconecta con backoff)
+ *   --reset-level 400    nivel del /reset
+ *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: planStats)
+ *   --max-stat 300       tope por atributo con --build
+ *   --stat-batch 200     puntos mínimos para frenar a repartir
+ *   --heal-at 60         usa poción con HP% <= esto
+ *   --skills 41,42       skills de ataque, en orden de preferencia
+ *   --spots 2,6,24       limita la ruta a esos warps
+ *   --explore-dir 1      primera dirección a explorar desde el pueblo en mapas sin salida conocida
+ *   --learn-file p.json  dónde guarda lo aprendido (default ~/.mubot/learning.json)
  *
- * Economía (ver AGENTS.md para el detalle del flujo):
- *   --merchant 500,510  Ids de NPC merchant conocidos. Si no se pasan, el bot
- *                       los descubre probando los NPCs que ve en scope.
- *   --buy-slot 12,13    índices de pociones DENTRO de la lista del merchant.
- *                       El server valida el índice; si está mal contesta
- *                       NpcItemBuyFailed y no cobra nada.
- *   --warp 26           antes de arrancar, viaja con el menú de warp (índice de
- *                       la lista de movimiento del cliente; valida nivel y cobra zen)
- *   --explore-dir 1     en mapas sin salida conocida, primera dirección a
- *                       explorar desde el pueblo (0..7, 1=norte; ver explore.ts)
- *   --move dungeon      antes de arrancar, manda "/move <mapa>" por chat
- *                       (warp del server: valida nivel y cobra zen)
- *   --spots 2,5,1       limita a qué warps de la ruta puede ir el bot (default:
- *                       toda la ruta, ver WARP_SPOTS)
- *   --free-route        en vez de la ruta fija por tramo (chooseFixedRoute),
- *                       la regla vieja que prueba mapas por exp/min (chooseRouteSpot)
- *
- * Aprendizaje (ver AGENTS.md, "Aprendizaje"):
- *   --learn-file p.json  dónde guarda exp/min por spot, exp/segundos por tipo
- *                        de monstruo y spots calientes, por personaje
- *                        (default ~/.mubot/learning.json)
- *   --no-learn           no mide ni aprende: vuelve a la regla fija
- *                        (spot de mayor nivel requerido)
- *
- * Explorador / atlas (ver AGENTS.md, "Explorador (atlas)"):
- *   --atlas              recorre mapas enteros SIN pelear y anota qué aparece
- *                        dónde (~/.mubot/atlas.json); compra pociones antes
- *   --atlas-maps 0,3,2   índices de mapa (default: Lorencia, Noria, Devias,
- *                        Dungeon, Lost Tower, Atlans, Tarkan, según el nivel)
- *   --atlas-minutes-per-map 12  tope de tiempo por mapa
- *
- * Control / UI:
- *   --decision-log r.jsonl  appendea cada decisión como JSONL (una por línea)
- *                           para que una UI pueda tail-earla.
- *   --ws-port 8787          panel en http://127.0.0.1:8787/panel (ver
- *                           ws-server.ts y AGENTS.md, "Panel externo"): estado
- *                           cada 1 s, decisiones y órdenes de lista cerrada.
+ * Panel:
+ *   --ws-port 8791       panel en http://127.0.0.1:<puerto>/panel (ws-server.ts)
+ *   --decision-log r.jsonl  diario de acciones en JSONL
  */
 import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  SpotMeter, chooseRouteSpot, chooseFixedRoute, routeScores, routeTier, aggregate, formatSpotTable, loadLearning, saveLearningChar, activeDryExclusions,
+  LEARN, chooseFixedRoute, routeTier, loadLearning, saveLearningChar, activeDryExclusions,
   CROWD_FALLBACK,
-  type Spot, type SpotSample, type CharLearning,
+  type Spot, type CharLearning,
 } from './learning';
 import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './explore';
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
 import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
-import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
+import { CORNER, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { isSafeZone } from './terrain';
+import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
 import {
-  EVENT_KEYS, GoldReporter, HUNT_MAPS, HuntExplorer, SCOUT_GOLD_URL, SCOUT_MIN_ALIVE, SCOUT_START_ALIVE, buildOpeningStateRequest, chooseHuntMap, countTickets,
-  goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout, toPanelCycle,
+  EVENT_KEYS, GOLD_URL, GoldReporter, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets,
+  goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt, toPanelCycle,
   validateWarp, type GoldGone, type GoldSighting, type HuntMap,
 } from './panel-logic';
 import type { BotMode, EventKey, EventTimer, Invasion, PanelCommand, PanelState } from './panel-protocol';
-import {
-  ATLAS_CRITICAL_PCT, ATLAS_FILE, ATLAS_FLEE, ATLAS_FLEE_CAUTIOUS, ATLAS_MINUTES_PER_MAP, ATLAS_POTION_TARGET, ATLAS_REST_MS, ATLAS_SAFE_MAP,
-  ATLAS_WARPS, Atlas, AtlasSaver, atlasMapDone, atlasMapList, loadAtlas, nextAtlasIndex, parseAtlasMaps, saveAtlas, type AtlasMap,
-} from './atlas';
 import {
   SimpleModulusEncryptor,
   Xor32Encryptor,
@@ -110,12 +71,7 @@ import {
   RequestCharacterListPacket,
   SelectCharacterPacket,
   ConsumeItemRequest075Packet,
-  IncreaseCharacterStatPointPacket,
   ClientReadyAfterMapChangePacket,
-  TalkToNpcRequestPacket,
-  SellItemToNpcRequestPacket,
-  BuyItemFromNpcRequestPacket,
-  CloseNpcRequestPacket,
   PickupItemRequest075Packet,
 } from './packets';
 import {
@@ -127,25 +83,15 @@ import {
   GameServerEnteredPacket,
   ObjectWalked075Packet,
   ObjectMovedPacket,
-  SkillListUpdatePacket,
   MapChanged075Packet,
   CurrentHealthAndShieldPacket,
   CurrentManaAndAbilityPacket,
   CharacterLevelUpdatePacket,
-  ItemsDroppedPacket,
   MoneyDropped075Packet,
-  ItemAddedToInventoryPacket,
-  NpcItemSellResultPacket,
   InventoryMoneyUpdatePacket,
-  NpcItemBuyFailedPacket,
-  NpcWindowResponsePacket,
-  NpcWindowResponseNpcWindowEnum,
-  MasterStatsUpdatePacket,
-  MasterCharacterLevelUpdatePacket,
-  MasterSkillLevelUpdatePacket,
 } from './packets';
 import monstersData from './data/monsters.json';
-import itemsData from './data/items.json';
+import skillsData from './data/skills.json';
 
 // TypeNumber reales de monstruos (del propio dataset del juego), para no confundir
 // un NPC amistoso del pueblo (vendedor, etc.) con algo atacable.
@@ -173,10 +119,13 @@ type MonsterRow = {
 //
 // Los dorados de la invasión (Golden Dragon Move 88, Golden Titan 77, ...) se
 // pasan del tope de Move: sin sumarlos aparte el bot no los veía nunca.
+// Sin tope de Move (2026-10-11): con Move <= 50 el bot quedaba ciego en Arena 2/3/4 (Deathvim Knight 220,
+// Phantom Knight 270, Gaint Drakan 305) y en casi todo lo de nivel alto. Los guardias del pueblo ya los
+// excluye isMonsterType (rango 200-299).
 const GOLDEN_TYPES = goldenTypes(monstersData as MonsterRow[]);
 const MONSTER_TYPE_NUMBERS = new Set([
   ...(monstersData as MonsterRow[])
-    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.Move <= 50 && m.HP > 0)
+    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.HP > 0)
     .map((m) => m.Numb),
   ...GOLDEN_TYPES,
 ]);
@@ -205,6 +154,18 @@ for (let i = 0; i < argv.length; i++) {
       i++;
     } else args.set(argv[i], 'true');
   }
+}
+
+// Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
+const KNOWN_FLAGS = new Set([
+  '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
+  '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
+  '--explore-dir', '--learn-file', '--ws-port', '--decision-log',
+]);
+const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
+if (unknownFlags.length) {
+  console.error(`Flag desconocido: ${unknownFlags.join(', ')}. Los válidos: ${[...KNOWN_FLAGS].join(' ')}`);
+  process.exit(2);
 }
 
 const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
@@ -280,7 +241,6 @@ type StatName = 'str' | 'agi' | 'vit' | 'ene';
 // En MU el orden de los atributos es fijo: strength, agility, vitality, energy.
 // IncreaseCharacterStatPoint.StatType usa exactamente esos mismos índices.
 const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
-const STAT_INDEX: Record<StatName, number> = { str: 0, agi: 1, vit: 2, ene: 3 };
 
 type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean };
 type SkillInfo = { index: number; number: number; level: number };
@@ -301,16 +261,10 @@ const world = {
   npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
   // Otros jugadores en scope (para no competirles el objetivo, ver farming.ts).
   players: new Map<number, { x: number; y: number }>(),
-  // NPC de pueblo/servicio (TypeNumber 200-299) en scope: candidatos para
-  // descubrir merchants. Antes no se guardaban en ningún lado y
-  // discoverMerchant() sondeaba monstruos.
+  resets: null as number | null, // CharacterResets del server (packet propio)
+  grandResets: 0,
+  // NPC de pueblo/servicio (TypeNumber 200-299) en scope: no son monstruos.
   townNpcs: new Map<number, ScopedNpc>(),
-  // Master skill tree: solo tracking pasivo por ahora (ver AGENTS.md,
-  // "Pendiente"). El perfil del server es V097D (pre-season); no sabemos si
-  // manda estos packets hasta verlo en un login real.
-  masterLevel: 0,
-  masterLevelUpPoints: 0,
-  masterSeen: false,
   // Clase cruda del CharacterList (ver parseCharacterList097); null = no se sabe.
   classId: null as number | null,
 };
@@ -318,22 +272,6 @@ const world = {
 // Servidor de telemetría opcional (--ws-port). Solo lectura: ver ws-server.ts.
 let statusServer: StatusServer | undefined;
 
-function snapshotWorld() {
-  return {
-    x: world.x,
-    y: world.y,
-    map: world.map,
-    hp: world.hp,
-    maxHp: world.maxHp,
-    mana: world.mana,
-    maxMana: world.maxMana,
-    level: world.level,
-    levelUpPoints: world.levelUpPoints,
-    stats: world.stats,
-    inventoryCount: world.inventory.size,
-    inventory: [...world.inventory.values()],
-  };
-}
 
 // Las pociones del set clásico están en el Group 14 (curación 1-3, mana 4-6,
 // SD 35-37) y el Group 13 (Potion of Illusion). Salen de data/items.json.
@@ -341,9 +279,6 @@ function snapshotWorld() {
 // la mejor: se compra barata, se stacks (X=1 Y=1) y alcanza para todo el farm.
 const POTION_GROUP = 14;
 const HEAL_POTION_NUMS = new Set([1, 2, 3]); // small / normal / large healing
-const SELL_INTERVAL_MS = 600;   // respiro entre ventas para no parecer un burst
-// Con esto lleno (de 40 slots) vamos a vender antes de no poder recoger más.
-const SELL_AT_PRESSURE = 0.6;
 
 // Skills de ataque configurables (números de skill, NO índices de lista).
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.
@@ -353,7 +288,7 @@ const SELL_AT_PRESSURE = 0.6;
 // Fire Ball (4), Lightning (3), Meteorite (2), Inferno (14 — mismo número que un DK, se usa el
 // que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
 // 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
-const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 48, 50, 51, 55, 9, 7, 17, 4, 3, 2];
+const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2];
 
 // ---------------------------------------------------------------------------
 // Métricas
@@ -454,21 +389,6 @@ function login(username: string, password: string) {
   Xor3Byte(usernameBytes);
   Xor3Byte(passwordBytes);
 
-  if (process.env.MUBOT_LONGLOGIN) {
-    // Experimento: OpenMU trata como LoginLongPassword todo packet >= 42 bytes
-    // (LogInHandlerPlugIn.cs), y el corto de 50 bytes cae ahí con otro layout.
-    const long = new Uint8Array(60);
-    long.set([0xc3, 60, 0xf1, 0x01], 0);
-    const lp = stringToBytes(password, 20);
-    Xor3Byte(lp);
-    long.set(usernameBytes, 4);
-    long.set(lp, 14);
-    new DataView(long.buffer).setUint32(34, Math.floor(performance.now()) >>> 0, false);
-    long.set(CLIENT_VERSION, 38);
-    long.set(stringToBytes(CLIENT_SERIAL, 16), 43);
-    sendToGS(new DataView(long.buffer));
-    return;
-  }
   const p = LoginShortPasswordPacket.createPacket();
   // Los setters generados están tipados como number[] pero reciben Uint8Array.
   p.setUsername(usernameBytes as unknown as number[], usernameBytes.length);
@@ -543,63 +463,8 @@ function parseCharacterInformation097(raw: any) {
 }
 
 // ---------------------------------------------------------------------------
-// Parsers legacy de items y skills (layouts 0.97d, no los del XML)
+// Parsers de skills (layouts 0.97d, no los del XML). Los de ítems (5 bytes) están en protocol097.ts.
 // ---------------------------------------------------------------------------
-// El item serializado del server son 12 bytes. Mirando SerializeItem /
-// DeserializeItem del cliente MU JS (src/common/itemSerializer.ts) (que son el par que usa
-// OpenMU para estos packets): byte[0] = num, byte[5] nibble alto = group.
-const ITEM_DATA_LENGTH = 12;
-
-// Nivel del ítem (+N): bits 3-6 del byte 1 (LevelMask 0x78 del itemSerializer).
-function parseItemData097(itemData: Uint8Array): { group: number; num: number; level: number; excellent: boolean } {
-  return {
-    num: itemData[0],
-    group: (itemData[5] & 0xf0) >> 4,
-    level: (itemData[1] & 0x78) >> 3,
-    excellent: isExcellentItemData(itemData),
-  };
-}
-
-// CharacterInventory (F3/10, header C4): count en byte 5, luego StoredItem[].
-// StoredItem = slot (1 byte) + ItemData de 12 bytes.
-function parseInventory097(raw: any): ItemSlot[] {
-  const bytes = toBytes(raw);
-  const count = bytes[5];
-  const out: ItemSlot[] = [];
-  for (let i = 0; i < count; i++) {
-    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
-    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
-    const { group, num, level, excellent } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
-    out.push({ slot: bytes[base], group, num, level, excellent });
-  }
-  return out;
-}
-
-// StoreItemList (C2/0x31): mismo layout que CharacterInventory (count en byte
-// 5, items desde byte 6, stride 1+12), pero el getItems() generado tiene el
-// mismo bug de stride que ya rompía CharacterInventory (calcula el ItemData
-// con longitud 0) — lo parseamos a mano, igual que el inventario.
-type ShopItem = { shopSlot: number; group: number; num: number };
-function parseStoreItemList097(raw: any): ShopItem[] {
-  const bytes = toBytes(raw);
-  const count = bytes[5];
-  const out: ShopItem[] = [];
-  for (let i = 0; i < count; i++) {
-    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
-    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
-    const { group, num } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
-    out.push({ shopSlot: bytes[base], group, num });
-  }
-  return out;
-}
-
-// ItemAddedToInventory (0x22, header C3): slot en byte 3, ItemData desde byte 4.
-function parseItemAdded097(raw: any): ItemSlot | null {
-  const bytes = toBytes(raw);
-  if (bytes.length < 4 + ITEM_DATA_LENGTH) return null;
-  const { group, num, level, excellent } = parseItemData097(bytes.subarray(4, 4 + ITEM_DATA_LENGTH));
-  return { slot: bytes[3], group, num, level, excellent };
-}
 
 // SkillListUpdate (F3/11): count en byte 4 (0xFE = agregó una, 0xFF = quitó una).
   // Los entries empiezan en el offset 6 (el byte 5 es reservado en 0.97d) y son
@@ -671,37 +536,19 @@ function trackWorld() {
   for (const ev of ['SkillListUpdate', 'SkillAdded', 'SkillRemoved']) EventBus.on(ev, onSkills);
 
   EventBus.on('CharacterInventory', (raw: any) => {
+    const items = parseInventory(toBytes(raw));
+    if (!items) {
+      log(`AVISO: inventario con layout inesperado (${toBytes(raw).length} bytes), lo ignoro.`);
+      return;
+    }
     world.inventory.clear();
-    for (const it of parseInventory097(raw)) world.inventory.set(it.slot, it);
+    for (const it of items) world.inventory.set(it.slot, it);
     log(`Inventario: ${world.inventory.size} item(s).`);
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {
-    const it = parseItemAdded097(raw);
+    const it = parseItemAdded(toBytes(raw));
     if (it) world.inventory.set(it.slot, it);
-  });
-
-  // Master skill tree: SOLO escucha, no manda nada (ver AGENTS.md, "Pendiente").
-  // Si el server no manda nunca estos tres eventos, confirma que el perfil
-  // V097D no tiene el sistema master activo para este personaje.
-  EventBus.on('MasterStatsUpdate', (raw: any) => {
-    const p = new MasterStatsUpdatePacket(raw);
-    world.masterSeen = true;
-    world.masterLevel = p.MasterLevel;
-    world.masterLevelUpPoints = p.MasterLevelUpPoints;
-    log(`Master stats: nivel ${p.MasterLevel}, ${p.MasterLevelUpPoints} punto(s) disponibles.`);
-  });
-  EventBus.on('MasterCharacterLevelUpdate', (raw: any) => {
-    const p = new MasterCharacterLevelUpdatePacket(raw);
-    world.masterSeen = true;
-    world.masterLevel = p.MasterLevel;
-    world.masterLevelUpPoints = p.CurrentMasterPoints;
-    log(`Master level up: nivel ${p.MasterLevel}, ${p.CurrentMasterPoints} punto(s) disponibles.`);
-  });
-  EventBus.on('MasterSkillLevelUpdate', (raw: any) => {
-    const p = new MasterSkillLevelUpdatePacket(raw);
-    world.masterSeen = true;
-    log(`MasterSkillLevelUpdate: success=${p.Success} índice=${p.MasterSkillIndex} nivel=${p.Level} puntos restantes=${p.MasterLevelUpPoints}`);
   });
 
   // El server re-sincroniza nuestra posición acá (rubber-band) cuando rechaza
@@ -754,6 +601,7 @@ function trackWorld() {
   // verificarlo. Conservador: solo actualiza NPCs ya trackeados, nunca al
   // jugador, hasta confirmar el campo/formato con más cuidado.
   EventBus.on('ObjectMoved', (raw: any) => {
+    if (!isObjectMovedPacket(toBytes(raw))) return; // 0.97d: con 10 bytes es el daño de un golpe
     const p = new ObjectMovedPacket(raw);
     const id = p.ObjectId & 0x7fff;
     if (id === playerId) return;
@@ -1085,74 +933,19 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number 
 }
 
 // ---------------------------------------------------------------------------
-// Capa de decisión — el punto de control para una UI futura.
-//
-// El bot NO ejecuta nada sin pasar por acá. Cada acción de alto nivel se
-// propone como una Decision y espera el veredicto del handler. Hoy el handler
-// por defecto aprueba todo, pero cambiarlo es lo único que hay que hacer para
-// que una UI decida: `setDecisionHandler()`.
-//
-// Cada decisión también se escribe a un JSONL, así una UI puede tail-ear el
-// archivo y ver la actividad en vivo sin tocar el bot.
+// Diario: cada acción de alto nivel (viaje, reset, reparto, loot, órdenes del panel, cambios de
+// modo) se anota al panel (`decision`/`history`) y, con --decision-log, a un JSONL.
 // ---------------------------------------------------------------------------
-type DecisionKind =
-  | 'pickup'      // recoger un item del piso
-  | 'sell'        // vender un item a un merchant
-  | 'buy'         // comprar (pociones)
-  | 'reset'       // /reset al llegar al nivel (irreversible)
-  | 'stat'        // subir un punto de atributo
-  | 'skill'       // usar una skill
-  | 'travel'      // viajar a otro mapa
-  | 'engage'      // pelear a un objetivo
-  // Solo registro (no piden veredicto, ver logDecision): órdenes del panel y
-  // cambios de modo. Una pausa no puede quedar rechazada por el handler.
-  | 'command'     // orden recibida del panel (panel-protocol.ts)
-  | 'mode';       // cambio de modo (farm/hunt/paused/...)
-
-type Decision = {
-  kind: DecisionKind;
-  what: string;                  // descripción legible
-  detail: Record<string, unknown>;// datos crudos para la UI
-  autoOk: boolean;               // si el bot puede seguir solo con esto
-};
-
-type Verdict = { allow: boolean; reason?: string };
+type JournalKind = 'pickup' | 'reset' | 'stat' | 'travel' | 'command' | 'mode';
 
 const decisionLogPath = args.get('--decision-log') ?? '';
-let decisionHandler: (d: Decision) => Verdict | Promise<Verdict> = () => ({ allow: true });
-let decisionSeq = 0;
+let journalSeq = 0;
 
-export function setDecisionHandler(h: (d: Decision) => Verdict | Promise<Verdict>) {
-  decisionHandler = h;
-}
-
-// Propone una decisión y devuelve si se puede actuar. Nunca lanza: si el
-// handler falla, la decisión se rechaza (fail-safe: no gastamos recursos sin
-// permiso).
-// Escribe una decisión al JSONL y al WebSocket, sin pedir veredicto.
-async function logDecision(full: Decision): Promise<void> {
-  const entry = { seq: ++decisionSeq, at: new Date().toISOString(), ...full };
-  if (decisionLogPath) {
-    // appendFile (no Bun.write: ese sobrescribe el archivo entero en cada llamada,
-    // así que en una corrida larga solo quedaba la última decisión). Si el archivo
-    // falla, no debe frenar el juego.
-    await appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
-  }
+function journal(kind: JournalKind, what: string, detail: Record<string, unknown> = {}) {
+  const entry = { seq: ++journalSeq, at: new Date().toISOString(), kind, what, detail, autoOk: true };
+  // appendFile (no Bun.write, que sobrescribe); si el archivo falla no frena el juego.
+  if (decisionLogPath) void appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
   statusServer?.broadcastDecision(entry);
-}
-
-async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promise<boolean> {
-  const full: Decision = { autoOk: true, ...d };
-  await logDecision(full);
-  let verdict: Verdict;
-  try {
-    verdict = await decisionHandler(full);
-  } catch (e) {
-    log(`Handler de decisión falló, rechazo por seguridad: ${(e as Error).message}`);
-    return false;
-  }
-  if (!verdict.allow) log(`Acción rechazada (${full.kind}: ${full.what}): ${verdict.reason ?? 'sin motivo'}`);
-  return verdict.allow;
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +955,8 @@ async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promi
 // ---------------------------------------------------------------------------
 const WALK_PACE_MS = 380;
 const ATTACK_PACE_MS = 500;
+const TARGET_NO_KILL_MS = 15_000;
+const UNREACHABLE_MS = 60_000;
 const SKILL_PACE_MS = 900;
 // El cliente web tiene cooldown de chat; 2.5s entre comandos queda cómodo.
 const CHAT_PACE_MS = 2500;
@@ -1208,15 +1003,29 @@ function step(dir: number) {
 // proporcional a BUILD_WEIGHTS. Es como lo hace el usuario: confirmado que el
 // server acepta str/ene/vit así (ver AGENTS.md, "Reset y stats").
 const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit', ene: 'ene' };
+// Si el server no los toma (stat en el tope: Melu con fuerza y energía en 65535), los puntos vuelven a
+// aparecer en el próximo CharacterLevelUpdate y el bot repetía los /add cada pocos segundos sin pelear
+// (2026-10-11: +13 niveles en 15 min). Si después de un reparto los puntos no bajaron, 15 min sin repartir.
+let statTry: { points: number; at: number } | null = null;
+let statOffUntil = 0;
 async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  if (!force && Date.now() < statOffUntil) return 0;
+  if (statTry && Date.now() - statTry.at > 3000 && points >= statTry.points) {
+    statTry = null; statOffUntil = Date.now() + 15 * 60_000;
+    log(`Stats: el server no tomó el reparto (siguen ${points} puntos libres; ¿stats en el tope?): no reparto por 15 min.`);
+    return 0;
+  }
   let plan: Array<[StatName, number]>;
   if (!BUILD_ARG) {
     // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
     // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
     const p = planStats(points, world.stats.str, world.stats.ene);
-    plan = [['ene', p.ene], ['str', p.str], ['vit', p.vit]];
+    plan = ([['ene', p.ene], ['str', p.str], ['vit', p.vit]] as Array<[StatName, number]>).filter(([name]) => world.stats[name] < 65535); // 65535 = tope del server (u16)
+    // Lo que iba a un stat en el tope va al primero que quede (si no, cada vuelta repartía solo el 5% de vit).
+    if (!plan.length) { const v = (['vit', 'agi'] as StatName[]).find((k) => world.stats[k] < 65535); if (!v) return 0; plan = [[v, 0]]; }
+    plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
   } else {
     const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
     const total = active.reduce((acc, [, w]) => acc + w, 0);
@@ -1224,13 +1033,8 @@ async function investStatPoints(force = false): Promise<number> {
     plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
     plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
   }
-  const ok = await decide({
-    kind: 'stat',
-    what: plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '),
-    detail: { points, plan: Object.fromEntries(plan) },
-    autoOk: false,
-  });
-  if (!ok) return 0;
+  journal('stat', plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '), { points, plan: Object.fromEntries(plan) });
+  statTry = { points, at: Date.now() };
   let spent = 0;
   for (const [name, n] of plan) {
     if (n <= 0) continue;
@@ -1294,7 +1098,25 @@ function checkSurvival(): boolean {
 // Skills de área (AreaSkill 0x1E). El resto se manda como TargetedSkill.
 // 41 (Twisting Slash) verificado en una captura del cliente real; 42 (Rageful
 // Blow) es área en OpenMU, sin verificar todavía.
-const AREA_SKILLS = new Set([41, 42]);
+// Tabla de skills del cliente web (data/skills.json, sacada del bundle de mu.mormon.garden): tipo
+// (DirectHit / AreaSkillAutomaticHits / AreaSkillExplicitTarget / Buff / Other) y distancia de cast.
+// Sin esto Evil Spirit (9) e Inferno (14) iban como TargetedSkill y el server no hacía nada: Melu sin
+// navegador caminaba entre monstruos sin ganar exp (2026-10-11).
+type SkillRow = { num: number; name: string; type: string; distance: number; damage: number; mana: number };
+const SKILL_TABLE = new Map<number, SkillRow>((skillsData as SkillRow[]).map((r) => [r.num, r]));
+const AREA_SKILLS = new Set([41, 42, ...[...SKILL_TABLE.values()].filter((r) => r.type.startsWith('AreaSkill')).map((r) => r.num)]);
+// Mago (DW/SM): Evil Spirit primero (pedido del usuario), después Decay, Inferno, Hellfire...
+const MAGE_ATTACK_SKILLS = [9, 38, 14, 10, 12, 13, 5, 17, 11, 7, 4, 3, 2, 1];
+const isMage = () => world.skills.has(9) || world.skills.has(14) || world.skills.has(38);
+// Distancia desde la que se tira cada skill. Los de área de mago se tiran sin acercarse al cuerpo a
+// cuerpo (el browser mide ~5 tiles útiles para Evil Spirit); los de DK, pegado.
+function castReach(num: number): number {
+  const r = SKILL_TABLE.get(num);
+  if (!r) return 1;
+  if (num === 9) return 5;
+  if ([41, 42, 43, 19].includes(num)) return 1;
+  return Math.max(1, Math.min(r.distance, 5));
+}
 // Con menos maná que esto no se tira el skill "en el camino" (agente web skillMinMp).
 const SKILL_MIN_MANA = 0.15;
 
@@ -1302,7 +1124,7 @@ function pickAttackSkill(): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
   // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
   // así que no se filtra por nivel.
-  for (const num of ATTACK_SKILL_POOL) {
+  for (const num of ATTACK_SKILLS.length ? ATTACK_SKILLS : isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
     const known = world.skills.get(num);
     if (known) return known;
   }
@@ -1338,23 +1160,14 @@ const drops = new Map<number, ScopedDrop>();
 // MoneyDropped075 (14 bytes fijos, ver MoneyDropped075Packet).
 function parseDropsPacket(raw: any): ScopedDrop[] {
   const bytes = toBytes(raw);
-  const itemCount = bytes[4];
-  const expectedItemsLen = 5 + itemCount * 16;
-  if (itemCount > 0 && bytes.length === expectedItemsLen) {
-    const p = new ItemsDroppedPacket(raw);
-    return p.getItems(itemCount).map((it) => {
-      // El group/num salen del ItemData de 12 bytes (mismo layout que
-      // ItemAddedToInventory): num = byte 0, group = nibble alto del byte 5.
-      const d = it.ItemData;
-      const excellent = isExcellentItemData(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
-      return { id: it.Id & 0x7fff, x: it.PositionX, y: it.PositionY, group: (d.getUint8(5) & 0xf0) >> 4, num: d.getUint8(0), excellent };
-    });
-  }
+  // Ítems en 5 bytes (o 12, los de zen): parseItemsDropped de protocol097.ts.
+  const items = parseItemsDropped(bytes);
+  if (items) return items.map((it) => ({ ...it, isMoney: it.group === 14 && it.num === 15 }));
   if (bytes.length === 14) {
     const p = new MoneyDropped075Packet(raw);
     return [{ id: p.Id & 0x7fff, x: p.PositionX, y: p.PositionY, group: p.MoneyGroup, num: p.MoneyNumber, isMoney: true, amount: p.Amount }];
   }
-  log(`AVISO: packet de drop con layout inesperado (${bytes.length} bytes, ItemCount=${itemCount}), lo ignoro.`);
+  log(`AVISO: packet de drop con layout inesperado (${bytes.length} bytes, ItemCount=${bytes[4]}), lo ignoro.`);
   return [];
 }
 
@@ -1405,15 +1218,7 @@ async function lootStep(): Promise<boolean> {
   const d = looting ? drops.get(looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS);
   if (!d) return false;
   if (!looting) {
-    const ok = await decide({
-      kind: 'pickup',
-      what: `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`,
-      detail: { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y },
-    });
-    if (!ok) {
-      drops.delete(d.id);
-      return false;
-    }
+    journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });
     looting = { id: d.id, since: now };
   }
   if (chebyshev(world.x, world.y, d.x, d.y) > 1) {
@@ -1433,293 +1238,14 @@ async function lootStep(): Promise<boolean> {
 }
 let lootCount = 0;
 
-// --- Economía: qué es basura y qué vale la pena guardar -------------------
-// El bot no tiene ni el precio ni IsSellableToNpc del server, así que usa el
-// catálogo del repo (data/items.json) para decidir por grupo.
-//   12 = jewels/ribbons (comunes)  14 = pociones  15 = scrolls  0 = weapons
-//   13 = misc (bless, bows)  31 = event  41 = event
-// Lo que NO se vende: equipamiento de slot principal que el personaje pueda
-// usar (1..11 weapons/armor), porque ahí la decisión es tuya, no del bot.
-type ItemRow = { Group: number; Index: number; ItemName: string; X: number; Y: number; Width: number; Height: number };
-const ITEMS: ItemRow[] = itemsData as unknown as ItemRow[];
-
-// Grupos que el bot vende sin preguntar (basura estándar de farm).
-// El grupo 12 (Wings of Fairy / Wings of Angel, ver items.json) es EQUIPAMIENTO,
-// no basura — estaba mal clasificado acá y el bot vendía las alas del personaje.
-const JUNK_GROUPS = new Set([14, 15, 30, 31, 32, 41, 42, 43]);
-// Grupos de equipamiento: nunca se tocan sin que la UI/intervención lo pida.
-const EQUIP_GROUPS = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-
-function isJunk(it: ItemSlot): boolean {
-  if (EQUIP_GROUPS.has(it.group)) return false; // decisión del humano
-  if (!JUNK_GROUPS.has(it.group)) return false; // grupo desconocido: no tocar
-  // Las pociones curativas no se venden nunca: son las que nos mantienen vivo.
-  if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return false;
-  return true;
-}
-
-function junkSlots(): ItemSlot[] {
-  return [...world.inventory.values()].filter(isJunk);
-}
-
-function inventoryPressure(): number {
-  // El server manda CharacterInventory con lo que hay; si no loinskió no podemos saberlo.
-  const MAX_SLOTS = 40;
-  return world.inventory.size / MAX_SLOTS;
-}
-
-// --- Merchant ---------------------------------------------------------------
-// Flujo de venta (SellItemToNpcAction de OpenMU): el server exige que
-// player.OpenedNpc tenga MerchantStore, o sea que HAY que hablarle al NPC antes.
-// Si no, responde ItemSoldToNpc(false) y no pasa nada.
-const MERCHANT_IDS = new Set(
-  (args.get('--merchant') ?? '')
-    .split(',')
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !Number.isNaN(n)),
-);
-
-let openedNpcId: number | null = null;
+// --- Zen -----------------------------------------------------------
+// El bot no compra ni vende (pedido del usuario): solo lleva el zen para el panel.
 let lastMoney = 0;
 
-function talkToNpc(npcId: number) {
-  const p = TalkToNpcRequestPacket.createPacket();
-  p.NpcId = npcId;
-  sendToGS(p.buffer);
-  openedNpcId = npcId;
-  log(`Hablo con NPC Id=${npcId}`);
-}
-
-function closeNpc() {
-  if (openedNpcId == null) return;
-  sendToGS(CloseNpcRequestPacket.createPacket().buffer);
-  openedNpcId = null;
-}
-
-function sellSlot(slot: number) {
-  const p = SellItemToNpcRequestPacket.createPacket();
-  p.ItemSlot = slot;
-  sendToGS(p.buffer);
-}
-
-// Compra por índice en la lista del merchant. El server valida el índice; si no
-// existe responde NpcItemBuyFailed (0x32/0xFF) y no cobra nada.
-function buyShopSlot(shopIndex: number) {
-  const p = BuyItemFromNpcRequestPacket.createPacket();
-  p.ItemSlot = shopIndex;
-  sendToGS(p.buffer);
-}
-
-// Vende un item concreto pasando por la capa de decisión.
-async function sellItem(it: ItemSlot): Promise<boolean> {
-  const ok = await decide({
-    kind: 'sell',
-    what: `vender item ${it.group}/${it.num} del slot ${it.slot}`,
-    detail: { slot: it.slot, group: it.group, num: it.num },
-  });
-  if (!ok) return false;
-  if (openedNpcId == null) {
-    log('No hay merchant abierto: no puedo vender.');
-    return false;
-  }
-  sellSlot(it.slot);
-  return true;
-}
-
-// El ID del slot en el inventario NO coincide con el índice del ItemData, así
-// que para saber si el server aceptó la venta comparamos el estado del slot
-// antes y después de la respuesta.
-async function sellJunkToMerchant(): Promise<boolean> {
-  const junk = junkSlots();
-  if (!junk.length) return false;
-
-  // Vender es la acción más pesada del bot: siempre pasa por decisión.
-  if (!(await decide({
-    kind: 'sell',
-    what: `vender ${junk.length} item(s) de basura por un merchant`,
-    detail: { items: junk.map((i) => ({ slot: i.slot, group: i.group, num: i.num })) },
-    autoOk: false,
-  }))) return false;
-
-  let merchant = openedNpcId;
-  if (merchant == null) {
-    if (knownMerchants.size === 0) {
-      log('Buscando un merchant en el mapa...');
-      merchant = await discoverMerchant();
-      if (merchant == null) {
-        log('No encontré merchant en esta zona. Pasá --merchant <id> si sabés cuál es.');
-        return false;
-      }
-    } else {
-      merchant = knownMerchants.values().next().value!;
-      talkToNpc(merchant);
-    }
-  }
-
-  let sold = 0;
-  for (const it of junk) {
-    const before = world.inventory.has(it.slot);
-    sellSlot(it.slot);
-    // Un respiro entre ventas: el server lleva contador por request y un burst
-    // de ventas iguales lo puede parsear como speedhack.
-    await sleep(SELL_INTERVAL_MS);
-    // El server borra el item del inventario al venderlo; si sigue, no se vendió.
-    if (before && !world.inventory.has(it.slot)) {
-      sold++;
-    }
-    if (openedNpcId == null) break; // el server cerró la ventana: no insistir
-  }
-  closeNpc();
-  log(`Vendí ${sold}/${junk.length} item(s).`);
-  return sold > 0;
-}
-
-// Catálogo real del merchant abierto (por StoreItemList). group/num salen del
-// mismo parser que el inventario, así que coinciden con items.json.
-const shopCatalog = new Map<number, ShopItem>();
-
-function findShopSlotFor(group: number, num: number): number | undefined {
-  for (const it of shopCatalog.values()) {
-    if (it.group === group && it.num === num) return it.shopSlot;
-  }
-  return undefined;
-}
-
-// Comprar pociones. El ItemSlot que espera BuyItemFromNpcRequest NO es el
-// índice de items.json sino la posición dentro de la lista del merchant, que el
-// server arma por su cuenta. Antes dependía ciegamente de --buy-slot; ahora,
-// si ya llegó StoreItemList del merchant abierto, usamos el catálogo real y
-// solo caemos a --buy-slot si todavía no tenemos esa info (compatibilidad).
-async function ensurePotions(): Promise<boolean> {
-  if (haveHealingPotions()) return false;
-  if (openedNpcId == null) {
-    const merchant = knownMerchants.values().next().value;
-    if (merchant == undefined) return false;
-    talkToNpc(merchant);
-    await sleep(600); // tiempo para que llegue NpcWindowResponse + StoreItemList
-  }
-
-  const fromCatalog = [...HEAL_POTION_NUMS]
-    .map((num) => findShopSlotFor(POTION_GROUP, num))
-    .filter((slot): slot is number => slot != null);
-  const candidates = fromCatalog.length ? fromCatalog : SHOP_POTION_SLOTS;
-  if (!candidates.length) return false;
-
-  for (const slot of candidates) {
-    const ok = await decide({
-      kind: 'buy',
-      what: `comprar poción del slot ${slot} del shop`,
-      detail: { shopSlot: slot, money: lastMoney, fromCatalog: fromCatalog.length > 0 },
-      autoOk: false, // gastar plata es siempre decisión del humano
-    });
-    if (!ok) continue;
-    buyShopSlot(slot);
-    await sleep(600);
-    if (haveHealingPotions()) return true;
-  }
-  return false;
-}
-
-function haveHealingPotions(): boolean {
-  for (const it of world.inventory.values()) {
-    if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return true;
-  }
-  return false;
-}
-
-// Índices de pociones dentro de la lista del merchant, en orden de preferencia.
-const SHOP_POTION_SLOTS = (args.get('--buy-slot') ?? '')
-  .split(',')
-  .map((s) => parseInt(s.trim(), 10))
-  .filter((n) => !Number.isNaN(n));
-
-function watchEconomy() {
-  EventBus.on('NpcItemSellResult', (raw: any) => {
-    const p = new NpcItemSellResultPacket(raw);
-    if (p.Success) {
-      lastMoney = p.Money;
-      log(`Venta OK. Dinero ahora: ${p.Money}`);
-    } else {
-      log('Venta rechazada por el server.');
-    }
-  });
+function watchMoney() {
   EventBus.on('InventoryMoneyUpdate', (raw: any) => {
-    const p = new InventoryMoneyUpdatePacket(raw);
-    lastMoney = p.Money;
-    log(`Dinero actualizado: ${p.Money}`);
+    lastMoney = new InventoryMoneyUpdatePacket(raw).Money;
   });
-  EventBus.on('NpcItemBuyFailed', () => log('Compra falló (índice de shop inválido).'));
-  EventBus.on('StoreItemList', (raw: any) => {
-    shopCatalog.clear();
-    for (const it of parseStoreItemList097(raw)) shopCatalog.set(it.shopSlot, it);
-    log(`Catálogo del merchant: ${shopCatalog.size} ítem(s) — ${[...shopCatalog.values()].map((i) => `slot${i.shopSlot}:${i.group}/${i.num}`).join(', ')}`);
-  });
-  EventBus.on('NpcWindowResponse', (raw: any) => {
-    const p = new NpcWindowResponsePacket(raw);
-    log(`Ventana de NPC: ${NpcWindowResponseNpcWindowEnum[p.Window] ?? p.Window}`);
-  });
-}
-// --- Descubrimiento de merchants -------------------------------------------
-// monsters.json NO contiene NPCs (solo monstruos), así que no hay forma de
-// saber de antemano qué Id es un merchant. La forma honesta es descubrirlo:
-// hablamos con los NPCs que hay en scope y leemos la ventana que conteste.
-// Merchant=0 / Merchant1=1 son las ventanas de venta.
-const isMerchantWindow = (w: number) => w === 0 || w === 1;
-
-const knownMerchants = new Set<number>(MERCHANT_IDS);
-
-async function discoverMerchant(): Promise<number | null> {
-  const candidates = [...world.townNpcs.values()].filter((n) => !isJunkType(n.type));
-  for (const c of candidates) {
-    const ok = await decide({
-      kind: 'travel',
-      what: `hablar con NPC Id=${c.id} para ver si es merchant`,
-      detail: { npcId: c.id, x: c.x, y: c.y },
-    });
-    if (!ok) continue;
-    const waiter = waitFor('NpcWindowResponse', 3000).catch(() => null);
-    talkToNpc(c.id);
-    const raw = await waiter;
-    if (!raw) {
-      closeNpc();
-      continue;
-    }
-    const w = new NpcWindowResponsePacket(raw).Window;
-    if (isMerchantWindow(w)) {
-      log(`¡Merchant encontrado! Id=${c.id} (ventana ${NpcWindowResponseNpcWindowEnum[w]})`);
-      knownMerchants.add(c.id);
-      return c.id;
-    }
-    closeNpc();
-  }
-  return null;
-}
-
-// Los candidatos salen de world.townNpcs (TypeNumber 200-299). Los guardias
-// (247 Crossbow, 249 Berdysh) no abren ventana: no vale la pena hablarles.
-function isJunkType(type: number): boolean {
-  return type === 247 || type === 249;
-}
-
-// /move <mapa> por chat público (MoveChatCommandPlugIn de OpenMU): el server
-// valida nivel y zen según su WarpList (Version075: Dungeon = nivel 30, 3000 zen)
-// y contesta con MapChanged075. Es lo mismo que tipear el comando en el cliente.
-// PublicChatMessage: C1, code 0x00, Character[10]@3, Message@13 (null-terminado).
-async function moveToMap(mapName: string): Promise<boolean> {
-  const ok = await decide({
-    kind: 'travel',
-    what: `/move ${mapName} (cuesta zen)`,
-    detail: { command: '/move', map: mapName, fromMap: world.map },
-    autoOk: false,
-  });
-  if (!ok) return false;
-  const waiter = waitFor('MapChanged075', 5000).catch(() => null);
-  sayChat(CHAR_NAME, `/move ${mapName}`);
-  if (!(await waiter)) {
-    log(`/move ${mapName}: el server no cambió de mapa (¿nivel, zen o nombre de mapa?).`);
-    return false;
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1747,9 +1273,6 @@ const WARP_SPOTS: Spot[] = [
   { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0, map: 84 },
   { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0, map: 85 },
 ];
-// Sin el plan B: lo que usan --no-learn y --free-route.
-const ROUTE_SPOTS = WARP_SPOTS.filter((sp) => sp.index !== CROWD_FALLBACK.warp);
-const FIXED_ROUTE_ON = !args.has('--free-route');
 const zenTxt = (sp: Spot | null | undefined) => (sp?.zen ? `cuesta ${sp.zen} zen` : 'zen sin capturar');
 const LORENCIA_WARP = 2;
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
@@ -1758,27 +1281,15 @@ let currentSpot: Spot | null = null;
 // Spot → cuándo se lo encontró "seco" (mapa entero sin monstruos DRY_MAP_MS).
 // No se vuelve a elegir durante LEARN.DRY_EXCLUDE_MS (ver explore.ts).
 const dryAt = new Map<number, number>();
-// Desde cuándo está en currentSpot (para la permanencia mínima del bandit).
-let spotSince = 0;
-
-// Regla fija (la de antes del aprendizaje): el de mayor reqLevel permitido.
-// Se usa con --no-learn.
-function pickSpot(level: number, exclude: ReadonlySet<number> = new Set()): Spot | undefined {
-  return ROUTE_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index)) && !exclude.has(sp.index)).sort(
-    (a, b) => b.reqLevel - a.reqLevel,
-  )[0];
-}
-
 // ---------------------------------------------------------------------------
-// Aprendizaje (ver learning.ts y AGENTS.md, "Aprendizaje"): mide exp/min,
-// kills/min y muertes por spot, lo guarda por personaje y elige el spot con
-// un bandit UCB1 en vez de "el de mayor nivel".
+// Lo aprendido (learning.ts): campamentos, tipos de monstruo, spots calientes, ciclos y la
+// referencia del hambre, por personaje en ~/.mubot/learning.json (--learn-file).
 // ---------------------------------------------------------------------------
-const LEARN_ENABLED = !args.has('--no-learn');
+const SAVE_EVERY_MS = 2 * 60_000;
 const LEARN_FILE = args.get('--learn-file') ?? join(homedir(), '.mubot', 'learning.json');
-const LEARN_SUMMARY_MS = 2 * 60_000;
-let learning: CharLearning = { resets: 0, samples: [] };
-const meter = new SpotMeter();
+let learning: CharLearning = { resets: 0 };
+// Muerte propia: llega por dos lados (HP 0 y ObjectGotKilled); dentro de esta ventana es una sola.
+let lastDeathAt = -Infinity;
 
 // Farmeo por exp/segundo (farming.ts): lo aprendido por tipo de monstruo, el
 // registro id → tipo para atribuir la exp, y la grilla de spots calientes
@@ -1816,9 +1327,8 @@ function onMapArrival() {
 }
 
 async function loadLearningState() {
-  if (!LEARN_ENABLED) return;
   const r = await loadLearning(LEARN_FILE);
-  learning = r.data.chars[CHAR_NAME] ?? { resets: 0, samples: [] };
+  learning = r.data.chars[CHAR_NAME] ?? { resets: 0 };
   if (learning.types) {
     Object.assign(typeStats.expByType, learning.types.expByType);
     Object.assign(typeStats.killSecByType, learning.types.killSecByType);
@@ -1830,18 +1340,13 @@ async function loadLearningState() {
   if (r.status === 'corrupt') {
     log(`Aprendizaje: ${LEARN_FILE} ilegible (${r.error}); arranco de cero${r.backup ? `, el original quedó en ${r.backup}` : ''}.`);
   } else {
-    log(`Aprendizaje: ${learning.samples.length} muestra(s) de ${CHAR_NAME} en ${LEARN_FILE}${r.status === 'missing' ? ' (archivo nuevo)' : ''}.`);
+    log(`Aprendizaje: ${CHAR_NAME} en ${LEARN_FILE}${r.status === 'missing' ? ' (archivo nuevo)' : ''}.`);
   }
-}
-
-function recordSample(s: SpotSample | null) {
-  if (s) learning.samples.push(s);
 }
 
 // Los saves se encadenan (muerte y resumen pueden coincidir): uno a la vez.
 let learnSaveChain: Promise<void> = Promise.resolve();
 function persistLearning(): Promise<void> {
-  if (!LEARN_ENABLED) return Promise.resolve();
   // Nunca frena el juego: si el disco falla, se pierde a lo sumo un tramo.
   learning.types = typeStats.snapshot();
   learning.hot = hotGrid.dump().map(({ map, cx, cy, exp }) => ({ map, cx, cy, exp }));
@@ -1856,131 +1361,60 @@ function persistLearning(): Promise<void> {
   return learnSaveChain;
 }
 
-// Corta el tramo en curso (lo guarda como muestra) y deja de medir.
-function endStint() {
-  recordSample(meter.flush(Date.now(), world.level));
-  meter.stop();
-}
-
-function logLearningSummary() {
-  if (!LEARN_ENABLED) return;
-  const now = Date.now();
-  const live = meter.peek(now);
-  const stats = aggregate(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
-  log(`Aprendizaje (nivel ${world.level}, reset ${learning.resets}, * = spot actual):\n${formatSpotTable(WARP_SPOTS, stats, currentSpot?.index ?? null)}`);
-}
-
-// Estadía en el spot actual (para su exp/min) y el mayor tier de mapas ya visto
-// en este ciclo de reset (ver chooseRouteSpot en learning.ts).
-let stayExp = 0;
-let tierSeen = 0;
 let lastWarpAt = 0;
 // Entre warps: el agente web espera 15 s (que cargue el mapa y aparezcan los
 // monstruos) antes de volver a evaluar.
 const WARP_COOLDOWN_MS = 15_000;
 
-async function warpAndWait(spot: Spot, measure = true): Promise<boolean> {
+async function warpAndWait(spot: Spot): Promise<boolean> {
   const waiter = waitFor('MapChanged075', 6000).catch(() => null);
   warpTo(spot.index);
   lastWarpAt = Date.now();
   const ok = !!(await waiter);
-  if (ok) {
-    endStint();
-    currentSpot = spot;
-    spotSince = Date.now();
-    stayExp = 0;
-    if (measure && LEARN_ENABLED) meter.start(spot.index, world.level, learning.resets, spotSince);
-  } else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
+  if (ok) currentSpot = spot;
+  else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
   return ok;
 }
 
-// Por defecto, la RUTA FIJA por tramo (chooseFixedRoute, learning.ts): cambia
-// de mapa solo al cruzar un tramo, con el mapa vacío (90 s) o por competencia
-// que bajó la exp (campamentos abandonados por gente, o "hambre"). Si ya está
-// en el mapa del tramo al entrar al mundo, lo adopta sin warpear.
-// Con --free-route: la regla vieja (chooseRouteSpot) que prueba mapas por exp/min.
+// La RUTA FIJA por tramo (chooseFixedRoute, learning.ts): cambia de mapa solo al cruzar un tramo,
+// con el mapa vacío (90 s) o por competencia que bajó la exp (campamentos abandonados por gente, o
+// "hambre"). Si ya está en el mapa del tramo al entrar al mundo, lo adopta sin warpear.
 type SpotSignals = { mapDead?: boolean; crowded?: boolean };
 async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
   if (now - lastWarpAt < WARP_COOLDOWN_MS) return false;
-  // Spot fijado por la orden `warp` del panel: ni la ruta ni el bandit lo
-  // cambian hasta la orden `farm`. Si murió o lo sacaron, vuelve ahí.
+  // Spot fijado por la orden `warp` del panel: la ruta no lo cambia hasta la orden `farm`. Si murió
+  // o lo sacaron, vuelve ahí.
   if (pinnedSpot) {
     if (currentSpot?.index === pinnedSpot.index) return false;
-    const pin = pinnedSpot;
-    if (!(await decide({ kind: 'travel', what: `volver al spot fijado por el panel: ${pin.name} (${zenTxt(pin)})`, detail: { warp: pin.index, reason: 'panel' } }))) return false;
-    return warpAndWait(pin);
+    journal('travel', `vuelvo al spot fijado por el panel: ${pinnedSpot.name} (${zenTxt(pinnedSpot)})`, { warp: pinnedSpot.index, reason: 'panel' });
+    return warpAndWait(pinnedSpot);
   }
-  let best: Spot | undefined | null;
-  let what: string;
-  let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
   const exclude = activeDryExclusions(dryAt, now);
-  if (exclude.size) detail.dry = [...exclude];
-  if (FIXED_ROUTE_ON) {
-    const choice = chooseFixedRoute({
-      spots: WARP_SPOTS,
-      level: world.level,
-      allowed: ALLOWED_SPOTS,
-      current: currentSpot,
-      currentMap: canAdopt ? world.map : -1,
-      mapDead: !!sig.mapDead,
-      crowded: !!sig.crowded,
-      crowdedAt,
-      now,
-      prefer: lastSpotIndex,
-    });
-    if (choice.reason === 'crowd' && currentSpot) crowdedAt.set(currentSpot.index, now);
-    if (sig.crowded) camps.crowdLeaves = [];
-    if (choice.reason === 'adopt' && choice.spot) {
-      // Ya está en el mapa del tramo: seguir acá sin warpear.
-      log(`Spot: ${choice.what}.`);
-      currentSpot = choice.spot;
-      spotSince = now;
-      stayExp = 0;
-      if (LEARN_ENABLED) meter.start(choice.spot.index, world.level, learning.resets, now);
-      return false;
-    }
-    if (!choice.warp || !choice.spot || choice.spot.index === currentSpot?.index) return false;
-    best = choice.spot;
-    what = `${choice.what} (${zenTxt(best)})`;
-    detail = { ...detail, reason: choice.reason, tier: choice.tier };
-  } else if (!LEARN_ENABLED) {
-    best = pickSpot(world.level, exclude);
-    what = `warp a ${best?.name} (nivel ${world.level}, ${zenTxt(best)})`;
-  } else {
-    const live = meter.peek(now);
-    const scores = routeScores(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
-    const choice = chooseRouteSpot({
-      spots: ROUTE_SPOTS,
-      level: world.level,
-      allowed: ALLOWED_SPOTS,
-      current: currentSpot,
-      stayMs: currentSpot ? now - spotSince : 0,
-      stayExp,
-      scores,
-      tierSeen,
-      exclude,
-    });
-    tierSeen = Math.max(tierSeen, choice.tier);
-    if (choice.restartEval) {
-      // Rinde poco pero no hay alternativa: medir de nuevo desde ahora.
-      log(`Spot: ${choice.what}; vuelvo a medir.`);
-      spotSince = now;
-      stayExp = 0;
-    }
-    best = choice.spot;
-    what = `${choice.what} → warp a ${best?.name} (${zenTxt(best)})`;
-    detail = {
-      ...detail,
-      reason: choice.reason,
-      curRate: Math.round(choice.curRate),
-      bestKnown: Math.round(choice.bestKnown),
-      scores: Object.fromEntries(scores),
-    };
+  const choice = chooseFixedRoute({
+    spots: WARP_SPOTS.filter((sp) => !exclude.has(sp.index) || sp.index === currentSpot?.index),
+    level: world.level,
+    allowed: ALLOWED_SPOTS,
+    current: currentSpot,
+    currentMap: canAdopt ? world.map : -1,
+    mapDead: !!sig.mapDead,
+    crowded: !!sig.crowded,
+    crowdedAt,
+    now,
+    prefer: lastSpotIndex,
+  });
+  if (choice.reason === 'crowd' && currentSpot) crowdedAt.set(currentSpot.index, now);
+  if (sig.crowded) camps.crowdLeaves = [];
+  if (choice.reason === 'adopt' && choice.spot) {
+    // Ya está en el mapa del tramo: seguir acá sin warpear.
+    log(`Spot: ${choice.what}.`);
+    currentSpot = choice.spot;
+    return false;
   }
-  if (!best || best.index === currentSpot?.index) return false;
-  const ok = await decide({ kind: 'travel', what, detail: { ...detail, warp: best.index }, autoOk: true });
-  if (!ok) return false;
+  if (!choice.warp || !choice.spot || choice.spot.index === currentSpot?.index) return false;
+  const best = choice.spot;
+  const what = `${choice.what} (${zenTxt(best)})`;
+  journal('travel', what, { from: currentSpot?.name ?? null, level: world.level, reason: choice.reason, tier: choice.tier, warp: best.index, ...(exclude.size ? { dry: [...exclude] } : {}) });
   log(`Cambio de spot: ${currentSpot?.name ?? '?'} → ${best.name} — ${what}`);
   const moved = await warpAndWait(best);
   if (moved) await persistLearning();
@@ -1993,13 +1427,7 @@ async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
 // volver a elegir el personaje, repartir los puntos nuevos y salir a farmear.
 // ---------------------------------------------------------------------------
 async function doReset(): Promise<boolean> {
-  const ok = await decide({
-    kind: 'reset',
-    what: `/reset en nivel ${world.level}`,
-    detail: { level: world.level, stats: { ...world.stats } },
-    autoOk: false,
-  });
-  if (!ok) return false;
+  journal('reset', `/reset en nivel ${world.level}`, { level: world.level, stats: { ...world.stats } });
   resetting = true;
   try {
     return await doResetSteps();
@@ -2011,10 +1439,7 @@ async function doReset(): Promise<boolean> {
 async function doResetSteps(): Promise<boolean> {
   doing = `reseteando en nivel ${world.level}`;
   await investStatPoints(true);
-  // Lo medido hasta acá es del reset viejo: cortarlo antes de ir a Lorencia
-  // (el viaje a resetear no es farmeo y no se mide).
-  endStint();
-  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!, false);
+  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
   await sleep(2000);
   let listWaiter = waitFor('CharacterList', 8000).catch(() => null);
   sayChat(CHAR_NAME, '/reset');
@@ -2034,13 +1459,8 @@ async function doResetSteps(): Promise<boolean> {
   world.npcs.clear();
   world.townNpcs.clear();
   currentSpot = null;
-  meter.stop();
-  // Ciclo nuevo: el rendimiento por mapa se vuelve a medir (routeScores solo
-  // mira muestras de este reset) y los tiers se vuelven a habilitar desde
-  // Lorencia. Los spots calientes (hotGrid) y lo aprendido por tipo de
-  // monstruo se conservan: dependen del mapa, no del nivel.
-  tierSeen = 0;
-  stayExp = 0;
+  // Ciclo nuevo. Los spots calientes (hotGrid) y lo aprendido por tipo de monstruo se conservan:
+  // dependen del mapa, no del nivel.
   // La vara de cada mapa depende del nivel: se vuelve a medir. La memoria de
   // campamentos se conserva (guarda el nivel al que se midió).
   camps.onReset();
@@ -2062,51 +1482,11 @@ async function doResetSteps(): Promise<boolean> {
 // estado que se manda cada 1 s. Todo sale de lo que el bot ya trackea de los
 // packets: funciona igual sin navegador.
 // ---------------------------------------------------------------------------
-// Buscador (--scout): el bot espera en Lorencia en pausa y sale a buscar dorados
-// (sin pelear nunca) cuando un 0xFD dice que hay invasión. En toda la corrida no farmea.
-const SCOUT_ONLY = args.has('--scout');
-const SCOUT_SECTORS = Math.min(Math.max(parseInt(args.get('--scout-sectors') ?? '2') || 2, 1), 16);
-const SCOUT_SECTOR = Math.min(Math.max(parseInt(args.get('--scout-sector') ?? '1') || 1, 1), SCOUT_SECTORS);
-// Explorador (--atlas, orden `atlas`): recorre mapas enteros sin pelear y anota qué
-// aparece dónde (atlas.ts, ~/.mubot/atlas.json). Con --atlas en toda la corrida no farmea.
-const ATLAS_ONLY = args.has('--atlas');
-const ATLAS_REQ_MAPS = parseAtlasMaps(args.get('--atlas-maps'));
-const ATLAS_MINUTES = Math.max(1, parseFloat(args.get('--atlas-minutes-per-map') ?? '') || ATLAS_MINUTES_PER_MAP);
 // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
-let paused = SCOUT_ONLY;
+let paused = false;
 // Cacería de dorados (orden `hunt`). null = farmeo normal.
 type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number> };
 let hunting: HuntState | null = null;
-// Buscador (orden `scout`): recorre su franja del mapa sin pelear y avisa los dorados por HTTP.
-type ScoutState = {
-  hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number;
-  explorer: HuntExplorer; reporter: GoldReporter; sector: number; sectors: number;
-};
-let scouting: ScoutState | null = null;
-// --scout: arranca solo con la invasión, una vez por invasión (se rearma cuando el 0xFD deja de decir activa).
-let scoutArmed = true;
-// --scout: intentos de volver a Lorencia a esperar.
-let scoutHomeTries = 0;
-let scoutHomeNextAt = 0;
-type AtlasState = {
-  maps: AtlasMap[]; idx: number; since: number; warpTries: number; nextWarpAt: number; arrived: boolean;
-  /** pasadas del explorador del mapa al llegar (una más = mapa recorrido entero) */
-  passesAtStart: number;
-  restUntil: number; reporter: GoldReporter; potionsTried: boolean;
-  /** no pudo comprar pociones: huye antes y más lejos */
-  cautious: boolean; laps: number;
-};
-let atlasRun: AtlasState | null = null;
-// --atlas: el usuario lo cortó con farm/pause (no rearrancar solo).
-let atlasHeld = false;
-// El atlas en memoria (se carga al primer uso) y un explorador por mapa que dura
-// toda la corrida: cada vuelta sigue por las celdas que faltaban, no vuelve a
-// empezar cerca del warp.
-let atlasBook: Atlas | null = null;
-const atlasSaver = new AtlasSaver();
-const atlasExplorers = new Map<number, HuntExplorer>();
-// Con HP bajo y sin pociones el buscador se aleja del monstruo más cercano a esta distancia.
-const SCOUT_FLEE_RANGE = 6;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
 const HUNT_NORMAL_RANGE = 3;
 // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
@@ -2145,16 +1525,15 @@ function currentMode(): BotMode {
   if (!inGameAt || kicked) return 'connecting';
   if (resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
-  if (scouting) return 'scout';
-  if (atlasRun) return 'atlas';
   if (paused) return 'paused';
   return hunting ? 'hunt' : 'farm';
 }
 
-// Avisos del buscador: POST con timeout corto; si el receptor no está, se ignora.
+// Señales de dorados a la estación (GOLD_URL): cada dorado que ve, con posición; POST con timeout
+// corto y sin reintentos (si la estación no está, se ignora).
 function publishGold(p: GoldSighting | GoldGone) {
   try {
-    void fetch(SCOUT_GOLD_URL, {
+    void fetch(GOLD_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(p),
@@ -2165,36 +1544,6 @@ function publishGold(p: GoldSighting | GoldGone) {
   }
 }
 
-function startScout(hunt: HuntMap, sector: number, sectors: number, why: string) {
-  if (hunting) stopHunt('empieza la búsqueda');
-  if (atlasRun) stopAtlas('empieza la búsqueda');
-  scouting = {
-    hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0,
-    explorer: new HuntExplorer(undefined, undefined, 256, scoutBand(sector, sectors)),
-    reporter: new GoldReporter(charName), sector, sectors,
-  };
-  pinnedSpot = null;
-  pendingWarp = null;
-  paused = false;
-  retarget = true;
-  goalPoint = null;
-  panelLog(`Buscador: ${why}; busco dorados en ${hunt.name} (franja ${sector}/${sectors}) sin pelear, aviso a ${SCOUT_GOLD_URL}.`);
-}
-
-// Termina la búsqueda: queda en pausa (decide el usuario), nunca vuelve a farmear solo.
-function stopScout(reason: string) {
-  if (!scouting) return;
-  const s = scouting;
-  scouting = null;
-  for (const p of s.reporter.clear(Date.now())) publishGold(p);
-  paused = true;
-  retarget = true;
-  goalPoint = null;
-  currentSpot = null;
-  scoutHomeTries = 0;
-  panelLog(`Búsqueda en ${s.hunt.name} terminada (${reason}): quedo en pausa.`);
-}
-
 function stopHunt(reason: string) {
   if (!hunting) return;
   const h = hunting;
@@ -2203,230 +1552,23 @@ function stopHunt(reason: string) {
   goalPoint = null;
   // El spot de la cacería no es de la ruta: que la ruta fija decida (adopta el
   // mapa si es el del tramo, si no warpea).
-  endStint();
   currentSpot = null;
   canAdopt = true;
   panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
 }
 
-// --- Explorador (atlas) -------------------------------------------------------
-function atlasData(): Atlas {
-  return (atlasBook ??= new Atlas(loadAtlas(ATLAS_FILE)));
-}
-
-function saveAtlasNow(why: string) {
-  if (!atlasBook?.dirty) return;
-  try {
-    saveAtlas(atlasBook.data, ATLAS_FILE);
-    atlasBook.dirty = false;
-  } catch (e) {
-    log(`Atlas: no pude guardar ${ATLAS_FILE} (${why}): ${(e as Error).message}`);
-  }
-}
-
-function atlasExplorer(map: number): HuntExplorer {
-  let ex = atlasExplorers.get(map);
-  if (!ex) atlasExplorers.set(map, (ex = new HuntExplorer()));
-  return ex;
-}
-
-function startAtlas(why: string): CommandResult {
-  const { maps, skipped } = atlasMapList(ATLAS_REQ_MAPS, world.level);
-  for (const sk of skipped) panelLog(`Atlas: salteo ${sk.why}.`);
-  if (!maps.length) return { ok: false, msg: 'ningún mapa del atlas al alcance (nivel o warp desconocido)' };
-  if (hunting) stopHunt('empieza el atlas');
-  if (scouting) stopScout('empieza el atlas');
-  atlasData();
-  atlasRun = {
-    maps, idx: 0, since: Date.now(), warpTries: 0, nextWarpAt: 0, arrived: false, passesAtStart: 0,
-    restUntil: 0, reporter: new GoldReporter(charName), potionsTried: false, cautious: false, laps: 0,
-  };
-  atlasHeld = false;
-  pinnedSpot = null;
-  pendingWarp = null;
-  paused = false;
-  retarget = true;
-  goalPoint = null;
-  const names = maps.map((m) => m.name).join(' → ');
-  panelLog(`Atlas: ${why}; exploro sin pelear ${names}, ${ATLAS_MINUTES} min por mapa, anoto en ${ATLAS_FILE}.`);
-  return { ok: true, msg: `exploro sin pelear: ${names} (${ATLAS_MINUTES} min por mapa)` };
-}
-
-// Termina el atlas: guarda y queda en pausa (nunca vuelve a farmear solo).
-function stopAtlas(reason: string) {
-  if (!atlasRun) return;
-  const a = atlasRun;
-  atlasRun = null;
-  for (const p of a.reporter.clear(Date.now())) publishGold(p);
-  saveAtlasNow('fin del atlas');
-  paused = true;
-  retarget = true;
-  goalPoint = null;
-  currentSpot = null;
-  panelLog(`Atlas terminado (${reason}): quedo en pausa.`);
-}
-
-// Pasa al mapa siguiente (al terminar la lista, otra vuelta).
-function advanceAtlas(a: AtlasState, reason: string, now: number) {
-  const cur = a.maps[a.idx];
-  for (const p of a.reporter.clear(now)) publishGold(p);
-  a.idx = nextAtlasIndex(a.idx, a.maps.length);
-  a.since = now;
-  a.warpTries = 0;
-  a.nextWarpAt = 0;
-  a.arrived = false;
-  goalPoint = null;
-  saveAtlasNow('cambio de mapa');
-  if (a.idx === 0) {
-    a.laps++;
-    // Otra vuelta: reponer pociones si se acabaron.
-    if (!haveHealingPotions()) a.potionsTried = false;
-  }
-  panelLog(`Atlas: listo ${cur.name} (${reason}); sigo con ${a.maps[a.idx].name}${a.idx === 0 ? ` (vuelta ${a.laps + 1})` : ''}.`);
-}
-
-// Ítems en la mochila (slots 12-75 del 0.97d: 8x8); sin lugar no se compra.
-const inventoryFull = () => [...world.inventory.keys()].filter((k) => k >= 12 && k < 76).length >= 64;
-const BUY_PACE_MS = 600;
-
-/**
- * Antes de salir a explorar: hasta `max` pociones de curación (grandes, si no
- * medianas, si no chicas) en Lorencia. El merchant se busca entre los conocidos
- * y los NPC de pueblo en scope; hace falta el catálogo (StoreItemList) o
- * --buy-slot. Una compra cuenta si llega ItemBought o baja el zen; dos fallos
- * seguidos (NpcItemBuyFailed, sin zen, sin lugar) cortan. Una por vez, a 600 ms.
- */
-async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: number; zen: number }> {
-  const none = { bought: 0, zen: 0 };
-  if (world.map !== ATLAS_SAFE_MAP) {
-    const lor = ATLAS_WARPS.find((m) => m.map === ATLAS_SAFE_MAP)!;
-    doing = 'yendo a Lorencia a comprar pociones';
-    const spot: Spot = { index: lor.warp, name: 'Lorencia (pociones)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-    if (!(await decide({ kind: 'travel', what: 'warp a Lorencia a comprar pociones (--atlas)', detail: { warp: lor.warp, map: lor.map, reason: 'atlas' } }))) return none;
-    if (!(await warpAndWait(spot, false))) return none;
-    await sleep(3000); // que lleguen los NPC en scope
-  }
-  const ids = [...new Set([...knownMerchants, ...[...world.townNpcs.values()].filter((n) => !isJunkType(n.type)).map((n) => n.id)])];
-  if (!ids.length) {
-    panelLog('Atlas: no veo ningún NPC de pueblo para comprar pociones; salgo igual (huyo antes).');
-    return none;
-  }
-  for (const id of ids) {
-    if (kicked) return none;
-    closeNpc();
-    shopCatalog.clear();
-    const win = waitFor('NpcWindowResponse', 3000).catch(() => null);
-    talkToNpc(id);
-    const raw = await win;
-    if (!raw || !isMerchantWindow(new NpcWindowResponsePacket(raw).Window)) {
-      closeNpc();
-      await sleep(BUY_PACE_MS);
-      continue;
-    }
-    knownMerchants.add(id);
-    await sleep(800); // StoreItemList
-    let slot: number | undefined;
-    let num = 0;
-    for (const n of [3, 2, 1]) {
-      slot = findShopSlotFor(POTION_GROUP, n);
-      if (slot != null) {
-        num = n;
-        break;
-      }
-    }
-    if (slot == null && shopCatalog.size === 0 && SHOP_POTION_SLOTS.length) slot = SHOP_POTION_SLOTS[0];
-    if (slot == null) {
-      closeNpc();
-      await sleep(BUY_PACE_MS);
-      continue;
-    }
-    const shopSlot = slot;
-    const what = num ? `poción ${POTION_GROUP}/${num}` : `slot ${shopSlot} (--buy-slot)`;
-    const zen0 = lastMoney;
-    if (!(await decide({ kind: 'buy', what: `comprar hasta ${max} × ${what} antes de explorar (--atlas)`, detail: { npcId: id, shopSlot, num, max, money: zen0 }, autoOk: false }))) {
-      closeNpc();
-      return none;
-    }
-    doing = `comprando pociones (${what})`;
-    let bought = 0;
-    let fails = 0;
-    let gotItem = false;
-    let failed = false;
-    const onBought = () => {
-      gotItem = true;
-    };
-    const onFail = () => {
-      failed = true;
-    };
-    EventBus.on('ItemBought', onBought);
-    EventBus.on('NpcItemBuyFailed', onFail);
-    try {
-      while (bought < max && fails < 2 && openedNpcId != null && !kicked) {
-        if (inventoryFull()) {
-          log('Atlas: mochila llena, dejo de comprar.');
-          break;
-        }
-        const before = lastMoney;
-        gotItem = false;
-        failed = false;
-        buyShopSlot(shopSlot);
-        await sleep(BUY_PACE_MS);
-        if (!failed && (gotItem || lastMoney < before)) {
-          bought++;
-          fails = 0;
-        } else fails++;
-      }
-    } finally {
-      EventBus.off('ItemBought', onBought);
-      EventBus.off('NpcItemBuyFailed', onFail);
-      closeNpc();
-    }
-    const zen = Math.max(0, zen0 - lastMoney);
-    panelLog(`Atlas: compré ${bought} × ${what} al NPC ${id}, gasté ${zen} zen (quedan ${lastMoney}).`);
-    return { bought, zen };
-  }
-  panelLog('Atlas: ningún NPC en scope vende pociones (o no llegó el catálogo); salgo igual (huyo antes).');
-  return none;
-}
-
 function runPanelCommand(c: PanelCommand): CommandResult {
   switch (c.cmd) {
     case 'pause':
-      if (atlasRun) {
-        stopAtlas('orden pause del panel');
-        atlasHeld = true;
-        return { ok: true, msg: 'atlas terminado, en pausa' };
-      }
-      if (scouting) {
-        stopScout('orden pause del panel');
-        return { ok: true, msg: 'búsqueda terminada, en pausa' };
-      }
       if (paused) return { ok: true, msg: 'ya estaba en pausa' };
       paused = true;
       retarget = true;
       return { ok: true, msg: 'en pausa: no camino, no peleo ni warpeo (las pociones siguen)' };
     case 'resume':
       if (!paused) return { ok: true, msg: 'no estaba en pausa' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo: espero la invasión (o mandá scout)' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no farmeo: mandá atlas' };
       paused = false;
       return { ok: true, msg: `sigo: ${hunting ? `cazando en ${hunting.hunt.name}` : 'farmeo normal'}` };
     case 'farm': {
-      if (ATLAS_ONLY) {
-        const had = !!atlasRun;
-        stopAtlas('orden farm del panel');
-        atlasHeld = true;
-        paused = true;
-        return { ok: true, msg: `${had ? 'atlas terminado; ' : ''}con --atlas no farmeo: quedo en pausa (mandá atlas para seguir)` };
-      }
-      if (atlasRun) stopAtlas('orden farm del panel');
-      if (SCOUT_ONLY) {
-        const had = !!scouting;
-        stopScout('orden farm del panel');
-        paused = true;
-        return { ok: true, msg: `${had ? 'búsqueda terminada; ' : ''}con --scout no farmeo: quedo en pausa esperando la invasión` };
-      }
-      if (scouting) stopScout('orden farm del panel');
       const was = [hunting && 'cacería cancelada', pinnedSpot && `spot fijo (${pinnedSpot.name}) liberado`, paused && 'pausa levantada'].filter(Boolean);
       if (hunting) stopHunt('orden del panel');
       pinnedSpot = null;
@@ -2437,12 +1579,7 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'warp': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo ni fijo spots' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no farmeo ni fijo spots' };
-      if (scouting) stopScout('orden warp del panel');
-      if (atlasRun) stopAtlas('orden warp del panel');
-      const spots = WARP_SPOTS.filter((sp) => !ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index));
-      const v = validateWarp(c.warp, world.level, spots);
+      const v = validateWarp(c.warp, world.level, WARP_SPOTS);
       if (!v.ok) return { ok: false, msg: v.msg };
       if (hunting) stopHunt('orden warp del panel');
       paused = false;
@@ -2453,13 +1590,9 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'hunt': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no peleo: mandá scout' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no peleo' };
       const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
       if (!ch.ok) return { ok: false, msg: ch.msg };
       if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      if (scouting) stopScout('orden hunt del panel');
-      if (atlasRun) stopAtlas('orden hunt del panel');
       hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
       pinnedSpot = null;
       pendingWarp = null;
@@ -2467,33 +1600,13 @@ function runPanelCommand(c: PanelCommand): CommandResult {
       retarget = true;
       return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
     }
-    case 'scout': {
-      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no busco por franja: el atlas ya avisa los dorados que ve' };
-      const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
-      if (!ch.ok) return { ok: false, msg: ch.msg };
-      if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      const sectors = c.sectors ?? 2;
-      const sector = c.sector ?? 1;
-      if (scouting) stopScout('nueva orden scout');
-      startScout(ch.hunt, sector, sectors, 'orden del panel');
-      scoutArmed = false;
-      return { ok: true, msg: `busco dorados en ${ch.hunt.name} (franja ${sector}/${sectors}) sin pelear; corto a los 20 min o cuando no queden` };
-    }
-    case 'atlas': {
-      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (atlasRun) return { ok: true, msg: `ya estoy explorando ${atlasRun.maps[atlasRun.idx].name}` };
-      return startAtlas('orden del panel');
-    }
   }
 }
 
 async function handlePanelCommand(c: PanelCommand): Promise<CommandResult> {
   const r = runPanelCommand(c);
   panelLog(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`);
-  await logDecision({ kind: 'command', what: `${c.cmd}: ${r.msg}`, detail: { command: c, ok: r.ok }, autoOk: true });
+  journal('command', `${c.cmd}: ${r.msg}`, { command: c, ok: r.ok });
   return r;
 }
 
@@ -2507,7 +1620,7 @@ function noteModeChange() {
   lastMode = m;
   if (from == null) return;
   panelLog(`Modo: ${from} → ${m}.`);
-  void logDecision({ kind: 'mode', what: `${from} → ${m}`, detail: { from, to: m }, autoOk: true });
+  journal('mode', `${from} → ${m}`, { from, to: m });
 }
 
 function updateTrail(now: number) {
@@ -2519,6 +1632,19 @@ function updateTrail(now: number) {
   lastTrailAt = now;
   trail.push([world.x, world.y]);
   if (trail.length > TRAIL_MAX) trail.shift();
+}
+
+// Lo que el bucle autónomo cuenta en variables locales, expuesto al panel (sesión y objetivo).
+let loopView: (() => { kills: number; deaths: number; casts: number; exp: number; target: number | null }) | null = null;
+const sessionStart = { at: Date.now(), level: 0 };
+
+function buildPanelEntities(): NonNullable<PanelState['entities']> {
+  const tgt = loopView?.().target ?? null;
+  return {
+    monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), gold: GOLDEN_TYPES.has(n.type), target: n.id === tgt })),
+    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y })),
+    drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
+  };
 }
 
 function buildPanelState(now: number): PanelState {
@@ -2534,7 +1660,7 @@ function buildPanelState(now: number): PanelState {
     char: {
       name: charName,
       level: world.level,
-      resets: LEARN_ENABLED ? learning.resets : null,
+      resets: world.resets ?? (learning.resets || null),
       ...(world.classId != null ? { classId: world.classId } : {}),
       hp: [world.hp, world.maxHp],
       mp: [world.mana, world.maxMana],
@@ -2542,7 +1668,7 @@ function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: inGameAt ? lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: scouting ? `búsqueda ${scouting.hunt.name}` : atlasRun ? `atlas ${atlasRun.maps[atlasRun.idx].name}` : hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,
@@ -2557,6 +1683,12 @@ function buildPanelState(now: number): PanelState {
     equipment,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: goalPoint,
+    entities: buildPanelEntities(),
+    session: (() => {
+      const v = loopView?.();
+      const skill = pickAttackSkill();
+      return { since: sessionStart.at, level0: sessionStart.level || world.level, kills: v?.kills ?? 0, deaths: v?.deaths ?? 0, casts: v?.casts ?? 0, exp: v?.exp ?? 0, loot: lootCount, skill: skill ? (SKILL_TABLE.get(skill.number)?.name ?? `skill ${skill.number}`) : 'golpe' };
+    })(),
   };
 }
 
@@ -2582,6 +1714,9 @@ function pollEvents() {
 }
 
 // Listeners de los packets que solo usa el panel (una vez, con trackWorld).
+const seenUnrouted = new Set<number>();
+// Código del packet CharacterResets del cliente web (layout: resets u16 BE, grand u8). Ver el log "Packet propio".
+const RESETS_CODE = 0xfe; // visto: c1 06 fe 00 13 00 = 19 resets (Melu)
 function trackPanelPackets() {
   EventBus.on('MiniGameOpeningState', (raw: any) => {
     const t = parseOpeningState(toBytes(raw), Date.now());
@@ -2591,6 +1726,10 @@ function trackPanelPackets() {
   // net/socket.ts lo emite crudo como 'UnroutedPacket'.
   EventBus.on('UnroutedPacket', (raw: any) => {
     const b = toBytes(raw);
+    // Packets propios del server que el cliente web sí lee y el bot no conocía: se anotan una vez
+    // (código y bytes) para identificarlos; CharacterResets = resets u16 BE en [3..4], grand en [5].
+    if (b[0] === 0xc1 && b[2] !== 0xfd && b[2] !== RESETS_CODE && !seenUnrouted.has(b[2])) { seenUnrouted.add(b[2]); log(`Packet propio 0x${b[2].toString(16)}: ${[...b.slice(0, 12)].map((x) => x.toString(16).padStart(2, '0')).join(' ')}`); }
+    if (b[0] === 0xc1 && b[2] === RESETS_CODE && b.length >= 6) { world.resets = (b[3] << 8) | b[4]; world.grandResets = b[5]; return; }
     if (b[0] !== 0xc1 || b[2] !== 0xfd) return;
     const inv = parseInvasion(b, Date.now());
     if (!inv) return;
@@ -2617,9 +1756,16 @@ const report = new SelfReport(Date.now(), expLog);
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
 async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
-  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta=${FIXED_ROUTE_ON ? 'fija por tramo' : 'libre'}`);
+  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta fija por tramo`);
 
-  const npcs = world.npcs;
+  // Monstruos atacables: los de world.npcs que NO están en zona segura. Después del reset Horaz quedó
+  // pegándole a unos Lord centurion parados en el pueblo de Lorencia (en zona segura no hay daño):
+  // 0 exp hasta que se lo cortó. Se recalcula al inicio de cada tick; el panel sigue viendo todos.
+  let npcs = new Map<number, ScopedNpc>();
+  const refreshAttackable = () => {
+    npcs = new Map();
+    for (const [id, n] of world.npcs) if (!isSafeZone(world.map, n.x, n.y)) npcs.set(id, n);
+  };
   let totalExpGained = 0;
   let kills = 0;
   let potionsDrunk = 0;
@@ -2628,10 +1774,11 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let resets = 0;
   let deaths = 0;
   let nextResetTry = 0;
-  let lastSummary = Date.now();
+  let lastSave = Date.now();
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastCastAt = 0;
+  let lastBarrierAt = 0;
   // Fase de la iteración anterior: el tiempo hasta la próxima se le atribuye.
   let phase: TimeKind = 'other';
   let phaseAt = Date.now();
@@ -2645,15 +1792,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // actual: el respawn es en el pueblo, así que el próximo maybeChangeSpot
   // vuelve a warpear (canAdopt = false: no adoptar el pueblo como spot).
   const onDeath = (source: string) => {
-    if (!meter.addDeath(Date.now())) return;
+    if (Date.now() - lastDeathAt < LEARN.DEATH_DEBOUNCE_MS) return;
+    lastDeathAt = Date.now();
     deaths++;
     log(`Muerte #${deaths} (${source}) en ${currentSpot?.name ?? 'spot desconocido'}.`);
-    endStint();
     lastSpotIndex = currentSpot?.index ?? lastSpotIndex;
     currentSpot = null;
     canAdopt = false;
     camps.camp = null;
-    if (LEARN_ENABLED) void persistLearning();
+    void persistLearning();
   };
   let lastHp = world.hp;
   const onHp = (raw: any) => {
@@ -2665,6 +1812,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === target;
+    world.npcs.delete(p.KilledId & 0x7fff);
     npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === playerId) {
       onDeath('ObjectGotKilled');
@@ -2672,7 +1820,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     if ((p.KillerId & 0x7fff) === playerId) {
       kills++;
-      meter.addKill();
       // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
       if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
       if (process.env.MUBOT_DEBUG_COMBAT) log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
@@ -2691,8 +1838,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const added = p.AddedExperience;
     const now = Date.now();
     totalExpGained += added;
-    meter.addExp(added);
-    stayExp += added;
     report.addExp(added, now);
     const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
     if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
@@ -2708,13 +1853,135 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
   if (!economyWatched) {
-    watchEconomy();
+    watchMoney();
     economyWatched = true;
   }
 
-  const unreachable = new Set<number>();
+  // Objetivos abandonados (inalcanzables o que no mueren): se ignoran UNREACHABLE_MS. El server reusa
+  // los ids al respawnear, así que una lista para siempre achicaba el campamento durante la sesión.
+  const unreachableUntil = new Map<number, number>();
+  const unreachable = {
+    has: (id: number) => (unreachableUntil.get(id) ?? 0) > Date.now(),
+    add: (id: number) => {
+      unreachableUntil.set(id, Date.now() + UNREACHABLE_MS);
+      if (unreachableUntil.size > 500) for (const [k, t] of unreachableUntil) if (t <= Date.now()) unreachableUntil.delete(k);
+    },
+  };
   let target: number | null = null;
+  loopView = () => ({ kills, deaths, casts: skillsUsed, exp: totalExpGained, target });
+  if (!sessionStart.level) sessionStart.level = world.level;
   let stuckCount = 0;
+  // Objetivo a distancia de golpe que no muere: tras TARGET_NO_KILL_MS se abandona (red de seguridad
+  // si la posición que conocemos del monstruo no es la real).
+  const goldReporter = new GoldReporter(charName);
+  // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff.
+  let cornerAwayUntil = 0;
+  let devCrowdSince: number | null = null;
+  let cornerSince: number | null = null;
+  let cornerRouteIdx: number | null = null;
+  let cornerRouteAt = 0;
+  let cornerBuffAt = 0;
+  const cornerStep = async () => {
+    const now = Date.now();
+    const arena2 = WARP_SPOTS.find((sp) => sp.index === CORNER.warp)!;
+    if (world.map !== CORNER.map) {
+      cornerSince = null;
+      cornerRouteIdx = null;
+      target = null;
+      if (now - lastWarpAt < WARP_COOLDOWN_MS) {
+        doing = 'esperando para ir a la esquina de Arena 2';
+        await sleep(500);
+        return;
+      }
+      doing = `viajando a la esquina de Arena 2 (nivel ${world.level})`;
+      journal('travel', `warp a Arena 2 para la esquina (nivel ${world.level})`, { warp: CORNER.warp, reason: 'corner' });
+      if (await warpAndWait(arena2)) log(`Esquina: en Arena 2 en nivel ${world.level}.`);
+      return;
+    }
+    currentSpot = arena2;
+    const me = { x: world.x, y: world.y };
+    const skill = pickAttackSkill();
+    const r = spinRange(skill?.number);
+    const mons = [...npcs.values()];
+    const here = inCorner(me);
+    if (here) {
+      cornerSince ??= now;
+      // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
+      const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
+      const rate = expLog.perMin(now, 60_000);
+      if (cornerFull({ rivals, inCornerSince: cornerSince, now, rate1m: rate })) {
+        cornerAwayUntil = now + CORNER.awayMs;
+        cornerSince = null;
+        target = null;
+        const alt = WARP_SPOTS.find((sp) => sp.index === altWarp(world.level))!;
+        panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M/min el último minuto): voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
+        journal('travel', `esquina llena: warp a ${alt.name}`, { warp: alt.index, reason: 'corner-full', rivals });
+        await warpAndWait(alt);
+        return;
+      }
+    } else cornerSince = null;
+    // Pegar: lo que deja más monstruos en el giro, a ritmo de skill. Viajando, solo lo que bloquea.
+    const st = here ? spinTarget(me, mons, r) : cornerTarget(me, mons, 0, r);
+    if (st && Date.now() - lastCastAt >= SKILL_PACE_MS) {
+      phase = 'fight';
+      doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
+      if (skill && useSkill(st.id)) {
+        lastCastAt = Date.now();
+        skillsUsed++;
+        await sleep(SKILL_PACE_MS);
+        return;
+      }
+      // Sin skill o sin maná: golpe normal al que esté pegado.
+      if (chebyshev(world.x, world.y, st.x, st.y) <= 1) {
+        sendHit(st.id, directionTowards(world.x, world.y, st.x, st.y));
+        await sleep(ATTACK_PACE_MS);
+        return;
+      }
+    }
+    if (here) {
+      // Buff propio (Swell Life 48 / Mana Shield 16) cada ~55 s.
+      const buff = [48, 16].map((k) => world.skills.get(k)).find((x) => x != null);
+      if (buff && now - cornerBuffAt > CORNER.buffMs && now - lastCastAt >= SKILL_PACE_MS) {
+        cornerBuffAt = now;
+        lastCastAt = now;
+        sendTargetedSkill(buff.index, playerId);
+        await sleep(SKILL_PACE_MS);
+        return;
+      }
+      // Sin nada a tiro: levantar cajas cerca, o caminar al grupo, o esperar en la esquina.
+      if (await lootStep()) {
+        doing = 'esquina de Arena 2: levantando loot';
+        return;
+      }
+      const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
+      const ct = cornerTarget(me, mons, playersNear, r);
+      const goal = ct ?? CORNER.wait;
+      // Sin skill hay que llegar pegado para el golpe normal.
+      const reach = ct ? (skill ? r : 1) : 0.8;
+      goalPoint = [goal.x, goal.y];
+      if (Math.hypot(goal.x - world.x, goal.y - world.y) > reach) {
+        phase = 'walk';
+        doing = ct ? `esquina de Arena 2: voy al grupo de ${monsterName(ct.type)}` : 'esquina de Arena 2: espero la reaparición';
+        await walkTowards(goal.x, goal.y);
+        return;
+      }
+      phase = 'wait';
+      doing = 'esquina de Arena 2: espero la reaparición';
+      await sleep(300);
+      return;
+    }
+    // Viajando por el camino de la llegada a la esquina.
+    if (cornerRouteIdx == null || now - cornerRouteAt > 20_000) cornerRouteIdx = null;
+    const wp = nextRoutePoint(me, cornerRouteIdx);
+    cornerRouteIdx = wp.idx;
+    cornerRouteAt = now;
+    phase = 'walk';
+    goalPoint = [wp.x, wp.y];
+    doing = `camino a la esquina de Arena 2 (${wp.idx + 1}/${CORNER.route.length})`;
+    await walkTowards(wp.x, wp.y);
+  };
+  let attackTarget: number | null = null;
+  let attackSince = 0;
   let lastX = world.x;
   let lastY = world.y;
   // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
@@ -2763,6 +2030,9 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   };
 
   while ((deadline <= 0 || Date.now() < deadline) && !kicked) {
+    refreshAttackable();
+    // Señales de dorados a la estación (nuevos, movidos, idos): los ve aunque estén en zona segura.
+    for (const { payload } of goldReporter.update(world.map, [...world.npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) })), Date.now())) publishGold(payload);
     ticks++;
     {
       const t = Date.now();
@@ -2780,22 +2050,21 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Autoevaluación cada ~5 min (con la proyección de resets/día).
     if (Date.now() - lastReport >= REPORT_EVERY_MS) {
       lastReport = Date.now();
-      const spotTxt = currentSpot ? `spot ${currentSpot.name} (${Math.round(stayExp / Math.max((lastReport - spotSince) / 60_000, 1e-6))} exp/min)` : 'sin spot';
+      const spotTxt = currentSpot ? `spot ${currentSpot.name} (${Math.round(expLog.perMin(lastReport, 5 * 60_000))} exp/min)` : 'sin spot';
       const campTxt = camps.camp ? `, campamento (${camps.camp.x},${camps.camp.y}) vara ${Math.round(camps.best[world.map] ?? 0)} exp/min` : '';
       log(report.format(lastReport, world.level, learning.resets, `${kills} kills, ${lootCount} loot, ${spotTxt}${campTxt}`));
       log(`Tramos por ciclo:\n${cycleLog.format()}`);
     }
-    // Aprendizaje: cada ~2 min cierra un tramo, lo guarda y muestra la tabla.
-    if (LEARN_ENABLED && Date.now() - lastSummary >= LEARN_SUMMARY_MS) {
-      lastSummary = Date.now();
-      recordSample(meter.flush(lastSummary, world.level));
+    // Lo aprendido se guarda cada ~2 min.
+    if (Date.now() - lastSave >= SAVE_EVERY_MS) {
+      lastSave = Date.now();
       await persistLearning();
-      logLearningSummary();
     }
-    // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
-    //    compras son caras de confirmar y no queremos spamearlas.
-    if (!atlasRun && ticks % 25 === 0 && !haveHealingPotions()) {
-      await ensurePotions();
+    // 0b) Mago: Soul Barrier (16, escudo de maná) cada ~50 s, como el agente del navegador.
+    if (isMage() && world.skills.has(16) && Date.now() - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && Date.now() - lastCastAt > SKILL_PACE_MS) {
+      lastBarrierAt = Date.now(); lastCastAt = Date.now();
+      sendTargetedSkill(world.skills.get(16)!.index, playerId);
+      await sleep(SKILL_PACE_MS);
     }
     // 1) Sobrevivir tiene prioridad absoluta.
     if (checkSurvival()) {
@@ -2810,38 +2079,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       target = null;
       looting = null;
     }
-    // --atlas: arrancar solo al entrar al mundo (y tras reconectar), salvo que el usuario lo haya cortado.
-    if (ATLAS_ONLY && !atlasRun && !atlasHeld && !resetting && world.maxHp > 0) {
-      const r = startAtlas('--atlas');
-      if (!r.ok) {
-        panelLog(`Atlas: no arranco (${r.msg}); quedo en pausa.`);
-        atlasHeld = true;
-        paused = true;
-      }
-    }
-    // --scout: arrancar sola la búsqueda con la invasión; mientras, esperar en Lorencia.
-    if (SCOUT_ONLY && !scouting && !atlasRun && !resetting) {
-      const nowS = Date.now();
-      if (invasion?.status !== 'active') scoutArmed = true;
-      else if (scoutArmed) {
-        // Solo si vale la pena (usuario: "si quedan pocos vivos no tiene sentido buscar, ej. 5"):
-        // se sigue mirando cada tick hasta que haya más de SCOUT_START_ALIVE en un mapa al alcance.
-        const ch = chooseHuntMap({ invasion, level: world.level });
-        if (ch.ok && (ch.alive ?? 0) > SCOUT_START_ALIVE) { scoutArmed = false; startScout(ch.hunt, SCOUT_SECTOR, SCOUT_SECTORS, `invasión activa (${ch.alive} vivos en ${ch.hunt.name})`); }
-      }
-      if (!scouting && world.map !== 0 && scoutHomeTries < 3 && nowS >= scoutHomeNextAt && world.hp > 0) {
-        scoutHomeTries++;
-        scoutHomeNextAt = nowS + WARP_COOLDOWN_MS;
-        const lor = HUNT_MAPS[0];
-        doing = 'volviendo a Lorencia a esperar la invasión';
-        const spot: Spot = { index: lor.warp, name: 'Lorencia (espera)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-        if (await decide({ kind: 'travel', what: 'warp a Lorencia a esperar la invasión (--scout)', detail: { warp: lor.warp, map: lor.map, reason: 'scout' } })) {
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      if (!scouting) doing = 'esperando la invasión en Lorencia (--scout)';
-    }
     // En pausa no se hace nada más (las pociones de arriba siguen).
     if (paused) {
       phase = 'wait';
@@ -2853,204 +2090,9 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const sp = pendingWarp;
       pendingWarp = null;
       doing = `viajando a ${sp.name}`;
-      if (await decide({ kind: 'travel', what: `warp a ${sp.name} por orden del panel (${zenTxt(sp)})`, detail: { warp: sp.index, reason: 'panel' } })) {
-        if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
-      }
+      journal('travel', `warp a ${sp.name} por orden del panel (${zenTxt(sp)})`, { warp: sp.index, reason: 'panel' });
+      if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
       target = null;
-      continue;
-    }
-    // Buscador: nunca pelea (ni golpe ni skill), ni resetea, ni levanta loot.
-    // Corta solo (queda en pausa) con 0 vivos en el mapa, invasión terminada o 20 min.
-    if (scouting) {
-      const sc = scouting;
-      const nowS = Date.now();
-      const stop = shouldStopScout({ invasion, map: sc.hunt.map, since: sc.since, now: nowS });
-      if (stop) {
-        stopScout(stop);
-        target = null;
-        continue;
-      }
-      target = null;
-      looting = null;
-      if (world.map !== sc.hunt.map) {
-        for (const { payload } of sc.reporter.update(world.map, [], nowS)) publishGold(payload);
-        if (nowS < sc.nextWarpAt) {
-          await sleep(500);
-          continue;
-        }
-        if (sc.warpTries >= 3) {
-          stopScout(`no pude llegar a ${sc.hunt.name}`);
-          continue;
-        }
-        sc.warpTries++;
-        sc.nextWarpAt = nowS + WARP_COOLDOWN_MS;
-        doing = `viajando a ${sc.hunt.name} a buscar dorados`;
-        const spot: Spot = { index: sc.hunt.warp, name: `búsqueda ${sc.hunt.name}`, reqLevel: sc.hunt.reqLevel, zen: 0, map: sc.hunt.map };
-        if (await decide({ kind: 'travel', what: `warp a ${sc.hunt.name} para buscar dorados`, detail: { warp: sc.hunt.warp, map: sc.hunt.map, reason: 'scout' } })) {
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      // Avisar los dorados en scope (nuevos, movidos, idos).
-      const golds = [...npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) }));
-      for (const { payload, isNew } of sc.reporter.update(world.map, golds, nowS)) {
-        publishGold(payload);
-        if (isNew && 'x' in payload) panelLog(`Buscador: ${payload.name} en ${sc.hunt.name} (${payload.x},${payload.y}), id ${payload.id}.`);
-      }
-      phase = 'walk';
-      // HP bajo y sin pociones: alejarse del monstruo más cercano (nunca quedarse peleando).
-      if (world.maxHp > 0 && world.hp / world.maxHp < 0.5 && !haveHealingPotions()) {
-        let near: ScopedNpc | null = null;
-        let nd = Infinity;
-        for (const n of npcs.values()) {
-          const d = chebyshev(world.x, world.y, n.x, n.y);
-          if (d < nd) {
-            nd = d;
-            near = n;
-          }
-        }
-        if (near && nd <= SCOUT_FLEE_RANGE) {
-          const dx = world.x - near.x || 1;
-          const dy = world.y - near.y;
-          const fx = Math.min(255, Math.max(0, world.x + Math.sign(dx) * 5));
-          const fy = Math.min(255, Math.max(0, world.y + Math.sign(dy) * 5));
-          doing = `buscando dorados en ${sc.hunt.name}: me alejo de ${monsterName(near.type)} (HP bajo, sin pociones)`;
-          await walkTowards(fx, fy);
-          continue;
-        }
-      }
-      const g = sc.explorer.next(world.x, world.y, nowS);
-      goalPoint = [g.x, g.y];
-      doing = `buscando dorados en ${sc.hunt.name} (franja ${sc.sector}/${sc.sectors})`;
-      await walkTowards(g.x, g.y);
-      continue;
-    }
-    // Explorador (atlas): nunca pelea (ni golpe ni skill), ni resetea, ni levanta loot.
-    // Mapa por mapa (tope de tiempo cada uno), anota lo que ve en scope; al terminar, otra vuelta.
-    if (atlasRun) {
-      const at = atlasRun;
-      const book = atlasData();
-      const nowA = Date.now();
-      target = null;
-      looting = null;
-      if (atlasSaver.due(book, nowA)) saveAtlasNow('cada 30 s');
-      // Muerta: esperar el respawn sin mandar nada (después vuelve a warpear al mapa).
-      if (world.maxHp > 0 && world.hp <= 0) {
-        doing = 'muerta: espero el respawn';
-        await sleep(1000);
-        continue;
-      }
-      // Pociones antes de salir (y al empezar otra vuelta si se acabaron).
-      if (!at.potionsTried) {
-        at.potionsTried = true;
-        if (!haveHealingPotions()) {
-          doing = 'comprando pociones antes de explorar';
-          const r = await stockAtlasPotions();
-          at.cautious = r.bought === 0 && !haveHealingPotions();
-          if (at.cautious) panelLog(`Atlas: salgo sin pociones; huyo con HP < ${Math.round(ATLAS_FLEE_CAUTIOUS.pct * 100)} % de monstruos a ≤ ${ATLAS_FLEE_CAUTIOUS.range}.`);
-        } else at.cautious = false;
-        at.since = Date.now();
-        continue;
-      }
-      const cur = at.maps[at.idx];
-      // Descanso en Lorencia tras volver con HP crítico: el tiempo del mapa siguiente corre después.
-      if (nowA < at.restUntil) {
-        at.since = nowA;
-        doing = `descansando en Lorencia (${Math.ceil((at.restUntil - nowA) / 1000)} s) antes de ${cur.name}`;
-        phase = 'wait';
-        await sleep(1000);
-        continue;
-      }
-      const ex = atlasExplorer(cur.map);
-      const done = atlasMapDone({ since: at.since, now: nowA, minutes: ATLAS_MINUTES, fullPass: at.arrived && ex.passes > at.passesAtStart });
-      if (done) {
-        advanceAtlas(at, done, nowA);
-        continue;
-      }
-      if (world.map !== cur.map) {
-        at.arrived = false;
-        for (const { payload } of at.reporter.update(world.map, [], nowA)) publishGold(payload);
-        if (world.hp <= 0 || nowA < at.nextWarpAt) {
-          await sleep(500);
-          continue;
-        }
-        if (at.warpTries >= 3) {
-          advanceAtlas(at, `no pude llegar en 3 intentos`, nowA);
-          continue;
-        }
-        at.warpTries++;
-        at.nextWarpAt = nowA + WARP_COOLDOWN_MS;
-        doing = `viajando a ${cur.name} a explorar`;
-        const spot: Spot = { index: cur.warp, name: `atlas ${cur.name}`, reqLevel: cur.reqLevel, zen: 0, map: cur.map };
-        if (await decide({ kind: 'travel', what: `warp a ${cur.name} para explorar (atlas)`, detail: { warp: cur.warp, map: cur.map, reason: 'atlas' } })) {
-          // Sin medir: explorar no es farmeo y ensuciaría el aprendizaje del spot.
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      if (!at.arrived) {
-        at.arrived = true;
-        at.warpTries = 0;
-        at.passesAtStart = ex.passes;
-        // El objetivo viejo de este mapa (de otra vuelta) ya venció: elegir de nuevo.
-        ex.goal = null;
-        book.beginVisit(cur.map);
-        panelLog(`Atlas: en ${cur.name}, ${ex.visitedCount()}/${ex.totalCells()} celdas ya vistas en esta vuelta.`);
-      }
-      // Anotar todo lo que hay en scope; los dorados también van a /gold (el cazador de Horaz).
-      // La invasión dura 15 min: un 0xFD "activa" de hace más de 20 min ya no cuenta.
-      const duringInvasion = invasion?.status === 'active' && nowA - invasion.at < 20 * 60_000;
-      const golds: { id: number; x: number; y: number; name: string }[] = [];
-      for (const n of npcs.values()) {
-        const golden = isGolden(n);
-        const name = monsterName(n.type);
-        const g = book.observe({ map: world.map, x: n.x, y: n.y, id: n.id, type: n.type, name, golden, duringInvasion }, nowA);
-        if (g) panelLog(`Atlas: ${g.name} en ${cur.name} (${g.x},${g.y}), id ${g.id}${duringInvasion ? ' (invasión)' : ' (FUERA de la invasión)'}.`);
-        if (golden) golds.push({ id: n.id, x: n.x, y: n.y, name });
-      }
-      for (const { payload } of at.reporter.update(world.map, golds, nowA)) publishGold(payload);
-      phase = 'walk';
-      const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
-      // HP crítico y sin pociones: a Lorencia, 60 s, y el mapa siguiente.
-      if (world.hp > 0 && hpPct < ATLAS_CRITICAL_PCT && !haveHealingPotions()) {
-        panelLog(`Atlas: HP ${world.hp}/${world.maxHp} y sin pociones en ${cur.name}: vuelvo a Lorencia.`);
-        if (world.map !== ATLAS_SAFE_MAP) {
-          const lor = ATLAS_WARPS.find((m) => m.map === ATLAS_SAFE_MAP)!;
-          const spot: Spot = { index: lor.warp, name: 'Lorencia (a salvo)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-          if (await decide({ kind: 'travel', what: 'warp a Lorencia: HP crítico sin pociones (atlas)', detail: { warp: lor.warp, map: lor.map, reason: 'atlas-flee' } })) {
-            await warpAndWait(spot, false);
-          }
-        }
-        advanceAtlas(at, 'HP crítico sin pociones', Date.now());
-        at.restUntil = Date.now() + ATLAS_REST_MS;
-        continue;
-      }
-      // HP bajo: alejarse del monstruo más cercano (nunca quedarse peleando).
-      const flee = at.cautious && !haveHealingPotions() ? ATLAS_FLEE_CAUTIOUS : ATLAS_FLEE;
-      if (hpPct < flee.pct) {
-        let near: ScopedNpc | null = null;
-        let nd = Infinity;
-        for (const n of npcs.values()) {
-          const d = chebyshev(world.x, world.y, n.x, n.y);
-          if (d < nd) {
-            nd = d;
-            near = n;
-          }
-        }
-        if (near && nd <= flee.range) {
-          const dx = world.x - near.x || 1;
-          const dy = world.y - near.y;
-          const fx = Math.min(255, Math.max(0, world.x + Math.sign(dx) * 5));
-          const fy = Math.min(255, Math.max(0, world.y + Math.sign(dy) * 5));
-          doing = `explorando ${cur.name}: me alejo de ${monsterName(near.type)} (HP ${Math.round(hpPct * 100)} %)`;
-          await walkTowards(fx, fy);
-          continue;
-        }
-      }
-      const g = ex.next(world.x, world.y, nowA);
-      goalPoint = [g.x, g.y];
-      doing = `explorando ${cur.name} (celda ${Math.min(ex.visitedCount() + 1, ex.totalCells())}/${ex.totalCells()})`;
-      await walkTowards(g.x, g.y);
       continue;
     }
     // Cacería: cortar a tiempo (0xFD dice 0 vivos, derrotada, 15 min) y llegar al mapa.
@@ -3077,10 +2119,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         h.nextWarpAt = nowH + WARP_COOLDOWN_MS;
         doing = `viajando a ${h.hunt.name} a cazar dorados`;
         const spot: Spot = { index: h.hunt.warp, name: `cacería ${h.hunt.name}`, reqLevel: h.hunt.reqLevel, zen: 0, map: h.hunt.map };
-        if (await decide({ kind: 'travel', what: `warp a ${h.hunt.name} para cazar dorados`, detail: { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' } })) {
-          // Sin medir: la cacería no es farmeo y ensuciaría el aprendizaje del spot.
-          await warpAndWait(spot, false);
-        }
+        journal('travel', `warp a ${h.hunt.name} para cazar dorados`, { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' });
+        await warpAndWait(spot);
         continue;
       }
     }
@@ -3106,6 +2146,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
+    // 3b) La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, salvo cazando, con un
+    //     spot fijado por el panel o mientras está afuera porque estaba llena.
+    // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.
+    if (cornerAwayUntil && Date.now() >= cornerAwayUntil && world.level >= CORNER.noReturnLevel) cornerAwayUntil = Date.now() + 60_000;
+    if (!hunting && !pinnedSpot && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: cornerAwayUntil, now: Date.now() })) {
+      await cornerStep();
+      continue;
+    }
+
     // 4) Hambre: casi nada de exp en 45 s con jugadores cerca → cambiar YA de
     //    entrada o de mapa (o, si no hay a dónde, de campamento).
     const now0 = Date.now();
@@ -3119,7 +2168,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 5) ¿Cambiar de spot? (ruta fija: tramo nuevo, competencia, hambre). Cada
     //    10 ticks, o ya si hay hambre/competencia; respeta WARP_COOLDOWN_MS.
-    const crowded = hungry.starving || camps.crowdedSpot(now0);
+    // Devias lleno (como el navegador): 3+ jugadores a <= 8 del campamento durante 20 s.
+    const devCrowd = world.map === 2 && world.level < CORNER.minLevel && camps.camp != null &&
+      [...world.players.values()].filter((q) => chebyshev(q.x, q.y, camps.camp!.x, camps.camp!.y) <= 8).length >= 3;
+    if (devCrowd) devCrowdSince ??= now0;
+    else devCrowdSince = null;
+    const devCrowded = devCrowdSince != null && now0 - devCrowdSince > 20_000;
+    if (devCrowded) log(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de spot.`);
+    const crowded = hungry.starving || camps.crowdedSpot(now0) || devCrowded;
+    if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
     if (!hunting && (ticks % 10 === 0 || crowded || !currentSpot)) {
       const moved = await maybeChangeSpot({ crowded });
@@ -3133,13 +2190,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         logCampEvents();
         target = null;
       }
-    }
-
-    // 6) Desviar inventario antes de llenarse.
-    if (inventoryPressure() > SELL_AT_PRESSURE) {
-      doing = 'vendiendo basura';
-      await sellJunkToMerchant();
-      continue;
     }
 
     // 7) Loot valioso (cajas, joyas, excelentes, guantes 10/1), PERO no si ya
@@ -3238,8 +2288,20 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
       phase = 'fight';
       doing = `${hunting ? 'cazando: ' : ''}peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
-      if (dist <= 1) {
-        // A distancia de golpe: skill si hay (respetando SKILL_PACE_MS desde el
+      const reachSkill = pickAttackSkill();
+      if (dist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
+        if (attackTarget !== target) {
+          attackTarget = target;
+          attackSince = Date.now();
+        } else if (!isGolden(t) && Date.now() - attackSince > TARGET_NO_KILL_MS) {
+          // Los dorados tienen mucha vida: a esos no se los abandona por tiempo.
+          log(`Objetivo ${target} (${monsterName(t.type)}) no muere en ${TARGET_NO_KILL_MS / 1000} s de golpes: lo abandono.`);
+          unreachable.add(target);
+          target = null;
+          attackTarget = null;
+          continue;
+        }
+        // A distancia de golpe (o de cast, para un mago): skill si hay (respetando SKILL_PACE_MS desde el
         // último cast, también los del camino), si no el hit normal.
         const sinceCast = Date.now() - lastCastAt;
         if (sinceCast < SKILL_PACE_MS && pickAttackSkill()) {
@@ -3250,12 +2312,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
           lastCastAt = Date.now();
           skillsUsed++;
           await sleep(SKILL_PACE_MS);
-        } else {
+        } else if (dist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
           await sleep(ATTACK_PACE_MS);
+        } else {
+          await sleep(SKILL_PACE_MS); // sin maná para el skill: esperar en vez de pegar de lejos
         }
         continue;
       }
+      attackTarget = null; // fuera de alcance: el reloj de "no muere" vuelve a empezar al llegar
       if (stuckCount >= 8) {
         log(`Objetivo ${target} inalcanzable, lo abandono.`);
         unreachable.add(target);
@@ -3293,11 +2358,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (explorer.isDry(now)) {
       const where = currentSpot?.name ?? `map ${world.map}`;
       log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${where}: busco otro spot.`);
-      if (currentSpot) {
-        dryAt.set(currentSpot.index, now);
-        // Corta el tramo ya: queda como muestra (0 exp) aunque después no se warpee.
-        recordSample(meter.flush(now, world.level));
-      }
+      if (currentSpot) dryAt.set(currentSpot.index, now);
       const moved = await maybeChangeSpot({ mapDead: true });
       if (!moved) {
         log('No hay otro spot elegible (o se rechazó el warp): sigo explorando acá.');
@@ -3367,12 +2428,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   EventBus.off('ExperienceGained', onExp);
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
-  if (LEARN_ENABLED) {
-    // Cierra el tramo y guarda.
-    endStint();
-    await persistLearning();
-    logLearningSummary();
-  }
+  await persistLearning();
   drops.clear();
   looting = null;
 
@@ -3403,6 +2459,9 @@ const FATAL_LOGIN = new Set<number>([
   LoginResponseLoginResultEnum.WrongVersion,
 ]);
 
+// Código de salida de --exit-if-in-use (la estación lo muestra como "cuenta abierta en otro lado").
+const EXIT_IN_USE = 3;
+
 let worldTracked = false;
 let economyWatched = false;
 
@@ -3417,15 +2476,13 @@ function clearScope() {
   world.players.clear();
   drops.clear();
   looting = null;
-  openedNpcId = null;
   currentSpot = null;
-  meter.stop();
   inGameAt = 0;
   doing = 'conectando';
   goalPoint = null;
 }
 
-async function session(first: boolean, deadline: number): Promise<LoopResult> {
+async function session(deadline: number): Promise<LoopResult> {
   kicked = false;
   clearScope();
   await connectToConnectServer();
@@ -3440,28 +2497,8 @@ async function session(first: boolean, deadline: number): Promise<LoopResult> {
     trackPanelPackets();
     worldTracked = true;
   }
-  const { startX, startY } = await loginAndSelectCharacter();
+  await loginAndSelectCharacter();
 
-  if (first && args.has('--probe-dir')) {
-    const dir = parseInt(args.get('--probe-dir')!);
-    log(`\n--- Modo prueba: UN solo WalkRequest, dirección ${dir}, desde (${startX},${startY}) ---`);
-    sendToGS(buildWalkPacket(startX, startY, [dir]).buffer);
-    await sleep(800);
-    console.log(`\n=== Resumen (modo prueba) ===`);
-    console.log(`Se mandó 1 paquete válido, dirección ${dir}. Revisá la DB para ver si la posición cambió.`);
-    gsSocket?.close();
-    process.exit(0);
-  }
-
-  if (first) {
-    const warp = args.get('--warp') ? parseInt(args.get('--warp')!) : null;
-    if (warp != null) {
-      const spot = WARP_SPOTS.find((sp) => sp.index === warp) ?? { index: warp, name: `warp ${warp}`, reqLevel: 0, zen: 0 };
-      await warpAndWait(spot);
-    }
-    const moveTo = args.get('--move');
-    if (moveTo) await moveToMap(moveTo);
-  }
   // Damos un par de segundos a que lleguen skill list, inventario y NPCs
   // en scope antes de que el loop empiece a decidir.
   await sleep(2000);
@@ -3482,7 +2519,6 @@ async function main() {
       const now = Date.now();
       updateTrail(now);
       noteModeChange();
-      statusServer?.broadcastState(snapshotWorld());
       statusServer?.broadcastPanelState(buildPanelState(now));
     }, 1000);
     setInterval(pollEvents, EVENT_POLL_TICK_MS);
@@ -3508,7 +2544,7 @@ async function main() {
     let alreadyConnected = false;
     try {
       sessions++;
-      const r = await session(first, deadline);
+      const r = await session(deadline);
       for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
     } catch (e) {
       if (e instanceof LoginError && FATAL_LOGIN.has(e.result)) {
@@ -3517,6 +2553,14 @@ async function main() {
         process.exit(1);
       }
       alreadyConnected = e instanceof LoginError && e.result === LoginResponseLoginResultEnum.AccountAlreadyConnected;
+      // --exit-if-in-use (lo pasa la estación): si en el PRIMER login la cuenta ya está conectada, es
+      // otra sesión (el navegador): no se insiste. Después de un corte sí se reintenta, porque el
+      // server tarda en soltar la sesión vieja del propio bot.
+      if (first && alreadyConnected && args.has('--exit-if-in-use')) {
+        console.error('La cuenta ya está conectada en otro lado (¿la pestaña del navegador?): no entro.');
+        closeSockets();
+        process.exit(EXIT_IN_USE);
+      }
       log(`Sesión #${sessions} terminó con error: ${(e as Error).message}`);
     }
     first = false;
@@ -3528,7 +2572,6 @@ async function main() {
     await sleep(wait);
   }
 
-  saveAtlasNow('fin de la corrida');
   console.log(`\n=== Resumen ===`);
   console.log(`Duración: ${autoSeconds}s, ${sessions} sesión(es), sin GUI, ritmo humano.`);
   console.log(`Kills: ${total.kills}  Exp: ${total.totalExpGained}  Pociones: ${total.potionsDrunk}`);
@@ -3539,10 +2582,9 @@ async function main() {
   process.exit(0);
 }
 
-// Ctrl+C / kill: guardar el atlas antes de salir (escritura sincrónica).
+// Ctrl+C / kill (la estación desconecta con SIGTERM).
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    saveAtlasNow(sig);
     closeSockets();
     process.exit(0);
   });

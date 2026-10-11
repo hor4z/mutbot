@@ -1,6 +1,6 @@
 /**
  * Campamentos: cómo juega una persona. Elegir un lugar, pelear ahí mientras
- * rinde, mudarse cuando no. Portado del agente web (`browser-agent.js`:
+ * rinde, mudarse cuando no. Portado del agente web (`browser/browser-agent.js`:
  * findCamp, pickTarget, campMem, curiosidad, correa, hambre, caster), que es el
  * que juega hoy con el usuario y aprendió cada regla en vivo.
  *
@@ -80,7 +80,10 @@ export const CAMP = {
   // 2M exp/min con un jugador a 1 tile y no se movía.
   HUNGER_WINDOW_MS: 45_000,
   HUNGER_FRAC: 0.25,
-  HUNGER_DEFAULT_RATE: 5e6,   // sin referencia del tramo todavía
+  // Sin referencia del tramo todavía: hambre solo si no ganó NADA. Con un piso fijo (5M/min) Horaz,
+  // recién reseteado en Devias (0,5-2,5M/min), se creía con hambre a los 45 s y saltaba de spot antes
+  // del minuto que hace falta para aprender la referencia: Devias 3 → 4 → 2 sin parar (2026-10-11).
+  HUNGER_DEFAULT_RATE: 1,
   HUNGER_RIVAL_DIST: 12,
   HUNGER_SKIP_AFTER_WARP_MS: 60_000, // la referencia no aprende del primer minuto tras un warp
   HUNGER_MIN_AFTER_WARP_MS: 45_000,
@@ -102,30 +105,12 @@ export const ARRIVAL_SPOT_DIR: Record<number, [number, number]> = { 2: [-1, 1] }
 export const ARRIVAL_SPOT_DIST = 12; // dentro de 8-18 tiles, como el agente web
 // Arenas (83/84/85 = Arena 2/3/4): la "zona de abajo" (+x, −y) está llena de
 // monstruos de mucha exp (125-129). El agente web la calcula con la grilla de
-// caminables del cliente (downZone); el headless no tiene esa grilla (los .att
+// caminables del cliente (downZone); el headless no la calcula (los .att
 // de estos mapas custom no están en ~/self/mu/public/game-assets), así que usa lo
 // que dio el agente web en vivo: (91,13) en Arena 3 y 4. Arena 2 se asume igual
 // (mismo diseño de mapa), SIN VERIFICAR.
 export const DOWN_ZONE_MAPS = [83, 84, 85] as const;
 export const DOWN_ZONE_DEFAULT: Record<number, Pos> = { 83: { x: 91, y: 13 }, 84: { x: 91, y: 13 }, 85: { x: 91, y: 13 } };
-
-/**
- * Port de `ai.downZone`: centro de los puntos caminables más "abajo" en
- * pantalla (mayor x − y). Muestreo cada 3 tiles, los 40 de mayor proyección,
- * y el punto caminable más cercano a su centro. Para usarlo hace falta la
- * grilla de caminables del mapa (`EncTerrainN.att`, ver AGENTS.md).
- */
-export function downZone(isWalkable: (x: number, y: number) => boolean): Pos | null {
-  const pts: Array<Pos & { s: number }> = [];
-  for (let x = 4; x < 252; x += 3) for (let y = 4; y < 252; y += 3) if (isWalkable(x, y)) pts.push({ x, y, s: x - y });
-  if (!pts.length) return null;
-  pts.sort((a, b) => b.s - a.s);
-  const top = pts.slice(0, 40);
-  const cx = top.reduce((a, p) => a + p.x, 0) / top.length;
-  const cy = top.reduce((a, p) => a + p.y, 0) / top.length;
-  const g = top.reduce((b, p) => (Math.abs(p.x - cx) + Math.abs(p.y - cy) < Math.abs(b.x - cx) + Math.abs(b.y - cy) ? p : b));
-  return { x: g.x, y: g.y };
-}
 
 // ---------------------------------------------------------------------------
 // Memoria de campamentos: posición + exp/min real + nivel + n, por mapa.

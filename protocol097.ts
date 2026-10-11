@@ -70,3 +70,77 @@ export class Backoff {
     return alreadyConnected ? Math.max(ms, this.p.ALREADY_CONNECTED_MS) : ms;
   }
 }
+
+// 0x15 S2C: en el XML (season 6) es ObjectMoved, C1 de 8 bytes (id, x, y). Este server 0.97d manda con
+// el MISMO código el daño de un golpe (ObjectHit, C1 de 10 bytes: id, daño u16 BE, tipo). Leerlo como
+// movimiento ponía al monstruo golpeado en (daño >> 8, daño & 255): Horaz quedaba tirando skills a un
+// lugar vacío sin matar nada (2026-10-11). Solo es movimiento si mide 8.
+export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): boolean {
+  const b = u8(raw);
+  return b.length === 8 && b[0] === 0xc1 && b[2] === 0x15;
+}
+
+// ---------------------------------------------------------------------------
+// Ítems. Este server manda casi todos los ítems en 5 bytes (formato clásico 0.97); el cliente web los
+// convierte a 12 antes de leerlos. Confirmado con bytes reales de Horaz (2026-10-11): inventario y
+// drops de ítems en 5 bytes; los drops de zen (14/15) en el formato de 12.
+//   5 bytes: r = e[0] | (e[3] & 0x80) << 1 → grupo r >> 5, número r & 31; nivel (+N) en los bits 3-6
+//            de e[1]; opciones excelentes en los 6 bits bajos de e[3]; e[2] = durabilidad.
+//   12 bytes (itemSerializer del cliente): número e[0], grupo nibble alto de e[5], nivel igual.
+// ---------------------------------------------------------------------------
+export type ItemInfo = { group: number; num: number; level: number; excellent: boolean };
+export type ItemSlot = ItemInfo & { slot: number };
+export type ItemDrop = ItemInfo & { id: number; x: number; y: number };
+
+export function decodeItem5(e: Uint8Array): ItemInfo {
+  const r = e[0] | ((e[3] & 0x80) << 1);
+  return { group: r >> 5, num: r & 31, level: (e[1] >> 3) & 0x0f, excellent: (e[3] & 0x3f) !== 0 };
+}
+
+export function decodeItem12(e: Uint8Array): ItemInfo {
+  return { group: e[5] >> 4, num: e[0], level: (e[1] >> 3) & 0x0f, excellent: isExcellentItemData(e) };
+}
+
+/** Largo de cada ítem según el largo del paquete: `header + count * (prefix + item)`; 0 = no cuadra. */
+function itemSize(total: number, header: number, count: number, prefix: number): 5 | 12 | 0 {
+  if (total === header + count * (prefix + 5)) return 5;
+  if (total === header + count * (prefix + 12)) return 12;
+  return 0;
+}
+const decode = (size: 5 | 12, e: Uint8Array) => (size === 5 ? decodeItem5(e) : decodeItem12(e));
+
+/** CharacterInventory (C4 F3 10): count en el byte 5, después [slot][ítem]. null = largo inesperado. */
+export function parseInventory(raw: Uint8Array | DataView | ArrayBuffer): ItemSlot[] | null {
+  const b = u8(raw);
+  const count = b[5] ?? 0;
+  const size = itemSize(b.length, 6, count, 1);
+  if (!size) return null;
+  const out: ItemSlot[] = [];
+  for (let i = 0; i < count; i++) {
+    const o = 6 + i * (1 + size);
+    out.push({ slot: b[o], ...decode(size, b.subarray(o + 1, o + 1 + size)) });
+  }
+  return out;
+}
+
+/** ItemsDropped (C2 20): count en el byte 4, después [id u16 BE][x][y][ítem]. null = largo inesperado. */
+export function parseItemsDropped(raw: Uint8Array | DataView | ArrayBuffer): ItemDrop[] | null {
+  const b = u8(raw);
+  const count = b[4] ?? 0;
+  const size = count > 0 ? itemSize(b.length, 5, count, 4) : 0;
+  if (!size) return null;
+  const out: ItemDrop[] = [];
+  for (let i = 0; i < count; i++) {
+    const o = 5 + i * (4 + size);
+    out.push({ id: ((b[o] << 8) | b[o + 1]) & 0x7fff, x: b[o + 2], y: b[o + 3], ...decode(size, b.subarray(o + 4, o + 4 + size)) });
+  }
+  return out;
+}
+
+/** ItemAddedToInventory (C3 22): slot en el byte 3, ítem desde el 4 (5 o 12 bytes). */
+export function parseItemAdded(raw: Uint8Array | DataView | ArrayBuffer): ItemSlot | null {
+  const b = u8(raw);
+  if (b.length >= 4 + 12) return { slot: b[3], ...decodeItem12(b.subarray(4, 16)) };
+  if (b.length >= 4 + 5) return { slot: b[3], ...decodeItem5(b.subarray(4, 9)) };
+  return null;
+}

@@ -507,6 +507,9 @@
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
       if (pd.currentMP / pd.maxMP < c.mpPot && now - ai.lastPotion > 900) { const s = potionSlot(4, 6); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; return; } }
+      // Regla fuerte del usuario ("si aparece un dragón o lo que sea dorado lo matás y recogés las
+      // cajas"): con un dorado a la vista o cajas sin levantar (corner.js), no cambiar de mapa.
+      if (window.__corner?.dragon?.() || now < (window.__corner?.dragonUntil ?? 0) || ai.looting) return;
       // Spots: medir exp/min del actual y cambiar si no conviene.
       const run = ai.spotRun;
       const runMin = run ? (now - run.start) / 60000 : 0;
@@ -639,7 +642,7 @@
     // Baúl: con menos de vaultMinFree libres (o < vaultAfterResetFree recién reseteado, que ya está en
     // Lorencia), como mucho cada 3 min. No en medio de una cacería.
     if (!window.__hunt?.on && Date.now() - (ai.lastVault ?? 0) > 180000 && (freeSlots() < ai.cfg.vaultMinFree || (pd.level < 15 && W().mapIndex === 0 && freeSlots() < ai.cfg.vaultAfterResetFree))) { ai.lastVault = Date.now(); return ai.depositToVault(`${freeSlots()} lugares libres`); }
-    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
+    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0) && !(window.__hunt?.auto && [47, 48, 49, 50, 51].includes(new Date().getMinutes())) && !(window.__corner?.dragon?.() || Date.now() < (window.__corner?.dragonUntil ?? 0) || ai.looting)) return ai.doReset(); // el reset espera al dorado y sus cajas
     // Prueba del nivel mínimo de reset: 300 y, si lo rechaza, 350. Una vez por nivel, para siempre.
     // Si lo acepta, desde ahí resetea a ese nivel (lo que se mide son resets por día).
     if (ai.resetMin.accepted != null && ai.resetMin.accepted < ai.cfg.resetLevel) ai.cfg.resetLevel = ai.resetMin.accepted;
@@ -725,7 +728,9 @@
     if (!ai.on || ai.busy || !pe || w.castRequest || S.sceneLoading || S.uiState !== 5 || pd.currentMP / pd.maxMP < ai.cfg.skillMinMp) return;
     const P = pe.transform.pos; let best = null, bd = 1e9;
     const t = ai.target; if (alive(t) && dist(P, t.transform.pos) <= ai.cfg.castRange) best = t;
-    if (!best) for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || !alive(e)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.castRange && d < bd) { bd = d; best = e; } }
+    // Cazando dorados no se gira contra monstruos comunes al pasar (usuario: "se ponen a pegar y matar
+    // monstruos mientras buscan o quedan colgados"): solo contra el objetivo (el dorado).
+    if (!best && !window.__hunt?.on) for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || !alive(e)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.castRange && d < bd) { bd = d; best = e; } }
     if (!best) return;
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false };
@@ -775,9 +780,12 @@
   // de armas que un DK no usa (usuario: "lleno de cosas que son basura").
   ai.isValuable = (di) => {
     if (!di || di.isMoney) return false;
-    if (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) return true;
-    if (di.group === 12 && di.num === 15) return true;
-    return [7, 8, 9, 10, 11].includes(di.group) && di.num === 1 && !!di.item?.isExcellent; // comunes no: juntó 9 pares de guantes +2/+3
+    // Usuario 2026-10-11: "las joyas no valen nada en el juego, se compran"; lo que importa es mejorar
+    // el set. Se levantan las cajas (14/11: Box of Luck / de Kundun) y cualquier item excelente (armas,
+    // escudos y partes de set, grupos 0-11). Antes solo las partes de set con num 1 (un error) y joyas.
+    // Después: "Horaz tiene unos guantes excelentes que no sirven, no tiene sentido juntar eso" (y al
+    // tirarlos el looter los volvía a levantar). Solo cajas.
+    return di.group === 14 && di.num === 11;
   };
   ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {

@@ -10,15 +10,13 @@
  *
  * Por HTTP (mismo puerto, solo lectura):
  *   GET / y /panel       → panel.html de la raíz del repo (404 si no está)
- *   GET /assets/<path>   → modelos y texturas del cliente desde MU_ASSETS
- *                          (default ~/self/mu/public/game-assets), solo
- *                          extensiones de la lista y sin salir de ese directorio
+ *   GET /terrain/<mapa>  → terreno del mapa (terrain.ts) para dibujarlo
  *
  * Contrato completo en panel-protocol.ts. Mismo patrón que proxy.ts: Bun.serve
  * con upgrade a WebSocket.
  */
-import { homedir } from 'node:os';
-import { extname, join, resolve, sep } from 'node:path';
+import { terrainOf } from './terrain';
+import { join } from 'node:path';
 import { PANEL_COMMANDS, isPanelCommand, type PanelCommand, type PanelServerMessage, type PanelState } from './panel-protocol';
 
 export type DecisionLogEntry = {
@@ -30,14 +28,11 @@ export type DecisionLogEntry = {
   autoOk: boolean;
 };
 
-export type WorldSnapshot = Record<string, unknown>;
-
 // Los mensajes del panel (panel-protocol.ts) más los de telemetría de antes
 // (history/state/decision), que se conservan para no romper clientes viejos.
 type ServerMessage =
   | PanelServerMessage
   | { type: 'history'; decisions: DecisionLogEntry[] }
-  | { type: 'state'; at: string; world: WorldSnapshot }
   | { type: 'decision'; decision: DecisionLogEntry };
 
 type WsData = Record<string, never>;
@@ -46,7 +41,6 @@ export type CommandResult = { ok: boolean; msg: string };
 export type CommandHandler = (command: PanelCommand) => CommandResult | Promise<CommandResult>;
 
 export type StatusServer = {
-  broadcastState(snapshot: WorldSnapshot): void;
   broadcastDecision(entry: DecisionLogEntry): void;
   broadcastPanelState(state: PanelState): void;
   broadcastLog(text: string): void;
@@ -97,41 +91,7 @@ export function originAllowed(origin: string | null, port: number): boolean {
   return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
 }
 
-// --- Assets del cliente (modelos/texturas para el 3D del panel) -------------
-const ASSET_TYPES: Record<string, string> = {
-  '.glb': 'model/gltf-binary',
-  '.jpg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.ozt': 'application/octet-stream',
-  '.tga': 'application/octet-stream',
-  '.ozj': 'image/jpeg', // OZJ = JPEG con un header de unos bytes
-};
-
-/**
- * Ruta en disco de un asset pedido, o null si no se sirve (extensión fuera de
- * la lista, o la ruta resuelta se sale del directorio base: path traversal).
- * Exportada para testearla.
- */
-export function resolveAssetPath(baseDir: string, urlPath: string): string | null {
-  let rel: string;
-  try {
-    rel = decodeURIComponent(urlPath);
-  } catch {
-    return null;
-  }
-  if (rel.includes('\0')) return null;
-  if (!ASSET_TYPES[extname(rel).toLowerCase()]) return null;
-  const base = resolve(baseDir);
-  const full = resolve(base, '.' + (rel.startsWith('/') ? rel : '/' + rel));
-  if (!full.startsWith(base + sep)) return null;
-  return full;
-}
-
-export const assetContentType = (path: string) => ASSET_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream';
-
-export function startStatusServer(opts: { port: number; assetsDir?: string }): StatusServer {
-  const assetsDir = opts.assetsDir ?? process.env.MU_ASSETS ?? join(homedir(), 'self', 'mu', 'public', 'game-assets');
+export function startStatusServer(opts: { port: number }): StatusServer {
   const history: DecisionLogEntry[] = [];
   const logs: Array<{ at: number; text: string }> = [];
   const clients = new Set<{ send(data: string): void }>();
@@ -181,13 +141,12 @@ export function startStatusServer(opts: { port: number; assetsDir?: string }): S
         if (await file.exists()) return new Response(file, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
         return new Response('No hay panel.html en la raíz del repo.', { status: 404 });
       }
-      if (url.pathname.startsWith('/assets/')) {
-        const path = resolveAssetPath(assetsDir, url.pathname.slice('/assets'.length));
-        if (path) {
-          const file = Bun.file(path);
-          if (await file.exists()) return new Response(file, { headers: { 'content-type': assetContentType(path), 'cache-control': 'max-age=3600' } });
-        }
-        return new Response('No encontrado.', { status: 404 });
+      // Terreno del mapa (EncTerrainN.att descifrado, 256×256 bytes de atributos): paredes y zona
+      // segura para dibujar el mapa en el panel aunque no haya minimapa (Arenas).
+      const tm = url.pathname.match(/^\/terrain\/(\d{1,3})$/);
+      if (tm) {
+        const grid = terrainOf(Number(tm[1]));
+        return grid ? new Response(grid, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'max-age=3600' } }) : new Response('Sin terreno para ese mapa.', { status: 404 });
       }
       return new Response('No encontrado.', { status: 404 });
     },
@@ -216,9 +175,6 @@ export function startStatusServer(opts: { port: number; assetsDir?: string }): S
   });
 
   return {
-    broadcastState(snapshot) {
-      broadcast({ type: 'state', at: new Date().toISOString(), world: snapshot });
-    },
     broadcastDecision(entry) {
       history.push(entry);
       if (history.length > HISTORY_SIZE) history.shift();

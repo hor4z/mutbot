@@ -8,11 +8,11 @@
  */
 import { PANEL_COMMANDS, isPanelCommand } from './panel-protocol';
 import {
-  GoldReporter, HUNT_MAX_MS, HuntExplorer, SCOUT_MAX_MS, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
-  goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout,
+  GoldReporter, HUNT_MAX_MS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
+  goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt,
   toPanelCycle, validateWarp,
 } from './panel-logic';
-import { parseClientMessage, originAllowed, resolveAssetPath, assetContentType, MAX_CLIENT_MESSAGE_BYTES } from './ws-server';
+import { parseClientMessage, originAllowed, MAX_CLIENT_MESSAGE_BYTES } from './ws-server';
 import monstersData from './data/monsters.json';
 
 let fails = 0;
@@ -69,13 +69,11 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('0x91 CC sin byte 6 → null', parseOpeningState(Uint8Array.from([0xc1, 6, 0x91, 4, 0, 0]), NOW) === null);
 }
 
-// --- isPanelCommand: solo las 7 órdenes con sus campos ----------------------------
+// --- isPanelCommand: solo las 5 órdenes con sus campos ----------------------------
 {
-  ok('PANEL_COMMANDS son 7', PANEL_COMMANDS.length === 7);
+  ok('PANEL_COMMANDS son 5', PANEL_COMMANDS.length === 5);
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
-    { cmd: 'scout' }, { cmd: 'scout', map: 3 }, { cmd: 'scout', sector: 2 }, { cmd: 'scout', map: 2, sector: 3, sectors: 4 }, { cmd: 'scout', sectors: 1 },
-    { cmd: 'atlas' },
   ]) {
     ok(`acepta ${JSON.stringify(c)}`, isPanelCommand(c));
   }
@@ -86,15 +84,13 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'warp' }, { cmd: 'warp', warp: '26' }, { cmd: 'warp', warp: 1.5 }, { cmd: 'warp', warp: -1 }, { cmd: 'warp', warp: 256 },
     { cmd: 'warp', warp: 2, map: 0 },
     { cmd: 'hunt', map: 'Noria' }, { cmd: 'hunt', map: 300 }, { cmd: 'hunt', map: 3, warp: 3 },
-    { cmd: 'scout', sector: 3 }, { cmd: 'scout', sector: 0 }, { cmd: 'scout', sector: 2, sectors: 1 }, { cmd: 'scout', sectors: 0 },
-    { cmd: 'scout', sectors: 17 }, { cmd: 'scout', sector: 1.5 }, { cmd: 'scout', map: 'Noria' }, { cmd: 'scout', attack: true },
     { cmd: 'hunt', sector: 1 },
-    { cmd: 'atlas', map: 3 }, { cmd: 'atlas', maps: [0, 3] }, { cmd: 'ATLAS' }, { cmd: 'atlas', attack: true },
+    { cmd: 'scout' }, { cmd: 'atlas' },
   ];
   for (const c of bad) ok(`rechaza ${JSON.stringify(c) ?? String(c)}`, !isPanelCommand(c));
 }
 
-// --- ws-server: mensajes del panel, origen y assets ------------------------------
+// --- ws-server: mensajes del panel y origen ------------------------------
 {
   const good = parseClientMessage(JSON.stringify({ type: 'command', id: 7, command: { cmd: 'warp', warp: 6 } }));
   ok('ws: orden válida pasa con su id', 'command' in good && good.id === 7 && good.command.cmd === 'warp', good);
@@ -113,15 +109,6 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('origen: el propio panel ok', originAllowed('http://127.0.0.1:8787', 8787) && originAllowed('http://localhost:8787', 8787));
   ok('origen: otra página no', !originAllowed('https://evil.example', 8787) && !originAllowed('http://127.0.0.1:9999', 8787));
 
-  const base = '/srv/assets';
-  ok('assets: glb adentro del base', resolveAssetPath(base, '/models/dk.glb') === '/srv/assets/models/dk.glb');
-  ok('assets: extensión en mayúsculas (.OZT)', resolveAssetPath(base, '/tex/a.OZT') === '/srv/assets/tex/a.OZT');
-  ok('assets: .tga como octet-stream', assetContentType('/x/a.TGA') === 'application/octet-stream' && assetContentType('/x/a.glb') === 'model/gltf-binary');
-  ok('assets: path traversal con ..', resolveAssetPath(base, '/../secret.png') === null);
-  ok('assets: path traversal codificado', resolveAssetPath(base, '/%2e%2e/%2e%2e/etc/x.png') === null);
-  ok('assets: prefijo hermano (/srv/assets2)', resolveAssetPath(base, '/../assets2/a.png') === null);
-  ok('assets: extensión fuera de la lista', resolveAssetPath(base, '/a.js') === null && resolveAssetPath(base, '/a.html') === null);
-  ok('assets: byte nulo', resolveAssetPath(base, '/a%00.png') === null);
 }
 
 // --- Cacería: elegir mapa y regla de corte ----------------------------------------
@@ -169,29 +156,9 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('celdas: recorrido todo, vuelve a empezar sin colgarse', h.visited.size >= 1 && h.visited.size <= 16, h.visited.size);
 }
 
-// --- Buscador: franjas, avisos de dorados, corte ----------------------------------
+// --- Señales de dorados -----------------------------------------------------------
 {
-  ok('franja 1 de 2 = x 0..128', JSON.stringify(scoutBand(1, 2)) === JSON.stringify({ minX: 0, maxX: 128 }), scoutBand(1, 2));
-  ok('franja 2 de 2 = x 128..256', JSON.stringify(scoutBand(2, 2)) === JSON.stringify({ minX: 128, maxX: 256 }), scoutBand(2, 2));
-  ok('franja fuera de rango se acota', scoutBand(5, 2).minX === 128 && scoutBand(0, 2).minX === 0);
-  const ex = new HuntExplorer(25, 45_000, 256, scoutBand(2, 2));
-  ok('franja 2/2: columnas 137..237', JSON.stringify(ex.columns()) === JSON.stringify([137, 162, 187, 212, 237]), ex.columns());
-  const ex1 = new HuntExplorer(25, 45_000, 256, scoutBand(1, 2));
-  ok('franja 1/2: columnas 12..112', JSON.stringify(ex1.columns()) === JSON.stringify([12, 37, 62, 87, 112]), ex1.columns());
-  ok('sin franja: 10 columnas (12..237)', new HuntExplorer().columns().length === 10);
-  ok('franja angosta sin centro: su medio', JSON.stringify(new HuntExplorer(25, 45_000, 256, { minX: 0, maxX: 10 }).columns()) === '[5]');
-  // Arranca en el pueblo (fuera de la franja): todos los destinos caen en la franja, y da vueltas.
-  let inside = true;
-  let x = 30;
-  let y = 30;
-  for (let i = 0; i < 120; i++) {
-    const g = ex.next(x, y, i * 1000);
-    if (g.x < 128 || g.x >= 256) inside = false;
-    x = g.x;
-    y = g.y;
-  }
-  ok('franja 2/2: el recorrido nunca sale de la franja (y vuelve a empezar)', inside);
-
+  ok('celdas: 10 columnas (12..237)', new HuntExplorer().columns().length === 10);
   const g = { id: 77, x: 140, y: 60, name: 'Golden Goblin' };
   ok('aviso: payload exacto', JSON.stringify(goldSighting('Melu', 3, g, 5)) === JSON.stringify({ from: 'Melu', map: 3, x: 140, y: 60, name: 'Golden Goblin', id: 77, at: 5 }));
   const r = new GoldReporter('Melu');
@@ -211,17 +178,6 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   r.update(3, [g], 12_000);
   ok('aviso: clear avisa gone de lo pendiente', r.clear(13_000).length === 1 && r.update(3, [], 14_000).length === 0);
 
-  const since = 1_000_000;
-  const inv = (status: number, maps: [number, number][], at: number) =>
-    ({ ...parseInvasion(Uint8Array.from([0xc1, 7 + maps.length * 3, 0xfd, status, 0, 0, maps.length, ...maps.flatMap(([m, a]) => [m, a >> 8, a & 0xff])]), at)! });
-  ok('buscador: 20 min, no 15', shouldStopScout({ invasion: null, map: 3, since, now: since + HUNT_MAX_MS }) === null &&
-    shouldStopScout({ invasion: null, map: 3, since, now: since + SCOUT_MAX_MS }) !== null);
-  ok('buscador: más de 20 vivos → sigue', shouldStopScout({ invasion: inv(1, [[3, 21]], since + 1), map: 3, since, now: since + 2 }) === null);
-  ok('buscador: 20 o menos vivos → corta (no vale la pena)', shouldStopScout({ invasion: inv(1, [[3, 20]], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: 0 vivos en el mapa → corta', shouldStopScout({ invasion: inv(1, [[3, 0], [2, 4]], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: invasión terminada (status != 1) → corta', shouldStopScout({ invasion: inv(0, [], since + 1), map: 3, since, now: since + 2 }) !== null &&
-    shouldStopScout({ invasion: inv(2, [], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: 0xFD viejo no cuenta', shouldStopScout({ invasion: inv(2, [], since - 1), map: 3, since, now: since + 2 }) === null);
 }
 
 // --- Tickets, dorados, ciclos, warp ---------------------------------------------

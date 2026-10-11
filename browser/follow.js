@@ -24,7 +24,7 @@
   if (role === 'lider') {
     F.timers.push(setInterval(() => {
       const w = W(), p = w?.playerEntity?.transform?.pos; if (!p || S.uiState !== 5) return;
-      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), level: S.playerData.level, at: Date.now() })); } catch {}
+      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), level: S.playerData.level, resets: S.playerData.resets ?? 0, at: Date.now() })); } catch {}
       // Invitar al seguidor a la party si está a <= 10 tiles (cada 30 s como mucho).
       const name = window.__followMate; if (!name || window.__inParty || Date.now() - (F.invAt ?? 0) < 30000) return;
       for (const e of w.byNetId.values()) if (e.objectNameInWorld === name && d(e.transform.pos, p) <= 10) { F.invAt = Date.now(); const id = e.netId & 0x7fff; send([0xc1, 0x05, 0x40, id >> 8, id & 0xff]); L(`invito a ${name} a la party`); break; }
@@ -69,7 +69,11 @@
     const REQ = { 0: 0, 3: 10, 2: 20, 6: 50, 83: 100, 84: 200, 85: 300 };
     // Tampoco seguirlo si el líder va por debajo de ella (Horaz recién reseteado en Lorencia y Melu en
     // 150): la party rinde cuando el que mata es de nivel parecido o más alto.
-    if (pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
+    // Usuario: "que Horaz la ayude en niveles altos y, cuando tenga una buena suma de resets, vaya por
+    // su cuenta". Seguirlo solo desde nivel window.__followFromLevel (100) y mientras tenga menos de
+    // window.__followUntilResets (12) resets; usuario: "30 es mucho, 10-14 está bien"; si no, farmea sola.
+    const ownTime = pd.level < (window.__followFromLevel ?? 100) || (pd.resets ?? 0) >= (window.__followUntilResets ?? 12);
+    if (ownTime || pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
     if (F.solo) { F.solo = false; L(`nivel ${pd.level}: vuelvo con ${leader}`); }
     if (ai?.on) { ai.on = false; ai.target = null; w.attackTarget = null; }
     // Escapar: con poca vida, teleport a 7 tiles en dirección contraria al monstruo más cercano.
@@ -90,7 +94,9 @@
     // nunca en medio de un grupo (>= 3 monstruos a <= 3 tiles del punto de llegada).
     const dl = d(P, lp);
     const monsNear = (q, r) => [...w.byNetId.values()].filter((e) => window.__ai?.isMonster?.(e) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && d(e.transform.pos, q) <= r).length;
-    if (dl > 10 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 2000 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
+    // Y solo si hay pared en línea recta hacia el líder (entrar/salir de corrales); si no, caminar es más rápido.
+    const wall = (() => { for (let t = 1; t <= Math.min(7, dl); t++) { const x = Math.round(P.x + (lp.x - P.x) * t / dl), z = Math.round(P.z + (lp.z - P.z) * t / dl); if (w.isWalkable?.(x, z) === false) return true; } return false; })();
+    if (dl > 4 && wall && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 2000 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
       const step = Math.min(7, dl - 2), k = step / dl, x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
       if (w.isWalkable?.(x, z) !== false && monsNear({ x, z }, 3) < 3) { F.tpAt = now; if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
     }

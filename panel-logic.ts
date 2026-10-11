@@ -195,35 +195,17 @@ export const HUNT_CELL_GIVE_UP_MS = 45_000;
 export class HuntExplorer {
   readonly visited = new Set<string>();
   goal: { x: number; y: number; key: string; since: number } | null = null;
-  /** Vueltas completas al mapa (o a la franja): el atlas pasa al mapa siguiente con una. */
+  /** Vueltas completas al mapa. */
   passes = 0;
 
-  /** `band`: solo las celdas cuyo centro cae en [minX, maxX) (franja del buscador). */
-  constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256, readonly band: ScoutBand | null = null) {}
+  constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256) {}
 
-  /** Columnas (x de los centros) que se recorren: todas, o las de la franja (al menos una). */
+  /** Columnas (x de los centros) que se recorren. */
   columns(): number[] {
     const half = Math.floor(this.cell / 2);
     const all: number[] = [];
     for (let cx = half; cx < this.size; cx += this.cell) all.push(cx);
-    const b = this.band;
-    if (!b) return all;
-    const inBand = all.filter((cx) => cx >= b.minX && cx < b.maxX);
-    // Franja más angosta que una celda: su medio, para no quedarse sin destino.
-    return inBand.length ? inBand : [Math.floor((b.minX + b.maxX) / 2)];
-  }
-
-  /** Celdas a recorrer (para "celda 12/40"). */
-  totalCells(): number {
-    return this.columns().length * Math.ceil((this.size - Math.floor(this.cell / 2)) / this.cell);
-  }
-
-  /** Celdas ya visitadas de las que se recorren (la franja). */
-  visitedCount(): number {
-    const cols = new Set(this.columns().map((cx) => Math.floor(cx / this.cell)));
-    let n = 0;
-    for (const k of this.visited) if (cols.has(Number(k.split(',')[0]))) n++;
-    return n;
+    return all;
   }
 
   private key(x: number, y: number) {
@@ -270,33 +252,12 @@ export class HuntExplorer {
 }
 
 // ---------------------------------------------------------------------------
-// Buscador (orden `scout`, --scout): recorre una franja vertical del mapa sin
-// pelear y avisa por HTTP cada dorado que ve, para que otro personaje lo mate.
+// Señales de dorados: cada bot avisa a la estación los dorados que ve (y el
+// navegador también puede, si el usuario juega ahí). La estación los junta.
 // ---------------------------------------------------------------------------
-export type ScoutBand = { minX: number; maxX: number };
-export const SCOUT_MAX_MS = 20 * 60_000;
-export const SCOUT_RESEND_MS = 2_000;
-export const SCOUT_GOLD_URL = 'http://127.0.0.1:8788/gold';
-
-/** Franja `sector` (1..sectors) de las `sectors` franjas verticales (por x) del mapa. */
-export function scoutBand(sector: number, sectors: number, size = 256): ScoutBand {
-  const n = Math.max(1, Math.floor(sectors));
-  const k = Math.min(Math.max(1, Math.floor(sector)), n);
-  return { minX: Math.floor(((k - 1) * size) / n), maxX: Math.floor((k * size) / n) };
-}
-
-/** Corte del buscador: igual que la cacería (0 vivos en el mapa, invasión terminada) pero a los 20 min. */
-/** Se deja de buscar con 20 o menos vivos en el mapa y se arranca solo con más de SCOUT_START_ALIVE
- * (usuario, 2026-10-10: "seguir buscando tanto tiempo no es bueno"). */
-export const SCOUT_MIN_ALIVE = 20;
-export const SCOUT_START_ALIVE = 25;
-export function shouldStopScout(inp: { invasion: Invasion | null; map: number; since: number; now: number }): string | null {
-  const why = shouldStopHunt({ ...inp, maxMs: SCOUT_MAX_MS });
-  if (why) return why;
-  const inv = inp.invasion;
-  if (inv && inv.at >= inp.since) { const alive = inv.maps.find((m) => m.map === inp.map)?.alive ?? 0; if (alive <= SCOUT_MIN_ALIVE) return `quedan ${alive} dorados en ${mapName(inp.map)}: no vale la pena`; }
-  return null;
-}
+export const GOLD_RESEND_MS = 2_000;
+/** Receptor de señales: la estación (estacion.ts). La estación lo pasa por env si cambia el puerto. */
+export const GOLD_URL = process.env.MUBOT_GOLD_URL ?? 'http://127.0.0.1:8787/api/gold';
 
 export type GoldSighting = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };
 export type GoldGone = { from: string; map: number; id: number; gone: true; at: number };
@@ -308,14 +269,14 @@ export const goldGone = (from: string, map: number, id: number, at: number): Gol
 
 /**
  * Qué avisar en cada tick: un dorado nuevo en scope se avisa ya; uno que se
- * movió, como mucho cada SCOUT_RESEND_MS por id (si se movió durante la
+ * movió, como mucho cada GOLD_RESEND_MS por id (si se movió durante la
  * espera, sale la última posición cuando se cumple); uno que ya no está en
  * scope (murió o se fue), `gone`. Cambiar de mapa = todos `gone`.
  */
 export class GoldReporter {
   private sent = new Map<number, { at: number; x: number; y: number; map: number }>();
 
-  constructor(readonly from: string, readonly resendMs = SCOUT_RESEND_MS) {}
+  constructor(readonly from: string, readonly resendMs = GOLD_RESEND_MS) {}
 
   update(map: number, golds: readonly GoldSeen[], now: number): { payload: GoldSighting | GoldGone; isNew: boolean }[] {
     const out: { payload: GoldSighting | GoldGone; isNew: boolean }[] = [];

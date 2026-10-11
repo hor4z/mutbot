@@ -5,6 +5,7 @@
  *
  *   bun run explore-tests.ts
  */
+import { isSafeZone, terrainOf } from './terrain';
 import {
   EXPLORE, Explorer, HotSpotGrid, exitTargets, isMonsterType, isTownNpcType, nearestDir,
   TOWN_CENTERS, FIRST_EXITS,
@@ -170,6 +171,14 @@ const MIN = 60 * S;
   ok('resetDry posterga', !e.isDry(11 * MIN));
   ok('sin tick todavía: nunca seco', !new Explorer().isDry(10 * MIN));
 }
+
+// --- Zona segura (terreno del cliente; se saltea si no están los assets) ---------------------------
+if (terrainOf(0)) {
+  ok('zona segura: pueblo de Lorencia (130,126), donde Horaz quedó pegándole a Lord centurion', isSafeZone(0, 130, 126));
+  ok('zona segura: spot del Lich (134,202) no lo es', !isSafeZone(0, 134, 202));
+  ok('zona segura: fuera del mapa no', !isSafeZone(0, -1, 300));
+} else console.log('SKIP  zona segura: no están los assets del cliente (MU_ASSETS)');
+ok('zona segura: mapa sin terreno no', !isSafeZone(250, 10, 10));
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DEL EXPLORADOR PASARON' : `\n${fails} TEST(S) DEL EXPLORADOR FALLARON`);
 process.exit(fails ? 1 : 0);

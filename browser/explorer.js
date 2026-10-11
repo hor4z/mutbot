@@ -60,7 +60,7 @@
         if (/gold/i.test(name) && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && (p.x > 1 || p.z > 1)) {
           const inv = window.__invasion; const g = { map: w.mapIndex, x: Math.round(p.x), y: Math.round(p.z), type: e.npcType, name, at: Date.now(), duringInvasion: inv?.status === 1 && Date.now() - inv.at < 120000 };
           atlas.goldens.push(g); ai.L(`ATLAS: ${name} en ${ROUTE.find((r) => r[1] === w.mapIndex)?.[2] ?? w.mapIndex} (${g.x},${g.y})`);
-          fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: g.map, x: g.x, y: g.y, name, id: e.netId & 0xffff, at: g.at }) }).catch(() => {});
+          fetch('http://127.0.0.1:8787/api/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: g.map, x: g.x, y: g.y, name, id: e.netId & 0xffff, at: g.at }) }).catch(() => {});
         }
       }
     }

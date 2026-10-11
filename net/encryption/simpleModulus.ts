@@ -95,8 +95,12 @@ class Counter {
     this.Count = 0;
   }
 
+  // El contador del paquete es un byte: vuelve a 0 después de 255. Sin el & 0xff, desde el paquete C3
+  // número 256 todos fallaban la comparación en Decrypt y se descartaban ("can't decrypt packet"): el bot
+  // sin navegador dejaba de ver exp, vida y respawn a los pocos minutos (2026-10-11). Encrypt ya usaba
+  // castToByte(Count), así que el envío no cambia. Única diferencia con la copia del cliente.
   Increase() {
-    this.Count++;
+    this.Count = (this.Count + 1) & 0xff;
   }
 }
 
