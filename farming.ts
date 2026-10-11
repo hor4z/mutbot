@@ -1,7 +1,7 @@
 /**
  * Elección de objetivo por EXP POR SEGUNDO, aprendizaje por tipo de monstruo y
  * autoevaluación. Portado del agente que juega dentro del cliente web
- * (`browser-agent.js`), que es el que sube de nivel rápido: ahí está cada
+ * (`browser/browser-agent.js`), que es el que sube de nivel rápido: ahí está cada
  * decisión explicada con lo que se aprendió jugando con el usuario.
  *
  * Lógica PURA (sin red, sin EventBus, sin `world`): recibe posiciones, eventos y

@@ -1,6 +1,6 @@
 /**
  * Campamentos: cómo juega una persona. Elegir un lugar, pelear ahí mientras
- * rinde, mudarse cuando no. Portado del agente web (`browser-agent.js`:
+ * rinde, mudarse cuando no. Portado del agente web (`browser/browser-agent.js`:
  * findCamp, pickTarget, campMem, curiosidad, correa, hambre, caster), que es el
  * que juega hoy con el usuario y aprendió cada regla en vivo.
  *

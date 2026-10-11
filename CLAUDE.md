@@ -15,13 +15,13 @@ Leé ese archivo antes de tocar `headless-bot.ts`. Contiene:
 - el flujo de economía con merchants y la capa de decisión
 - el estado del combate (bloqueante para jugar solo) y lo pendiente
 
-Para "correlo", "arrancalo", "ponelo a jugar": skill **`correr-agente`**
-(`.claude/skills/correr-agente/SKILL.md`). Arranca `bun run agent` y carga `bg-timers.js` →
-`browser-agent.js` → `tuner.js` en la pestaña del juego. Los pasos para el usuario están en `README.md`.
+Foco: **bot sin navegador + estación/panel**. Para "correlo", "arrancalo", "ponelo a jugar":
+`bun run estacion` (`http://127.0.0.1:8787/panel`) y Conectar al personaje con su rutina (o
+`POST /api/do`, ver "Estación" en AGENTS.md). Estado y pendientes en
+**[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**. Primero Horaz, después Melu.
 
-Bot sin navegador (lo próximo): estado, lo aprendido y el plan en **[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**.
-Primero Horaz, después Melu. Para conectarlos y elegir la rutina desde el navegador:
-`bun run estacion` (`http://127.0.0.1:8787`, ver "Estación" en AGENTS.md).
+El modo navegador (agente pegado en la pestaña del juego) está archivado en `browser/`: no se toca
+salvo pedido explícito. El usuario entra al navegador a jugar a mano cuando quiere.
 
 Reglas rápidas:
 

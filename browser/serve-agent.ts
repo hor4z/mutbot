@@ -1,7 +1,7 @@
 /**
  * Sirve browser-agent.js y tuner.js en 127.0.0.1 para (re)instalarlos en la pestaña
  * del juego con un fetch, sin pegar el código entero cada vez.
- *   bun run scripts/serve-agent.ts      (puerto 8788)
+ *   bun run agent      (browser/serve-agent.ts, puerto 8788)
  * En la consola del juego:
  *   eval(await (await fetch('http://127.0.0.1:8788/browser-agent.js')).text())
  * Solo escucha en loopback.
@@ -13,7 +13,7 @@
  *   POST /atlas { from, atlas } el explorador del navegador guarda su atlas en ~/.mubot/atlas-<from>.json.
  *   GET  /gold  avistamientos vivos de los últimos 60 s (el cazador de Horaz lo lee cada 2 s).
  */
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = new URL('.', import.meta.url).pathname; // browser/: los .js viven al lado
 const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js', 'hunter.js', 'explorer.js', 'defense.js', 'corner.js', 'follow.js']);
 const CORS = {
   'Access-Control-Allow-Origin': 'https://mu.mormon.garden',

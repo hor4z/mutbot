@@ -83,7 +83,7 @@ pasó una vez y costó tres intentos de debugging.
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, curiosidad, memoria, hambre, skill de área. |
 | `camp-tests.ts` | Tests offline de `camp.ts`. |
 | `protocol097.ts` | Helpers de bytes sin estado (party, ItemDropRemoved, excelentes) y el backoff de reconexión; testeados en `packet-tests.ts`. |
-| `browser-agent.js` | El agente que juega DENTRO del cliente web (pegado en la consola). Es la referencia: sube rápido, y sus comentarios explican cada decisión aprendida jugando. `farming.ts`, `camp.ts` y la ruta fija son su port (ver "Port del agente web"). |
+| `browser/` | Modo navegador archivado (ver `browser/README.md`). `browser/browser-agent.js`: el agente que juega DENTRO del cliente web (pegado en la consola). Es la referencia: sube rápido, y sus comentarios explican cada decisión aprendida jugando. `farming.ts`, `camp.ts` y la ruta fija son su port (ver "Port del agente web"). |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS, en loopback por defecto). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |

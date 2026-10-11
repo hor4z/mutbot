@@ -334,7 +334,7 @@ export function chooseSpot(inp: ChooseInput, p: LearnParams = LEARN): SpotChoice
 }
 
 // ---------------------------------------------------------------------------
-// Ruta de spots del usuario (la regla del agente web, `browser-agent.js`, que
+// Ruta de spots del usuario (la regla del agente web, `browser/browser-agent.js`, que
 // es la que sube rápido). Spot = exp/min:
 //   - al habilitarse por nivel un mapa de un tier nuevo, se va a probarlo;
 //   - tras EVAL_MS en un spot, si rinde < MIN_FRAC_OF_BEST del mejor conocido
