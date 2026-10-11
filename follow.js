@@ -58,6 +58,11 @@
       const it = pd.items || []; let slot = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { slot = i; bn = x.num; } });
       if (slot >= 0) { S.consumeItemRequest(slot); F.potAt = now; }
     }
+    // Reset propio en 400 (el agente está apagado y no lo haría): doReset del agente reparte puntos y
+    // vuelve a entrar; después sigue al líder desde donde aparezca.
+    const ai = window.__ai;
+    if (pd.level >= 400 && ai?.doReset && !ai.busy && now - (F.resetAt ?? 0) > 60000) { F.resetAt = now; L('nivel 400: reseteo'); ai.doReset(); return; }
+    if (ai?.busy) return;
     let lp = null; try { lp = JSON.parse(localStorage.getItem(`mubot:pos:${leader}`) || 'null'); } catch {}
     if (!lp || now - lp.at > 10000) return; // el líder no publica (pestaña cerrada o cargando)
     if (w.mapIndex !== lp.map) {
