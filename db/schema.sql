@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS ticks (
   rivals_near UInt8, mates_near UInt8, monsters_near UInt16,
   in_party UInt8, skill UInt16,
   doing String
-) ENGINE = MergeTree ORDER BY (char, ts) TTL toDateTime(ts) + INTERVAL 180 DAY;
+) ENGINE = MergeTree ORDER BY (char, ts) TTL toDateTime(ts) + INTERVAL 90 DAY;
 
 -- Lo que pasa una vez: decide, journal, death, kill, cast, golden_seen, party, warp, reset, cycle.
 CREATE TABLE IF NOT EXISTS events (
@@ -36,4 +36,9 @@ CREATE TABLE IF NOT EXISTS players_seen (
   char LowCardinality(String),
   map UInt16, x UInt8, y UInt8,
   name String, mate UInt8
-) ENGINE = MergeTree ORDER BY (map, ts) TTL toDateTime(ts) + INTERVAL 180 DAY;
+) ENGINE = MergeTree ORDER BY (map, ts) TTL toDateTime(ts) + INTERVAL 60 DAY;
+
+-- Para tablas ya creadas con otro TTL.
+ALTER TABLE ticks MODIFY TTL toDateTime(ts) + INTERVAL 90 DAY;
+ALTER TABLE players_seen MODIFY TTL toDateTime(ts) + INTERVAL 60 DAY;
+ALTER TABLE events MODIFY TTL toDateTime(ts) + INTERVAL 365 DAY;

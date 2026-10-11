@@ -557,6 +557,9 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   en `~/.mubot/clickhouse`, credenciales en `.env.db` (no se commitea; `MUBOT_DB_USER`,
   `MUBOT_DB_PASSWORD`, `MUBOT_DB_URL`). `bun run db:init` aplica `db/schema.sql` y `db/views.sql`.
   Consola web: `http://127.0.0.1:8123/play`.
+- Espacio: TTL de 90 días para ticks, 60 para jugadores y 365 para eventos (con 2 personajes, pocos MB
+  por día). Logs internos de ClickHouse a 3 días o apagados, y logs rotados (`db/config.d/mubot.xml`,
+  compose). Si quedan menos de 5 GB libres, la estación borra ticks y jugadores de más de 7 días.
 - `telemetry.ts`: los bots mandan `ticks` (foto cada 5 s), `events` (decide/journal, death con
   asesino, kill, cast, golden_seen, party, cycle) y `players_seen` (cada 10 s). Junta en memoria y manda
   cada 5 s; si la base no responde, reintenta espaciado y sigue jugando. La estación pasa `MUBOT_DB_*`
