@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -90,6 +90,9 @@
     // El warp a Arena 2 pide nivel 100 ("You need to be level 100 in order to warp", probado en nivel
     // 10 a 14) y el reset manda a Lorencia (MoveHome de OpenMU). Hasta 100, la ruta normal.
     // (la ruta completa también si se recargó este archivo: C.savedSpots arranca vacío)
+    // Objetivo viejo: después de un warp el cliente puede conservar la entidad del mapa anterior (a las
+    // 1:37 caminó de Devias 4 (79,180) hacia un Elite Yeti de Devias 3 en (211,215)). Nada a > 25 tiles.
+    if (ai.target && d(ai.target.transform.pos, pe.transform.pos) > 25) { ai.target = null; w.attackTarget = null; }
     // Lorencia (nivel 10-20, después del reset): directo al grupo de Lich (134,202), al salir derecho
     // del pueblo (atlas de Melu: 35 Lich vistos ahí; (132,193) medido 207k/min contra 47k de (149,171),
     // que elegía por estar más cerca). Usuario: "hacés el peor
@@ -102,23 +105,12 @@
       if (ai.target && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
       if (!ai.target && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
     }
-    // Hasta 100: la ruta del usuario con Arena 1 desde nivel 50 (faltaba: se quedaba con los Yetis de
-    // Devias, "muy esparcidos", del 20 al 100).
-    // Devias (nivel 20-100): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
-    // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15
-    // tiles de la llegada; no salir de ahí persiguiendo Yetis sueltos (se iba hacia el este).
-    if (w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.arrival) {
-      const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
-      let best = null, bn = 0;
-      for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
-      if (best && bn >= 3 && (!ai.camp || ai.camp.map !== 2 || d(ai.camp, best) > 4 || d(ai.camp, A) > 15)) {
-        ai.camp = { x: Math.round(best.x), z: Math.round(best.z), map: 2, since: Date.now(), lastSeen: Date.now(), known: true };
-        if (!ai.target) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
-      }
-      if (ai.target && ai.camp && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
-      if (!ai.target && ai.camp && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
-    }
-    if (S.playerData.level < C.minLevel) { if (!ai.cfg.spots.some((x) => x[0] === 1)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
+    // Hasta 100: Lorencia y solo Devias 4 (Arena 1 perdía tiempo; Devias 3/2 y el plan B de Arena los
+    // usaba la regla de "hambre" del agente para irse a los segundos de llegar: "se fue para abajo").
+    // Ojo: asignar la ruta SOLO si cambió. Una versión vieja la reasignaba cada 0,7 s y borraba el
+    // campamento y el último warp en cada vuelta: en Devias cambiaba de campamento sin parar.
+    if (ai.cfg.crowdFallback?.length) { C.savedFallback = ai.cfg.crowdFallback; ai.cfg.crowdFallback = []; }
+    if (S.playerData.level < C.minLevel) { if (JSON.stringify(ai.cfg.spots) !== JSON.stringify(C.ROUTE)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
     // Esquina llena: con 3 o más jugadores cerca y el último minuto rindiendo menos que el mejor spot
     // de Arena 3/4, irse ahí 5 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
     // Nancho y Pachegas encima, Horaz sacaba 16M/min (usuario: "estamos molestando bastante").
@@ -241,7 +233,7 @@
     const cells = {}; for (const s of sp) { const k = `${Math.round(s.x / 3) * 3},${Math.round(s.z / 3) * 3}`; cells[k] = (cells[k] ?? 0) + 1; }
     return { min, spawnsPerMin: +(sp.length / min).toFixed(1), top: Object.entries(cells).sort((a, b) => b[1] - a[1]).slice(0, 6) };
   };
-  C.off = () => { C.on = false; if (C.savedSpots) { ai.cfg.spots = C.savedSpots; C.savedSpots = null; } ai.camp = null; ai.explore = null; ai.lastWarp = 0; L('apagado: vuelve a la ruta normal'); };
+  C.off = () => { C.on = false; if (C.savedFallback) ai.cfg.crowdFallback = C.savedFallback; if (C.savedSpots) { ai.cfg.spots = C.savedSpots; C.savedSpots = null; } ai.camp = null; ai.explore = null; ai.lastWarp = 0; L('apagado: vuelve a la ruta normal'); };
   L('activo');
   return 'modo esquina activo: __corner.report(), __corner.off()';
 })();
