@@ -44,10 +44,10 @@ export function startTeamPolling() {
 /** Los compañeros (sin mí) que la estación ve conectados. */
 export const teammates = () => members.filter((m) => m.char.toLowerCase() !== bot.charName.toLowerCase());
 
-/** Pedir ayuda (como mucho uno por tipo cada ASK_EVERY_MS). Devuelve true si salió el pedido. */
-export function askHelp(kind: HelpKind, map: number, x: number, y: number, note: string): boolean {
+/** Pedir ayuda (como mucho uno por tipo cada `everyMs`, por defecto ASK_EVERY_MS). Devuelve true si salió el pedido. */
+export function askHelp(kind: HelpKind, map: number, x: number, y: number, note: string, everyMs = ASK_EVERY_MS): boolean {
   const now = Date.now();
-  if (now - (askedAt.get(kind) ?? 0) < ASK_EVERY_MS) return false;
+  if (now - (askedAt.get(kind) ?? 0) < everyMs) return false;
   askedAt.set(kind, now);
   const body: TeamRequest = { from: bot.charName, kind, map, x, y, note, at: now };
   void fetch(TEAM_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(2000) }).catch(() => {});

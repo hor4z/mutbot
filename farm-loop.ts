@@ -41,6 +41,10 @@ import { watchMoney } from './world';
 const REPORT_EVERY_MS = 5 * 60_000;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
 const HUNT_NORMAL_RANGE = 3;
+// Cacería: un dorado visto se recuerda 3 min (para volver después de morir) y se le avisa al compañero
+// (como mucho un aviso cada 15 s).
+const HUNT_SPOT_TTL_MS = 3 * 60_000;
+const HUNT_SHARE_MS = 15_000;
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
 const EARLY_STARVE_MS = 60_000;
 // Equipo: pedir ayuda en la esquina con esta cantidad de rivales y rindiendo menos que esto.
@@ -140,6 +144,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     world.npcs.delete(p.KilledId & 0x7fff);
     ctx.npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === bot.playerId) {
+      // Quién me mató: casi siempre un rival (los dorados no pueden con Horaz ni con Melu).
+      const kid = p.KillerId & 0x7fff;
+      const killer = world.players.get(kid);
+      const by = killer ? `${killer.name ?? 'jugador #' + kid} en (${killer.x},${killer.y})` : world.npcs.has(kid) ? monsterName(world.npcs.get(kid)!.type) : `#${kid}`;
+      decide(`Me mató ${by}.`);
       onDeath('ObjectGotKilled');
       return;
     }
@@ -415,10 +424,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           }
         } else if (r.kind === 'golden') {
           const hm = HUNT_MAPS.find((h) => h.map === r.map);
-          if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} vio ${r.note}, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
+          if (bot.hunting && bot.hunting.hunt.map === r.map) {
+            (bot.hunting.spots ??= new Map()).set(-r.at, { x: r.x, y: r.y, type: 0, at: nowG });
+            decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
+          } else if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} vio ${r.note}, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
           else if (!hm || world.level < hm.reqLevel) decide(`${r.from} vio ${r.note}: no puedo ir a ese mapa.`);
           else {
-            bot.hunting = { hunt: hm, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
+            bot.hunting = { hunt: hm, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true,
+              spots: new Map([[-r.at, { x: r.x, y: r.y, type: 0, at: nowG }]]) };
             ctx.target = null;
             decide(`${r.from} vio ${r.note}: voy a ayudarlo.`);
           }
@@ -482,7 +495,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const rivalsNear = [...world.players.values()].filter((q) => chebyshev(q.x, q.y, world.x, world.y) <= CAMP.HUNGER_RIVAL_DIST).length;
     const recentRate = expLog.perMin(now0, CAMP.HUNGER_WINDOW_MS);
     const hungry = learned.hunger.check({ now: now0, tier: routeTier(world.level).minLevel, recentRate, lastWarpAt: bot.lastArrivalAt, rivalsNear });
-    if (hungry.starving && now0 - starvingLogged > 15_000) {
+    if (hungry.starving && !bot.hunting && now0 - starvingLogged > 15_000) {
       starvingLogged = now0;
       log(`Casi sin exp (${Math.round(recentRate)} exp/min en 45 s, referencia ${Math.round(hungry.ref ?? 0)}) con ${rivalsNear} jugador(es) cerca: cambio de lugar.`);
     }
@@ -556,6 +569,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           gd = d;
           gold = n;
         }
+      }
+      // Recordar dónde está cada dorado a la vista (y avisar al compañero de los nuevos, rápido).
+      const spots = (hunting.spots ??= new Map());
+      for (const n of ctx.npcs.values()) {
+        if (!isGolden(n)) continue;
+        if (!spots.has(n.id) && world.map === hunting.hunt.map)
+          askHelp('golden', world.map, n.x, n.y, monsterName(n.type), HUNT_SHARE_MS);
+        spots.set(n.id, { x: n.x, y: n.y, type: n.type, at: now });
       }
       if (gold && ctx.target !== gold.id) {
         if (!hunting.seen.has(gold.id)) {
@@ -716,6 +737,26 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     //  0) Cacería: recorrer el mapa en celdas de 25 tiles (panel-logic.ts).
     if (bot.hunting) {
+      // Primero el dorado recordado más cercano (visto hace < 3 min en este mapa); llegado ahí sin verlo,
+      // se olvida. Si no hay ninguno, recorrer celdas.
+      const spots = bot.hunting.spots;
+      let mem: { id: number; x: number; y: number } | null = null;
+      if (spots && world.map === bot.hunting.hunt.map) {
+        let md = Infinity;
+        for (const [id, sp] of spots) {
+          const d = chebyshev(world.x, world.y, sp.x, sp.y);
+          if (now - sp.at > HUNT_SPOT_TTL_MS || (d <= 4 && !ctx.npcs.has(id))) { spots.delete(id); continue; }
+          if (d < md) { md = d; mem = { id, x: sp.x, y: sp.y }; }
+        }
+      }
+      if (mem) {
+        bot.goalPoint = [mem.x, mem.y];
+        bot.doing = `cazando dorados en ${bot.hunting.hunt.name}: voy al dorado visto en (${mem.x},${mem.y})`;
+        ctx.phase = 'walk';
+        castOnTheWay(ctx);
+        await walkTowards(ctx, mem.x, mem.y);
+        continue;
+      }
       const g = bot.hunting.explorer.next(world.x, world.y, now);
       bot.goalPoint = [g.x, g.y];
       bot.doing = `cazando dorados en ${bot.hunting.hunt.name}: recorro la celda (${g.x},${g.y})`;
