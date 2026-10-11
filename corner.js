@@ -45,6 +45,9 @@
         const near = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= (C.awayUntil && Date.now() < C.awayUntil ? 6 : C.deviasR));
         let best = null, bs = -1e9;
         for (const e of near) { const n = near.filter((o) => d(o.transform.pos, e.transform.pos) <= C.spinR).length; const sc = n * 3 - d(P, e.transform.pos) * 0.5; if (sc > bs) { bs = sc; best = e; } }
+        // Nada cerca pero monstruos a distancia (los que atacan de lejos en Arena 4 le pegaban y Horaz
+        // quedaba quieto): el más cercano a <= 12 tiles.
+        if (!best) best = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, P) <= 12).sort((a, b) => d(a.transform.pos, P) - d(b.transform.pos, P))[0] ?? null;
         return best;
       }
       if (!C?.on || w.mapIndex !== C.map || window.__hunt?.on || (C.awayUntil && Date.now() < C.awayUntil)) return inner(w, P, c);
