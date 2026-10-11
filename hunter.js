@@ -248,8 +248,13 @@
     // siguiente mapa de h.tour (Melu: Lorencia → Noria). Se vuelve a medir en cada mapa.
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
       if (inView) h.lastSeenGold = Date.now();
-      if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
-        let next = h.tour.shift(); while (next === h.map && h.tour.length) next = h.tour.shift(); // no "saltar" al mismo mapa
+      if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && !(h.map === 2 && h.hops?.length) && Date.now() - (h.lastHop ?? 0) > 6000 && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
+        // Coordinación entre pestañas: el mapa que uno ya revisó sin ver nada grande queda anotado en
+        // `mubot:hunt-checked` (localStorage compartido) y el otro lo saltea en esta invasión.
+        const chk = jget('mubot:hunt-checked', {}); chk[h.map] = Date.now(); jset('mubot:hunt-checked', chk);
+        const done = (m) => m === h.map || Date.now() - (chk[m] ?? 0) < 3 * 60000;
+        let next = h.tour.shift(); while (next != null && done(next)) next = h.tour.shift();
+        if (next == null) { ai.L('HUNTER: los 3 mapas revisados sin nada grande → vuelvo a farmear'); h.stop('todo revisado'); return; }
         if (next !== h.map && MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
     // Devias: saltar entre sus 4 entradas (warps 6, 7, 5, 4) mira 4 zonas lejanas en segundos;
     // en cada una se queda 6 s si no hay dorados a la vista.
