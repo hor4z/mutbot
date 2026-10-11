@@ -27,7 +27,10 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   const dist = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.z - b.z));
-  const isGold = (e) => ai.isMonster(e) && /gold/i.test(String(e.objectNameInWorld ?? '')) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 1) > 0;
+  // Por tipo además del nombre: el Dragón Rojo (44) no siempre se llama "Golden Dragon" en el cliente.
+  // 2026-10-11 11:23: Horaz cazando el Dragón Rojo en Lorencia lo tuvo a la vista (84,146) y siguió
+  // barriendo celdas porque el nombre no tenía "gold"; lo mató el usuario a mano.
+  const isGold = (e) => ai.isMonster(e) && (e.npcType === 44 || e.npcType === 79 || /gold/i.test(String(e.objectNameInWorld ?? ''))) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 1) > 0;
   const cellOf = (x, z) => `${Math.floor(x / 25)},${Math.floor(z / 25)}`;
   const me = S.playerData?.name ?? 'pj';
   const jget = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch { return d; } };
@@ -113,7 +116,7 @@
 
   // Prioridad (usuario: "los dragones son el objetivo número 1, después los grandes, lo que tire cosas
   // relevantes"): Golden Dragon 3 > grandes (Titan, Lizard King, Tantallos) 2 > el resto 1.
-  const prio = (name) => (/Golden Dragon/i.test(name) ? 3 : /Titan|Lizard|Tantal/i.test(name) ? 2 : 1);
+  const prio = (name) => (/Golden Dragon|Red Dragon/i.test(name) ? 3 : /Titan|Lizard|Tantal/i.test(name) ? 2 : 1);
   // Búsqueda de grandes (usuario 2026-10-11: "si se topan con cualquier dorado lo matan igual, pero la
   // prioridad es buscar dragones o cosas grandes"): un dorado chico a la vista se mata (sighting usa
   // isGold, con los grandes primero), pero no se persigue por aviso ni alarga la búsqueda; sin un
@@ -125,7 +128,7 @@
   // Dorado a la vista: atacarlo primero y recordar dónde estaba.
   const sighting = (w, P) => {
     let b = null, bd = 1e9;
-    for (const e of w.byNetId.values()) if (isGold(e)) { const d = dist(P, e.transform.pos) - prio(String(e.objectNameInWorld ?? '')) * 40; if (d < bd) { bd = d; b = e; } }
+    for (const e of w.byNetId.values()) if (isGold(e)) { const d = dist(P, e.transform.pos) - (e.npcType === 44 || e.npcType === 79 ? 3 : prio(String(e.objectNameInWorld ?? ''))) * 40; if (d < bd) { bd = d; b = e; } }
     if (b && !h.seen.has(b.netId)) {
       h.seen.add(b.netId); const p = b.transform.pos, k = cellOf(p.x, p.z);
       const g = (gold[w.mapIndex] ??= {}); g[k] = (g[k] ?? 0) + 1; jset(`mubot-gold:${me}`, gold);
