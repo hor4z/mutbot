@@ -70,6 +70,11 @@
         if (pick !== cur) { C.side = pick.name; C.sideLog.push(`${new Date().toLocaleTimeString()} → ${pick.name} (${C.sides.map((sd) => `${sd.name} ${Math.round(score(sd) / 1e6)}M`).join(', ')})`); if (C.sideLog.length > 50) C.sideLog.shift(); }
         return pick;
       })();
+      // Con mucha competencia (2+ jugadores a <= 6 tiles), no caminar hacia los monstruos: cuando llega
+      // ya los mataron (usuario: "zigzag con mucha competencia no sirve, no llego a pegar"). Quieto en
+      // el puesto, pegar solo lo que entra en el giro.
+      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && d(e.transform.pos, P) <= 6).length;
+      if (crowd >= 2) return mons.filter((e) => d(e.transform.pos, P) <= C.spinR + 0.5).sort((a, b) => d(a.transform.pos, P) - d(b.transform.pos, P))[0] ?? null;
       const sideMons = mons.filter((e) => d(e.transform.pos, side) <= C.sideR);
       const local = sideMons.length ? sideMons : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius && d(e.transform.pos, P) <= 4);
       const pool = local.length ? local : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius + C.fill);
