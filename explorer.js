@@ -14,6 +14,8 @@
  * Datos: localStorage `mubot-atlas:<pj>` y, cada minuto, POST al servidor local (/atlas) que lo
  * guarda en ~/.mubot/atlas-<pj>.json. Los dorados también van a /gold (el cazador de Horaz los lee).
  * Pelea (X.fight, por defecto sí): Evil Spirit contra lo que tenga a <= 5 tiles, dorados primero.
+ * Durante la invasión: búsqueda pasiva, solo dorados chicos (Goblin, Budge Dragon, Soldier, Vepar,
+ * Wheel); los grandes (Golden Dragon, Titan, Lizard King, Tantallos) solo se avisan para Horaz.
  * Seguridad: poción bajo 60 % de vida, se aleja del monstruo más cercano bajo 50 %, y bajo 30 % sin
  * pociones vuelve a Lorencia. No levanta nada.
  */
@@ -169,7 +171,14 @@
     // cercano a <= fightRange, dorados primero. Mientras pelea no camina; después sigue el recorrido.
     if (X.fight && hp >= fightAt && pd.currentMP / pd.maxMP > 0.1) {
       let tgt = null, td = 99;
-      for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos) - (/gold/i.test(String(e.objectNameInWorld ?? '')) ? 3 : 0); if (d < td) { td = d; tgt = e; } }
+      // Durante la invasión, búsqueda pasiva (usuario): ni comunes ni dorados grandes (dragones,
+      // Titan, Lizard King, Tantallos: se avisan para Horaz); solo dorados chicos.
+      for (const e of w.byNetId.values()) {
+        if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue;
+        const nm = String(e.objectNameInWorld ?? ''), gold = /gold/i.test(nm);
+        if (X.invMode && (!gold || /Golden Dragon|Titan|Lizard|Tantal/i.test(nm))) continue;
+        const d = dist(P, e.transform.pos) - (gold ? 3 : 0); if (d < td) { td = d; tgt = e; }
+      }
       if (tgt && td <= X.fightRange) {
         // Prueba de daño: cuánto tarda en matar cada tipo, la exp que da y la vida que pierde.
         if (X.fightWith?.e !== tgt) { closeFight(); X.fightWith = { e: tgt, type: tgt.npcType, name: String(tgt.objectNameInWorld ?? '').trim(), map: w.mapIndex, since: now, hp0: pd.currentHP, exp0: pd.exp ?? 0 }; }
