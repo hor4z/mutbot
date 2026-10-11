@@ -154,10 +154,13 @@ export class CornerSides {
    * El lado donde esperar ahora (puede cambiar si pasaron SIDE.dwellMs). `players` = rivales (sin los
    * compañeros). Con un compañero en la esquina (usuario: "si Horaz detecta que está Melu en un spot,
    * que ataque el otro"): los lados que él ocupa no se eligen y se cambia ya, sin esperar; el DK
-   * (`preferCorner`) se planta en la esquina (2,10) si está libre.
+   * (`preferCorner`) se planta en la esquina (2,10) si está libre. El mago con un compañero a la vista
+   * (`yieldCorner`) le deja la esquina: no la elige y, si está ahí, se corre ya (Melu se quedaba con la
+   * esquina mientras Horaz reseteaba y Horaz volvía al lado este).
    */
-  pick(now: number, players: readonly Pos[], mates: readonly Pos[] = [], preferCorner = false): Side {
-    const taken = (s: Side) => mates.some((m) => dist(m, s) <= SIDE.near);
+  pick(now: number, players: readonly Pos[], mates: readonly Pos[] = [], preferCorner = false, yieldCorner = false): Side {
+    const taken = (s: Side) => (yieldCorner && s === SIDES[0]) || mates.some((m) => dist(m, s) <= SIDE.near);
+    if (yieldCorner && this.side === SIDES[0]) return this.choose(this.bestOf(SIDES.filter((s) => !taken(s)), players), now);
     const free = SIDES.filter((s) => !taken(s));
     if (mates.some((m) => inCorner(m)) && free.length) {
       if (preferCorner && free.includes(SIDES[0])) return this.choose(SIDES[0], now);
@@ -176,7 +179,7 @@ export class CornerSides {
       return r / (1 + SIDE.rivalPenalty * players.filter((p) => dist(p, s) <= SIDE.near).length);
     };
     let pick = this.side;
-    for (const s of SIDES) if (score(s) > score(pick) * SIDE.switchAt) pick = s;
+    for (const s of SIDES) if (!taken(s) && score(s) > score(pick) * SIDE.switchAt) pick = s;
     this.side = pick;
     return pick;
   }

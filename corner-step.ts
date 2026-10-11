@@ -139,7 +139,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
     const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
     const before = corner.sides.side.name;
-    const goal = ct ?? corner.sides.pick(now, rivalPlayers(), mates, !isMage());
+    const goal = ct ?? corner.sides.pick(now, rivalPlayers(), mates, !isMage(), isMage() && mates.length > 0);
     if (corner.sides.side.name !== before) {
       const why = mates.some((m) => inCorner(m)) ? `con ${mates.map((m) => m.name).join(', ')} en la esquina` : 'rinde más';
       decide(`Esquina: me paso al lado ${corner.sides.side.name} (${why}).`);
