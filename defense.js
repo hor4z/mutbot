@@ -34,6 +34,23 @@
   // "defendía" de él. Solo cuenta un golpe o skill dirigido a este personaje.
 
   const bestSkill = () => { const have = new Set((S.skills ?? []).map((s) => s.number)); for (const k of [43, 42, 41, 19]) if (have.has(k)) return k; return window.__ai?.cfg?.skill ?? null; };
+  // Buffs antes de pegar (usuario: "Death Stab combinado con Swell Life y escudo"): Swell Life (48,
+  // más vida para todo el grupo) cada ~55 s y Defensa (18, el escudo, necesita escudo equipado) cada
+  // ~25 s. Se tiran sobre uno mismo, un skill por vez (el cliente consume un castRequest a la vez).
+  const BUFFS = [[48, 55000], [18, 25000]];
+  D.buffAt = D.buffAt ?? {};
+  const buff = (w, pe) => {
+    const have = new Set((S.skills ?? []).map((s) => s.number)), now = Date.now();
+    for (const [k, every] of BUFFS) {
+      if (!have.has(k) || now - (D.buffAt[k] ?? 0) < every) continue;
+      if (w.castRequest) return true;
+      D.buffAt[k] = now; S.selectSkill(k); const p = pe.transform.pos;
+      w.castRequest = { target: pe, point: { x: p.x, y: p.z }, forced: false }; L(`buff ${k === 48 ? 'Swell Life' : 'Defensa'}`);
+      return true;
+    }
+    return false;
+  };
+  D.buff = () => { const w = W(), pe = w?.playerEntity; return pe ? buff(w, pe) : false; };
   const potion = () => {
     const pd = S.playerData; if (!(pd.currentHP > 0 && pd.currentHP / pd.maxHP < cfg.hpPot) || Date.now() - (D.lastPot ?? 0) < 900) return;
     const it = S.playerData.items || []; let slot = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { slot = i; bn = x.num; } });
@@ -70,6 +87,7 @@
     if (!D.engaged) { D.engaged = { name: foe.objectNameInWorld, since: now, aiWasOn: ai?.on ?? false }; D.fights++; if (ai) ai.on = false; L(`me defiendo de ${foe.objectNameInWorld}`); }
     D.engaged.name = foe.objectNameInWorld;
     potion();
+    if (buff(w, pe)) return;
     const sk = bestSkill(); if (sk != null && S.currentSkill !== sk) S.selectSkill(sk);
     w.attackTarget = foe;
     if (!w.castRequest) { const tp = foe.transform.pos; w.castRequest = { target: foe, point: { x: tp.x, y: tp.z }, forced: true }; }

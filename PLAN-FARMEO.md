@@ -322,3 +322,19 @@ Horaz no mejoraba: ciclos limpios de 12-14 min contra 10,4 del mejor (19:37). El
 `skillMinMp` 0,05 → 0,15. Se congeló (`mubot-tuner-frozen:Horaz`) con la config del mejor ciclo:
 ancla radio 7, roam 0, skillMinMp 0,05, maxKillSec 8. Próximo paso: 3 ciclos limpios; si siguen
 en 12+, probar el código de las 19:37 contra el actual.
+
+## Esquina de los Drakan en Arena 2 (2026-10-11)
+
+Siguiendo con Melu a los primeros del ranking (LeanLive y Yatsuky, Soul Masters, ciclos de ~5 min):
+después del reset caminan de la entrada de Arena 2 (61,114) hacia el norte por x≈56-61 hasta (56,39),
+doblan al oeste por z≈10 y se quedan en la esquina **(5,11)**, con 12-18 Gaint Drakan (nivel 100).
+
+- Horaz ahí: **~574M exp/min** en nivel 300 (su mejor spot anterior: ~116M), 38 niveles/min. Con los
+  dos compitiendo baja a ~10 niveles/min: gana el que pega primero a los que reaparecen.
+- Twisting Slash (41) rindió más que Rageful Blow (42) en la esquina: 574M contra 485M (40 s cada uno).
+- **El warp a Arena 2 pide nivel 100** ("You need to be level 100 in order to warp") y el reset manda a
+  Lorencia (MoveHome). Cómo llegan ellos antes del 100 está sin resolver.
+- `corner.js`: desde nivel 100, campamento fijo en la esquina, objetivo = el que deja más monstruos en
+  el giro (preferencia por vida llena), relleno con Phantom Knights si está vacía, y registro de
+  apariciones (`__corner.report()`).
+- Monstruos fantasma en (0,0) ("Gold Warrior", "Assassin") lo dejaban pegado: filtrados en `isMonster`.

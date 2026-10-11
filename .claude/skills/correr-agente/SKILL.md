@@ -36,7 +36,7 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
 3. **Cargar el agente** (orden: bg-timers → agente → autoajuste → cazador → defensa). En la pestaña:
    ```js
    window.__mubotOut = 'pending';
-   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
+   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js', 'corner.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
    ```
    `javascript_tool` no espera promesas: leer `window.__mubotOut` en la llamada siguiente.
    - Si `__ai.busy` es true (reseteando/repartiendo), esperar a que termine antes de recargar.

@@ -69,7 +69,7 @@ cliente MU JS, así que no necesita ese repo para correr (solo para regenerar
 3. Pegá esta línea y Enter:
 
 ```js
-for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js']) (0, eval)(await (await fetch('http://127.0.0.1:8788/' + f)).text())
+for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js', 'corner.js']) (0, eval)(await (await fetch('http://127.0.0.1:8788/' + f)).text())
 ```
 
 Desde ahí juega solo: farmea, reparte puntos, resetea en 400, vuelve a entrar con el personaje y
