@@ -37,7 +37,8 @@
     [3, 3, 'Noria', 10], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
-  const X = (window.__atlas = { invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  if (window.__atlas?.statTimer) window.clearInterval(window.__atlas.statTimer);
+  const X = (window.__atlas = { statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -166,6 +167,12 @@
   // Rendimiento por tipo: segundos por kill, exp por kill y por minuto, vida perdida por kill.
   X.fights = () => Object.fromEntries(Object.entries(atlas.fights ?? {}).map(([map, types]) => [ROUTE.find((r) => r[1] === +map)?.[2] ?? map,
     Object.values(types).map((v) => ({ name: v.name, kills: v.kills, segPorKill: +(v.secs / v.kills).toFixed(1), expPorKill: Math.round(v.exp / v.kills), expPorMin: Math.round((v.exp / v.secs) * 60), vidaPorKill: Math.round(v.hpLost / v.kills) })).sort((a, b) => b.expPorMin - a.expPorMin)]));
+  // Puntos de Melu (usuario: "subí los stats, aprovechemos todo"): maga que explora y pelea sola con
+  // Evil Spirit → energía (daño) 50 %, vitalidad (vida) 35 %, agilidad (defensa) 15 %. El agente de
+  // farmeo está apagado (ai.on = false) y no reparte: lo hace el explorador cada vez que junta 50.
+  ai.planStats = (pts) => { const sh = X.statShares; const out = []; let left = pts; const ks = Object.keys(sh); ks.forEach((k, i) => { const n = i === ks.length - 1 ? left : Math.floor(pts * sh[k]); left -= n; if (n > 0) out.push([k, n]); }); return out; };
+  X.statTimer = window.setInterval(async () => { if (X.distributing || S.uiState !== 5 || (S.playerData.points ?? 0) < 50) return; X.distributing = true; try { await ai.distribute(); } finally { X.distributing = false; } }, 5000);
+  (window.__mubotTimers ??= []).push(X.statTimer);
   X.timer = window.setInterval(X.tick, 400);
   (window.__mubotTimers ??= []).push(X.timer);
   return `explorador cargado (${route().map((r) => r[2]).join(', ')}): __atlas.start()`;
