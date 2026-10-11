@@ -10,6 +10,7 @@ import { journal } from './journal';
 import { LORENCIA_WARP, WARP_SPOTS, crowdedAt, persistLearning, warpAndWait } from './route';
 import { bot, learned, world } from './state';
 import { log, sleep } from './util';
+import { trackEvent } from './telemetry';
 import { selectCharacter } from './world';
 
 // --- Estadísticas -----------------------------------------------------------
@@ -147,7 +148,10 @@ async function doResetSteps(): Promise<boolean> {
   crowdedAt.clear();
   // Cierra el ciclo en el registro de tramos (solo cuenta si llegó al 400).
   const closed = learned.cycleLog.reset(Date.now());
-  if (closed) log(`Ciclo cerrado: ${closed.min} min (${Math.round(1440 / (closed.min || 1))} resets/día a este ritmo).`);
+  if (closed) {
+    log(`Ciclo cerrado: ${closed.min} min (${Math.round(1440 / (closed.min || 1))} resets/día a este ritmo).`);
+    trackEvent('cycle', '', closed.min ?? 0, 0, closed);
+  }
   // Contador local de resets: el server no manda uno que sepamos parsear.
   learned.char.resets++;
   await persistLearning();

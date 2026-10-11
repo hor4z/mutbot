@@ -6,6 +6,7 @@
 import { appendFile } from 'node:fs/promises';
 import { DECISION_LOG_PATH } from './config';
 import { bot } from './state';
+import { trackEvent } from './telemetry';
 import { log } from './util';
 
 // decide: una decisión del bot con su motivo, en una línea (la tarjeta "Decisiones" del panel).
@@ -18,6 +19,7 @@ export function journal(kind: JournalKind, what: string, detail: Record<string, 
   // appendFile (no Bun.write, que sobrescribe); si el archivo falla no frena el juego.
   if (DECISION_LOG_PATH) void appendFile(DECISION_LOG_PATH, JSON.stringify(entry) + '\n').catch(() => {});
   bot.statusServer?.broadcastDecision(entry);
+  trackEvent(kind === 'decide' ? 'decide' : `journal_${kind}`, what, 0, 0, detail);
 }
 
 /** Una decisión con su motivo: a la consola, al log del panel y al diario (tarjeta "Decisiones"). */

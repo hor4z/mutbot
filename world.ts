@@ -30,6 +30,7 @@ import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
+import { trackEvent } from './telemetry';
 
 // ---------------------------------------------------------------------------
 // Parsers a mano (layouts 0.97d, no los del XML). Los de ítems (5 bytes) están en protocol097.ts.
@@ -424,8 +425,8 @@ export function trackWorld() {
       log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
-  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, () => { bot.inParty = true; });
-  EventBus.on('RemovePartyMember', () => { bot.inParty = false; });
+  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, () => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
+  EventBus.on('RemovePartyMember', () => { if (bot.inParty) trackEvent('party', 'leave'); bot.inParty = false; });
 }
 
 // --- Zen -----------------------------------------------------------
