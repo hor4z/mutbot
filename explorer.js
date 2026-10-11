@@ -39,7 +39,7 @@
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
   if (window.__atlas?.statTimer) window.clearInterval(window.__atlas.statTimer);
-  const X = (window.__atlas = { clusterMin: 6, clusterRadius: 5, statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  const X = (window.__atlas = { danger: {}, clusterMin: 6, clusterRadius: 5, statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -95,8 +95,11 @@
     }
     return best;
   };
-  const route = () => ROUTE.filter((r) => S.playerData.level >= r[3]);
-  const nextMap = (why) => { X.idx = (X.idx + 1) % route().length; X.mapSince = 0; X.visited.clear(); X.goal = null; ai.L(`ATLAS: siguiente mapa (${why})`); };
+  // Nivel de Melu >= requisito del mapa + 50 en mapas de nivel >= 100 (Arenas): con el mínimo justo la matan.
+  const route = () => ROUTE.filter((r) => S.playerData.level >= r[3] + (r[3] >= 100 ? 50 : 0) && (X.danger[r[1]] ?? 0) < 2);
+  const nextMap = (why) => {
+    if (X.idx + 1 >= route().length) X.danger = {}; // recorrido completo: se vuelve a intentar
+    X.idx = (X.idx + 1) % route().length; X.mapSince = 0; X.visited.clear(); X.goal = null; ai.L(`ATLAS: siguiente mapa (${why})`); };
 
   // Solo con invasión (usuario: "si no hay dorados, ¿para qué vamos a buscar?"): fuera de la invasión
   // espera en Lorencia; a los :50, si un mapa al alcance tiene > startAlive vivos (0xFD), va ahí y
@@ -143,7 +146,16 @@
     if (!X.on || S.uiState !== 5 || S.sceneLoading) return;
     const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe) return;
     const now = Date.now(), P = pe.transform.pos, hp = pd.currentHP / pd.maxHP;
-    if (hp < 0.6 && now - X.lastPot > 500) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); X.lastPot = now; } }
+    // Mapas peligrosos (usuario: "en Arena y otros lugares la van a matar, cuidado"): en mapas que
+    // piden nivel >= 50 los umbrales son más altos (poción 75 %, no pelea bajo 70 %, se aleja bajo 60 %)
+    // y bajo 40 % se va a Lorencia y el mapa suma un susto. Con 2 sustos (o una muerte) el mapa se saltea
+    // hasta el próximo recorrido completo.
+    const curReq = ROUTE.find((r) => r[1] === w.mapIndex)?.[3] ?? 0, risky = curReq >= 50;
+    const potAt = risky ? 0.75 : 0.6, fightAt = risky ? 0.7 : 0.5, fleeAt = risky ? 0.6 : 0.5;
+    if (pd.currentHP <= 0 && !X.deadAt) { X.deadAt = now; X.danger[w.mapIndex] = (X.danger[w.mapIndex] ?? 0) + 2; ai.L(`ATLAS: me mataron en ${ROUTE.find((r) => r[1] === w.mapIndex)?.[2] ?? w.mapIndex}; lo salteo`); }
+    if (pd.currentHP > 0) X.deadAt = 0;
+    if (risky && hp < 0.4 && pd.currentHP > 0 && now - X.lastWarp > 10000) { X.lastWarp = now; X.danger[w.mapIndex] = (X.danger[w.mapIndex] ?? 0) + 1; S.warpCommandRequest(2); ai.L(`ATLAS: ${Math.round(hp * 100)} % de vida en ${ROUTE.find((r) => r[1] === w.mapIndex)?.[2]} → Lorencia (susto ${X.danger[w.mapIndex]})`); if (X.danger[w.mapIndex] >= 2 && !X.invMode) nextMap('mapa peligroso'); return; }
+    if (hp < potAt && now - X.lastPot > 500) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); X.lastPot = now; } }
     if (hp < 0.3 && potion() < 0) { if (w.mapIndex !== 0 && now - X.lastWarp > 20000) { X.lastWarp = now; S.warpCommandRequest(2); ai.L('ATLAS: poca vida y sin pociones → Lorencia'); } return; }
     const [warp, map, name] = route()[X.idx % route().length];
     if (w.mapIndex !== map) { if (now - X.lastWarp > 15000) { X.lastWarp = now; S.warpCommandRequest(warp); ai.L(`ATLAS: voy a ${name}`); } return; }
@@ -153,7 +165,7 @@
     if (!X.invMode && now - X.mapSince > MINUTES_PER_MAP * 60000) return nextMap(`${MINUTES_PER_MAP} min en ${name}`);
     // Pelear lo que tenga cerca (usuario: "hacé que ataque"): Evil Spirit (área) contra el monstruo más
     // cercano a <= fightRange, dorados primero. Mientras pelea no camina; después sigue el recorrido.
-    if (X.fight && hp >= 0.5 && pd.currentMP / pd.maxMP > 0.1) {
+    if (X.fight && hp >= fightAt && pd.currentMP / pd.maxMP > 0.1) {
       let tgt = null, td = 99;
       for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos) - (/gold/i.test(String(e.objectNameInWorld ?? '')) ? 3 : 0); if (d < td) { td = d; tgt = e; } }
       if (tgt && td <= X.fightRange) {
@@ -165,7 +177,7 @@
     }
     closeFight();
     // Alejarse si está perdiendo vida con un monstruo encima.
-    if (hp < 0.5) { let near = null, nd = 99; for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying) { const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } } if (near && nd <= 6) { const q = near.transform.pos, ax = Math.sign(P.x - q.x) || 1, az = Math.sign(P.z - q.z) || 1; ai.moveTo(pe, { x: Math.round(P.x + ax * 6), z: Math.round(P.z + az * 6) }); return; } }
+    if (hp < fleeAt) { let near = null, nd = 99; for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying) { const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } } if (near && nd <= 6) { const q = near.transform.pos, ax = Math.sign(P.x - q.x) || 1, az = Math.sign(P.z - q.z) || 1; ai.moveTo(pe, { x: Math.round(P.x + ax * 6), z: Math.round(P.z + az * 6) }); return; } }
     if (!X.goal || dist(P, X.goal) < 4 || now - X.goalSince > 45000) {
       if (X.goal) X.visited.add(cellOf(X.goal.x, X.goal.z));
       X.goal = nextCell(w, P); X.goalSince = now;
