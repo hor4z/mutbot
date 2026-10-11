@@ -5,7 +5,7 @@
  *
  *   bun run farming-tests.ts
  */
-import { CycleLog, ExpLog, ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, isValuableDrop, median, pickLoot, pickTarget, planStats, targetRate } from './farming';
+import { CycleLog, ExpLog, ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, isValuableDrop, median, pickLoot, pickTarget, planStats, capStats, targetRate } from './farming';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -174,6 +174,13 @@ const hpOf = (t: number) => HP[t] ?? null;
   p = planStats(1001, 5000, 5000);
   ok('arriba de fuerza − 2000: mitad/mitad', p.vit === 50 && p.ene + p.str === 951 && Math.abs(p.ene - p.str) <= 1, p);
   ok('sin puntos: nada', planStats(0, 1, 1).ene === 0);
+  const full = { str: 65535, agi: 1000, vit: 2000, ene: 65535 };
+  let c = capStats({ ene: 400, str: 500, vit: 100 }, full);
+  ok('tope: fuerza y energía al tope → todo a agilidad', c.str === 0 && c.ene === 0 && c.agi === 900 && c.vit === 100, c);
+  c = capStats({ ene: 400, str: 500, vit: 100 }, { str: 65400, agi: 65535, vit: 0, ene: 0 });
+  ok('tope: fuerza casi al tope → 135 a fuerza, el resto a vitalidad (agilidad llena)', c.str === 135 && c.ene === 400 && c.agi === 0 && c.vit === 465, c);
+  c = capStats({ ene: 10 }, { str: 65535, agi: 65535, vit: 65535, ene: 65535 });
+  ok('tope: todo lleno → nada (no insistir con /add)', c.str + c.agi + c.vit + c.ene === 0, c);
 }
 
 // --- Loot valioso ------------------------------------------------------------------------------

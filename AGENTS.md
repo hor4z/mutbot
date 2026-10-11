@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, panel, estacion
+bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -47,12 +47,15 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | Archivo | Qué es |
 |---|---|
 | `headless-bot.ts` | El bot: conexión, mundo, loop de farmeo (`autonomousLoop`, `cornerStep`), reset, panel, diario. |
-| `corner.ts` | La esquina de Arena 2 (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
+| `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
+| `early.ts` | El arranque hasta el 100: salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
+| `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
+| `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
 | `explore.ts` | Exploración (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
 | `farming.ts` | Exp por segundo (lógica pura): valor y elección de objetivo, exp/segundos por tipo, loot, ciclos, autoevaluación. |
 | `learning.ts` | Ruta fija por tramo (`chooseFixedRoute`), spots secos y lo que se guarda en `~/.mubot/learning.json`. |
-| `protocol097.ts` | Bytes del 0.97d sin estado: ítems de 5 bytes, daño 0x15, party, ItemDropRemoved, backoff. |
+| `protocol097.ts` | Bytes del 0.97d sin estado: ítems de 5 bytes, daño 0x15, chat (leer y armar; susurro 0x02, party `~`, guild `@`, ServerMessage 0x0D), aggro (0x18/0x19), party, ItemDropRemoved, backoff. |
 | `terrain.ts` | Terreno del `.att` del cliente: caminable, zona segura. |
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
 | `ws-server.ts` | Server del panel de cada bot detrás de `--ws-port` (solo 127.0.0.1). |
