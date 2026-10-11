@@ -447,19 +447,11 @@
       S.warpCommandRequest(to[0]); L(`${m} (${theirs} resets) está acá: le dejo el spot, voy al warp ${to[0]}`);
       return;
     }
-    let together = false;
-    for (const m of C.mates) {
-      let q = null; try { q = JSON.parse(localStorage.getItem(`mubot:pos:${m}`) || 'null'); } catch {}
-      if (!q || now - q.at > 10000) continue;
-      if (inCorner(q) && inCorner({ map: w.mapIndex, x: P.x, z: P.z })) {
-        together = true; C.togetherAt = now;
-        if (!window.__inParty && me < m && now - (C.invAt ?? 0) > 20000) {
-          for (const e of w.byNetId.values()) if (e.objectNameInWorld === m) { C.invAt = now; const id = e.netId & 0x7fff; send([0xc1, 0x05, 0x40, id >> 8, id & 0xff]); L(`${m} también en la esquina: party`); break; }
-        }
-      }
-    }
-    if (!together && window.__inParty && C.mates.length && me > C.mates[0] && C.togetherAt && now - C.togetherAt > 60000 && !window.__follow?.timers?.length) {
-      C.togetherAt = 0; window.__inParty = false; send([0xc1, 0x04, 0x43, 0x01]); L('ya no coincidimos en la esquina: salgo de la party');
+    // Sin party automática (usuario 2026-10-11: "Melu ya es capaz de resetear sola; quitemos eso, no
+    // tiene sentido"): cada uno farmea por su cuenta y el de menos resets cede el spot (arriba). Si
+    // quedó una party armada de antes, el segundo en orden alfabético sale.
+    if (window.__inParty && C.mates.length && me > C.mates[0] && !window.__follow?.timers?.length && now - (C.leftAt ?? 0) > 30000) {
+      C.leftAt = now; window.__inParty = false; send([0xc1, 0x04, 0x43, 0x01]); L('sin party automática: salgo de la party');
     }
   }, 1000);
   C.report = (min = 10) => {
