@@ -194,15 +194,27 @@ function nameField(name: string): number[] {
   return out;
 }
 
+// Texto saliente en UTF-8 (lo mismo que se decodifica primero al leer), cortado en CHAT_MAX bytes sin
+// partir un carácter.
+function chatBytes(text: string): number[] {
+  const out: number[] = [];
+  for (const ch of text) {
+    const b = [...Buffer.from(ch, 'utf8')];
+    if (out.length + b.length > CHAT_MAX) break;
+    out.push(...b);
+  }
+  return out;
+}
+
 /** Chat público (también party "~", guild "@" y comandos "/"): C1 len 00 <nombre propio[10]> <texto>. */
 export function buildPublicChat(myName: string, text: string): Uint8Array {
-  const t = [...Buffer.from(text.slice(0, CHAT_MAX), 'latin1')];
+  const t = chatBytes(text);
   return Uint8Array.from([0xc1, 13 + t.length, 0x00, ...nameField(myName), ...t]);
 }
 
 /** Susurro: C1 len 02 <destino[10]> <texto>. */
 export function buildWhisper(to: string, text: string): Uint8Array {
-  const t = [...Buffer.from(text.slice(0, CHAT_MAX), 'latin1')];
+  const t = chatBytes(text);
   return Uint8Array.from([0xc1, 13 + t.length, 0x02, ...nameField(to), ...t]);
 }
 
@@ -213,11 +225,14 @@ export function buildWhisper(to: string, text: string): Uint8Array {
 // no trae objetivo: daba falsos positivos en el navegador. Devuelve el id del atacante si el objetivo
 // soy yo (`me` sin el bit 0x8000), o null.
 // ---------------------------------------------------------------------------
+// Skills dirigidos que NO son ataques (curar, buffs, teleport): un Elf que cura a Horaz no es un PK.
+export const FRIENDLY_SKILLS: ReadonlySet<number> = new Set([6, 16, 26, 27, 28, 48]);
+
 export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number): number | null {
   const b = u8(raw);
   const u16 = (i: number) => ((b[i] << 8) | b[i + 1]) & 0x7fff;
   if (b[2] === 0x18 && b.length >= 9) return u16(7) === me ? u16(3) : null;
-  if (b[2] === 0x19 && b.length === 8) return u16(6) === me ? u16(4) : null;
-  if (b[2] === 0x19 && b.length >= 9) return u16(7) === me ? u16(5) : null;
+  if (b[2] === 0x19 && b.length === 8) return u16(6) === me && !FRIENDLY_SKILLS.has(b[3]) ? u16(4) : null;
+  if (b[2] === 0x19 && b.length >= 9) return u16(7) === me && !FRIENDLY_SKILLS.has(u16(3)) ? u16(5) : null;
   return null;
 }

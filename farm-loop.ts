@@ -53,6 +53,7 @@ let lastDeathAt = -Infinity;
 let economyWatched = false;
 // Defensa propia (defense.ts) y aggro: quién me pega, de los paquetes 0x18/0x19 (protocol097.ts).
 const defense = new Defense();
+let lastFleeAt = 0;
 let aggroHooked = false;
 let aggroTarget: Map<number, number> | null = null;
 function hookAggro() {
@@ -314,7 +315,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const foe = defense.target({ x: world.x, y: world.y }, [...world.players].map(([id, q]) => ({ id, x: q.x, y: q.y })), nowD);
       if (foe) {
         const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
-        if (defense.shouldFlee(hpPct, world.map, nowD)) {
+        if (world.map !== 0 && nowD - lastFleeAt > 30_000 && defense.shouldFlee(hpPct, world.map, nowD)) {
+          lastFleeAt = nowD;
           panelLog(`Defensa: vida ${Math.round(hpPct * 100)} % peleando con un jugador: me voy a Lorencia y evito este mapa ${DEFENSE.avoidMapMs / 60_000} min.`);
           if (world.map === CORNER.map) corner.awayUntil = nowD + DEFENSE.avoidMapMs;
           ctx.target = null;
@@ -421,6 +423,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
     if (!bot.hunting && !goldHold && (ticks % 10 === 0 || crowded || earlyDry || !bot.currentSpot)) {
+      if (earlyDry && bot.currentSpot) dryAt.set(bot.currentSpot.index, now0); // no volver enseguida (rebote entre entradas)
       const moved = await maybeChangeSpot({ crowded, mapDead: earlyDry });
       if (moved) {
         ctx.target = null;
