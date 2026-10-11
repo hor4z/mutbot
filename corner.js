@@ -37,8 +37,9 @@
       // Devias hasta el 100: solo lo que está a <= 8 tiles del campamento (usuario: "en Devias no te
       // salgas del spot muy lejos"). Sin nada cerca, esperar ahí la reaparición.
       // (lo mismo en Lorencia hasta el 20: "en Lorencia te saliste del spot")
-      if (C?.on && ((w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2) || (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0)) && !window.__hunt?.on) {
-        const near = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= C.deviasR);
+      // (y afuera de la esquina, en Arena 2/3/4: el agente perseguía hasta 15 tiles del campamento)
+      if (C?.on && ((w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2) || (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0) || (C.awayUntil && Date.now() < C.awayUntil && ai.camp?.map === w.mapIndex)) && !window.__hunt?.on) {
+        const near = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= (C.awayUntil && Date.now() < C.awayUntil ? 6 : C.deviasR));
         let best = null, bs = -1e9;
         for (const e of near) { const n = near.filter((o) => d(o.transform.pos, e.transform.pos) <= C.spinR).length; const sc = n * 3 - d(P, e.transform.pos) * 0.5; if (sc > bs) { bs = sc; best = e; } }
         return best;
