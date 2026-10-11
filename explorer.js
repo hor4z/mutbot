@@ -67,6 +67,14 @@
     const pd = S.playerData, exp = Math.max(0, (pd.exp ?? 0) - f.exp0), lost = Math.max(0, f.hp0 - pd.currentHP);
     const r = ((atlas.fights ??= {})[f.map] ??= {})[f.type] ??= { name: f.name, kills: 0, secs: 0, exp: 0, hpLost: 0 };
     r.kills++; r.secs += secs; r.exp += exp; r.hpLost += lost;
+    // Spot automático: >= 10 kills en la misma zona (25x25) en menos de 60 s → se marca (Horaz lo toma
+    // de atlas.spots con prioridad). Se ignora si ya hay un spot marcado a <= 10 tiles en ese mapa.
+    const p = f.e.transform.pos, k = `${f.map}:${cellOf(p.x, p.z)}`, now = Date.now();
+    const ks = ((X.cellKills ??= {})[k] ??= []).filter((t) => now - t < 60000); ks.push(now); X.cellKills[k] = ks;
+    if (ks.length >= 10 && !(atlas.spots ??= []).some((sp) => sp.map === f.map && dist(sp, { x: p.x, z: p.z }) <= 10)) {
+      atlas.spots.push({ map: f.map, x: Math.round(p.x), z: Math.round(p.z), at: now, note: `auto: ${ks.length} kills en 60 s (${f.name})` });
+      save(); ai.L(`ATLAS: spot marcado en (${Math.round(p.x)},${Math.round(p.z)}): ${ks.length} kills en 60 s de ${f.name}`);
+    }
   };
   const nextCell = (w, P) => {
     X.visited.add(cellOf(P.x, P.z));
