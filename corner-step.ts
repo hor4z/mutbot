@@ -51,8 +51,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   }
   bot.currentSpot = arena2;
   const me = { x: world.x, y: world.y };
-  // Mago: Decay (38) en Arena 2, por defecto en pickAttackSkill (combat.ts). Usuario: "Melu molesta
-  // muchísimo en el segundo spot con Decay"; "en el spot debe tirar Decay con todo".
+  // Mago: Decay con rivales o con el compañero cerca, Evil Spirit sola (pickAttackSkill, combat.ts).
   const skill = pickAttackSkill();
   const r = spinRange(skill?.number);
   const mons = [...ctx.npcs.values()];
