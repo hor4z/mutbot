@@ -526,7 +526,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
   - Lorencia: directo al Lich (134,202 ±3) con una salida variada en cada reset.
   - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181); objetivos a ≤ 8 del campamento.
-  - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena (desde el 50 va a Arena 1); sin nadie, como mapa vacío (otra entrada de Devias).
+  - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena; sin nadie, como mapa vacío. En los dos casos va primero a otra entrada de Devias y solo a Arena 1 (rinde ~0,4M/min) si todas están llenas.
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
   - Espera en el lado (esquina / medio / este) que más exp/min midió.
   - Prioriza a los monstruos que le pegaron (aggro, 0x18/0x19) a ≤ 15 tiles.

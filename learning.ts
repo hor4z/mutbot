@@ -128,9 +128,10 @@ export function chooseFixedRoute(inp: FixedRouteInput, route: readonly RouteTier
   }
   if (inp.crowded) {
     const fresh = tierSpots.filter((s) => s.index !== cur.index && s.reqLevel <= inp.level && inp.now - (inp.crowdedAt.get(s.index) ?? -Infinity) > CROWDED_SPOT_MS);
-    // Como el navegador: Devias lleno desde el 50 → directo al plan B (Arena 1); antes, otra entrada.
+    // Otra entrada de Devias libre primero; Arena 1 (plan B) solo si todas están llenas: medido, rinde
+    // ~0,4M/min contra 2-3M de Devias 3/2 (Melu quedó en Arena 1 en nivel 76 y no llegaba al 100).
     const plan = fb && fb.index !== cur.index ? fb : null;
-    const to = plan ?? fresh[0];
+    const to = fresh[0] ?? plan;
     if (to) return { ...base, spot: to, reason: 'crowd', what: `${cur.name} con mucha competencia → ${to.name}${to === fb ? ' (plan B)' : ''}`, warp: true };
     return stay(`${cur.name} con competencia pero no hay otra entrada libre`);
   }
