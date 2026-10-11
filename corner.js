@@ -25,7 +25,7 @@
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
   // misma clase que los magos que lideran la esquina).
-  C.spinR = ({ 9: 5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
+  C.spinR = ({ 9: 5, 14: 3, 38: 3.5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
   const hp = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
