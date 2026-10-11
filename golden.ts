@@ -21,18 +21,24 @@ export class GoldenRule {
   /** El dorado a atacar ahora (o null). `golden(type)` dice si un tipo es dorado. */
   pick<M extends GoldenCandidate>(me: { x: number; y: number }, monsters: Iterable<M>, golden: (type: number) => boolean, now: number): M | null {
     let best: M | null = null;
-    let bd = GOLDEN_RULE.range + 1;
+    let bs = Infinity;
+    const seen = new Set<number>();
     for (const m of monsters) {
       const dragon = DRAGON_TYPES.has(m.type);
       if (!dragon && !golden(m.type)) continue;
-      const first = this.firstSeen.get(m.id) ?? now;
+      seen.add(m.id);
+      // El alcance es la distancia real; el bonus de los dragones solo ordena.
+      const d = Math.hypot(m.x - me.x, m.y - me.y);
+      if (d > GOLDEN_RULE.range) continue;
+      // El reloj de "2 min y se deja" arranca cuando entra al alcance, no cuando se lo vio de lejos.
       if (!this.firstSeen.has(m.id)) this.firstSeen.set(m.id, now);
-      if (now - first > GOLDEN_RULE.giveUpMs) continue;
-      const d = Math.hypot(m.x - me.x, m.y - me.y) - (dragon ? GOLDEN_RULE.dragonBonus : 0);
-      if (d < bd) { bd = d; best = m; }
+      if (now - this.firstSeen.get(m.id)! > GOLDEN_RULE.giveUpMs) continue;
+      const score = d - (dragon ? GOLDEN_RULE.dragonBonus : 0);
+      if (score < bs) { bs = score; best = m; }
     }
+    // Los ids que ya no se ven se olvidan (el server los reusa al reaparecer).
+    for (const id of this.firstSeen.keys()) if (!seen.has(id)) this.firstSeen.delete(id);
     if (best) this.holdUntil = now + GOLDEN_RULE.lootStayMs;
-    if (this.firstSeen.size > 200) this.firstSeen.clear();
     return best;
   }
 

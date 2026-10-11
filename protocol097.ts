@@ -156,10 +156,16 @@ export function parseItemAdded(raw: Uint8Array | DataView | ArrayBuffer): ItemSl
 export type ChatKind = 'normal' | 'party' | 'guild' | 'whisper' | 'server';
 export type ChatLine = { kind: ChatKind; from: string; text: string };
 
-/** Texto latin1 hasta el primer 0 (o el final). */
+/** Texto hasta el primer 0: UTF-8 si es válido (OpenMU usa UTF-8), si no latin1 (cliente clásico). */
+const utf8 = new TextDecoder('utf-8', { fatal: true });
 function latin1(b: Uint8Array): string {
   const end = b.indexOf(0);
-  return Buffer.from(end >= 0 ? b.subarray(0, end) : b).toString('latin1');
+  const t = end >= 0 ? b.subarray(0, end) : b;
+  try {
+    return utf8.decode(t);
+  } catch {
+    return Buffer.from(t).toString('latin1');
+  }
 }
 
 export function parseChatMessage(raw: Uint8Array | DataView | ArrayBuffer): ChatLine | null {
@@ -202,15 +208,16 @@ export function buildWhisper(to: string, text: string): Uint8Array {
 
 // ---------------------------------------------------------------------------
 // Quién me pega (aggro). ObjectAnimation C1 09 18 <atacante u16> <dir> <anim> <objetivo u16> (golpe)
-// y SkillAnimation C3 09 19 <skill u16> <atacante u16> <objetivo u16> (skill dirigido). El área (0x1E)
+// y SkillAnimation: en 0.97d C3 08 19 <skill u8> <atacante u16> <objetivo u16> (SkillAnimation075/095
+// del XML); el de 9 bytes (skill u16, season 6) se acepta por las dudas. El área (0x1E)
 // no trae objetivo: daba falsos positivos en el navegador. Devuelve el id del atacante si el objetivo
 // soy yo (`me` sin el bit 0x8000), o null.
 // ---------------------------------------------------------------------------
 export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number): number | null {
   const b = u8(raw);
-  if (b.length < 9) return null;
   const u16 = (i: number) => ((b[i] << 8) | b[i + 1]) & 0x7fff;
-  if (b[2] === 0x18 && u16(7) === me) return u16(3);
-  if (b[2] === 0x19 && u16(7) === me) return u16(5);
+  if (b[2] === 0x18 && b.length >= 9) return u16(7) === me ? u16(3) : null;
+  if (b[2] === 0x19 && b.length === 8) return u16(6) === me ? u16(4) : null;
+  if (b[2] === 0x19 && b.length >= 9) return u16(7) === me ? u16(5) : null;
   return null;
 }

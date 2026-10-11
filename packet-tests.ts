@@ -252,6 +252,7 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('chat: normal', JSON.stringify(parseChatMessage(msg(0, 'Yatsuky', 'hola'))) === JSON.stringify({ kind: 'normal', from: 'Yatsuky', text: 'hola' }));
   ok('chat: susurro llega con 0x02', parseChatMessage(msg(2, 'Melu', 'vamos'))?.kind === 'whisper');
   ok('chat: party "~" y guild "@"', parseChatMessage(msg(0, 'A', '~arena 2'))?.kind === 'party' && parseChatMessage(msg(0, 'A', '~arena 2'))?.text === 'arena 2' && parseChatMessage(msg(0, 'A', '@hola'))?.kind === 'guild');
+  ok('chat: UTF-8 (acentos)', parseChatMessage(Uint8Array.from([0xc1, 19, 0, 65, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...Buffer.from('mañana', 'utf8')]))?.text === 'mañana');
   ok('chat: texto con terminador 0', parseChatMessage(Uint8Array.from([...msg(0, 'A', 'ok'), 0, 0]))?.text === 'ok');
   ok('chat: corto o de otro code → null', parseChatMessage(Uint8Array.from([0xc1, 5, 0, 1, 2])) === null && parseChatMessage(msg(3, 'A', 'x')) === null);
   const sm = Uint8Array.from([0xc1, 9, 0x0d, 1, ...Buffer.from('Golden', 'latin1')]);
@@ -266,7 +267,8 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
 // --- Aggro ------------------------------------------------------------------------------------
 {
   ok('aggro: golpe 0x18 a mí → atacante', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2a]), 0x2a) === 0x410);
-  ok('aggro: skill 0x19 a mí → atacante', attackerOf(Uint8Array.from([0xc3, 9, 0x19, 0, 41, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
+  ok('aggro: skill 0x19 de 0.97d (8 bytes, skill u8) a mí → atacante', attackerOf(Uint8Array.from([0xc3, 8, 0x19, 43, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
+  ok('aggro: skill 0x19 de 9 bytes (season 6) también', attackerOf(Uint8Array.from([0xc3, 9, 0x19, 0, 41, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
   ok('aggro: a otro → null', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2b]), 0x2a) === null);
   ok('aggro: área 0x1E → null', attackerOf(Uint8Array.from([0xc1, 9, 0x1e, 0, 0, 0, 0, 0, 0x2a]), 0x2a) === null);
 }

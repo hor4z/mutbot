@@ -13,7 +13,8 @@
  *
  * Lógica PURA (posiciones, reloj y azar por parámetro): se testea en `early-tests.ts`.
  */
-export type Pos = { x: number; y: number };
+import { dist, type Pos } from './corner';
+export { dist, type Pos };
 
 export const EARLY = {
   lorencia: { map: 0, maxLevel: 20, lich: { x: 134, y: 202 } as Pos, jitter: 3 },
@@ -31,7 +32,6 @@ export const EARLY = {
   viaReached: 3,
 } as const;
 
-export const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /** Centro del grupo más grande (monstruo con más vecinos a <= r) entre `pool`, con su tamaño. */
 export function biggestCluster<M extends Pos>(pool: readonly M[], r: number = EARLY.clusterR): { at: Pos; n: number } | null {

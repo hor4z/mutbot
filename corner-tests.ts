@@ -67,10 +67,11 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   cs.record(41_000, { x: 2, y: 10 }, 0);
   cs.record(61_000, { x: 2, y: 10 }, 30e6);
   ok('lados: mide exp/min con ventanas de 15 s', Math.round(cs.stats.get('esquina')!.rate / 1e6) === 90, cs.stats.get('esquina'));
-  // A los 40 s: medio y este sin medir valen 90 × 1,1 = 99 > 90 × 1,15? No: se queda.
-  ok('lados: un lado sin medir no gana si no supera el 15 %', cs.pick(61_000, []).name === 'esquina');
-  // Con 3 rivales en la esquina, 90/(1+0,75) = 51 < 99 → se va a otro.
-  ok('lados: con rivales encima prueba otro lado', cs.pick(102_000, [{ x: 2, y: 10 }, { x: 2, y: 11 }, { x: 3, y: 10 }]).name !== 'esquina');
+  // A los 40 s: medio y este sin medir valen 90 × 1,2 = 108 > 90 × 1,15 → prueba otro lado.
+  ok('lados: un lado sin medir se prueba', cs.pick(61_000, []).name !== 'esquina');
+  const c3 = new CornerSides();
+  c3.record(0, { x: 2, y: 10 }, 0); c3.record(20_000, { x: 2, y: 10 }, 0);
+  ok('lados: medido en 0 cuenta como medido (no "sin medir")', c3.stats.get('esquina')?.windows === 1 && c3.stats.get('esquina')?.rate === 0);
   ok('lados: lejos del lado no mide', (() => { const c2 = new CornerSides(); c2.record(0, { x: 30, y: 30 }, 0); c2.record(20_000, { x: 30, y: 30 }, 5e6); return !c2.stats.has('esquina'); })());
   ok('lados: tres posiciones', SIDES.length === 3 && SIDE.dwellMs === 40_000);
 }

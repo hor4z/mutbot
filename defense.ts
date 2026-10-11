@@ -20,6 +20,7 @@ export class Defense {
 
   /** Un jugador (id) me pegó. Devuelve true si es nuevo (para avisarlo una vez). */
   hit(id: number, now: number): boolean {
+    if (this.hitBy.size > 200) for (const [k, t] of this.hitBy) if (now - t > DEFENSE.memoryMs) this.hitBy.delete(k);
     const isNew = !this.hitBy.has(id) || now - this.hitBy.get(id)! > DEFENSE.memoryMs;
     this.hitBy.set(id, now);
     return isNew;
@@ -32,7 +33,7 @@ export class Defense {
     for (const p of players) {
       const at = this.hitBy.get(p.id);
       if (at == null || now - at > DEFENSE.memoryMs || (p.name && this.friends.has(p.name))) continue;
-      const d = Math.max(Math.abs(p.x - me.x), Math.abs(p.y - me.y));
+      const d = Math.hypot(p.x - me.x, p.y - me.y); // euclídea, como defense.js y el resto
       if (d <= DEFENSE.chaseTiles && d < bd) { bd = d; best = p; }
     }
     return best;
