@@ -37,6 +37,14 @@
     const inner = (ai.cornerInner ??= ai.pickTarget);
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
+      // Primero, los monstruos que le pegaron en los últimos 5 s y están a <= 15 tiles (los que atacan de
+      // lejos en Arena 4 lo desgastaban mientras él esperaba en el campamento; usuario: "tiene que
+      // limpiar todo, estos atacan de distancia").
+      if (C?.on && !window.__hunt?.on) {
+        const now = Date.now(); let ag = null, ad = 1e9;
+        for (const [id, t] of C.aggro ?? []) { if (now - t > 5000) { C.aggro.delete(id); continue; } const e = w.getByNetId?.(id) ?? [...w.byNetId.values()].find((x) => (x.netId & 0x7fff) === id); if (!e || !alive(e)) continue; const dd = d(e.transform.pos, P); if (dd <= 15 && dd < ad) { ad = dd; ag = e; } }
+        if (ag) return ag;
+      }
       // Devias hasta el 100: solo lo que está a <= 8 tiles del campamento (usuario: "en Devias no te
       // salgas del spot muy lejos"). Sin nada cerca, esperar ahí la reaparición.
       // (lo mismo en Lorencia hasta el 20: "en Lorencia te saliste del spot")
@@ -303,6 +311,17 @@
     C.tpAt = Date.now(); const sk = ai.cfg.skill; ai.cfg.skill = 6; S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
     setTimeout(() => { if (ai.cfg.skill === 6) ai.cfg.skill = sk; }, 900);
   }, 300);
+  // Quién le pega a Horaz: ObjectAnimation (C1 09 18 [atacante] [dir] [anim] [objetivo]) y
+  // SkillAnimation (C3 09 19 [skill] [atacante] [objetivo]) con objetivo = este personaje.
+  C.aggro = new Map();
+  if (!window.__cornerAggroHooked) {
+    const bytes = (raw) => (raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw.buffer ?? raw));
+    const me = () => (W()?.playerEntity?.netId ?? -1) & 0x7fff;
+    const mark = (id) => { const C = window.__corner; if (!C) return; for (const e of W()?.byNetId?.values?.() ?? []) if ((e.netId & 0x7fff) === id) { if (ai.isMonster(e)) C.aggro.set(e.netId, Date.now()); break; } };
+    __eventBus.on('ObjectAnimation', (raw) => { try { const u = bytes(raw); if (u[2] === 0x18 && u.length >= 9 && (((u[7] << 8) | u[8]) & 0x7fff) === me()) mark(((u[3] << 8) | u[4]) & 0x7fff); } catch {} });
+    for (const n of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) __eventBus.on(n, (raw) => { try { const u = bytes(raw); if (u[2] === 0x19 && u.length >= 9 && (((u[7] << 8) | u[8]) & 0x7fff) === me()) mark(((u[5] << 8) | u[6]) & 0x7fff); } catch {} });
+    window.__cornerAggroHooked = true;
+  }
   C.report = (min = 10) => {
     const since = Date.now() - min * 60000, sp = C.spawns.filter((s) => s.t >= since);
     const cells = {}; for (const s of sp) { const k = `${Math.round(s.x / 3) * 3},${Math.round(s.z / 3) * 3}`; cells[k] = (cells[k] ?? 0) + 1; }
