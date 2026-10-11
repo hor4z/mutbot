@@ -22,12 +22,16 @@
   const hpMax = (e) => e.attributeSystem?.getValue?.('maximumHealth') || hp(e) || 1;
   const alive = (e) => e && !e.dying && ai.isMonster(e) && hp(e) > 0;
 
-  if (!ai.cornerWrapped) {
-    const inner = ai.pickTarget;
+  {
+    // Al recargar se reemplaza el envoltorio (no se apila otro): el original queda en ai.cornerInner.
+    const inner = (ai.cornerInner ??= ai.pickTarget);
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
       if (!C?.on || w.mapIndex !== C.map || window.__hunt?.on) return inner(w, P, c);
       const mons = [...w.byNetId.values()].filter(alive);
+      // Camino a la esquina: derecho, sin pelear lo que hay en el camino (zigzagueaba con los Elite
+      // Skeleton de (50,80) y tardaba minutos). Solo lo que bloquea el paso (<= 1,5 tiles).
+      if (d(P, C.home) > C.radius + 3) return mons.find((e) => d(e.transform.pos, P) <= 1.5) ?? null;
       const local = mons.filter((e) => d(e.transform.pos, C.home) <= C.radius);
       const pool = local.length ? local : mons.filter((e) => d(e.transform.pos, P) <= C.fill);
       let best = null, bs = -1e9;
@@ -41,7 +45,6 @@
       }
       return best ?? inner(w, P, c);
     };
-    ai.cornerWrapped = true;
   }
 
   C.timer = setInterval(() => {
