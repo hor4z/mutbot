@@ -8,16 +8,18 @@
  *
  * Dorados de la invasión (buscadores → cazador):
  *   POST /gold  { from, map, x, y, name, id, at } o { from, map, id, gone: true }
- *               lo manda un buscador sin navegador (headless-bot.ts --scout). Se rechaza todo POST
- *               que traiga Origin: una página web no puede inventar avistamientos.
+ *               lo manda un buscador: el bot sin navegador (sin Origin) o la pestaña del juego
+ *               (explorer.js, Origin https://mu.mormon.garden). Cualquier otro Origin se rechaza.
+ *   POST /atlas { from, atlas } el explorador del navegador guarda su atlas en ~/.mubot/atlas-<from>.json.
  *   GET  /gold  avistamientos vivos de los últimos 60 s (el cazador de Horaz lo lee cada 2 s).
  */
 const ROOT = new URL('..', import.meta.url).pathname;
-const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js', 'hunter.js']);
+const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js', 'hunter.js', 'explorer.js']);
 const CORS = {
   'Access-Control-Allow-Origin': 'https://mu.mormon.garden',
   'Access-Control-Allow-Private-Network': 'true',
-  'Access-Control-Allow-Methods': 'GET',
+  'Access-Control-Allow-Methods': 'GET, POST',
+  'Access-Control-Allow-Headers': 'Content-Type',
   'Cache-Control': 'no-store',
 };
 type Sighting = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };
@@ -30,9 +32,18 @@ Bun.serve({
   async fetch(req) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const name = new URL(req.url).pathname.slice(1);
+    if (name === 'atlas' && req.method === 'POST') {
+      const og = req.headers.get('origin'); if (og && og !== 'https://mu.mormon.garden') return new Response('no', { status: 403, headers: CORS });
+      const body = await req.text(); if (body.length > 3_000_000) return new Response('grande', { status: 413, headers: CORS });
+      let a: any; try { a = JSON.parse(body); } catch { return new Response('json', { status: 400, headers: CORS }); }
+      const who = String(a?.from ?? '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 20); if (!who || !a.atlas) return new Response('datos', { status: 400, headers: CORS });
+      const dir = `${process.env.HOME}/.mubot`; await Bun.$`mkdir -p ${dir}`.quiet();
+      await Bun.write(`${dir}/atlas-${who}.json`, JSON.stringify(a.atlas));
+      return new Response('ok', { headers: CORS });
+    }
     if (name === 'gold') {
       if (req.method === 'POST') {
-        if (req.headers.get('origin')) return new Response('no', { status: 403 });
+        const og = req.headers.get('origin'); if (og && og !== 'https://mu.mormon.garden') return new Response('no', { status: 403, headers: CORS });
         let g: any; try { g = await req.json(); } catch { return new Response('json', { status: 400 }); }
         const from = String(g?.from ?? '').slice(0, 20);
         if (!from || !num(g.map, 0, 255) || !num(g.id, 0, 65535)) return new Response('datos', { status: 400 });
@@ -40,7 +51,7 @@ Bun.serve({
         if (g.gone) golds.delete(key);
         else if (num(g.x, 0, 255) && num(g.y, 0, 255)) golds.set(key, { from, map: g.map, x: g.x, y: g.y, name: String(g.name ?? '').slice(0, 40), id: g.id, at: Date.now() });
         else return new Response('datos', { status: 400 });
-        return new Response('ok');
+        return new Response('ok', { headers: CORS });
       }
       return new Response(JSON.stringify(fresh()), { headers: { ...CORS, 'Content-Type': 'application/json' } });
     }

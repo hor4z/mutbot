@@ -125,9 +125,9 @@
     ai.huntWrapped = true;
   }
 
-  h.start = (map = bestMap()) => {
+  h.start = (map = bestMap(), byReport = false) => {
     if (map == null || !MAPS[map]) { ai.L('HUNTER: no hay mapa con dorados al alcance'); return false; }
-    Object.assign(h, { on: true, map, startedAt: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
+    Object.assign(h, { on: true, map, byReport, lastGoldAt: Date.now(), startedAt: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
     h.visited.clear();
     h.saved = { spots: ai.cfg.spots, leash: ai.cfg.leashMaps, roam: ai.cfg.roam };
     ai.cfg.spots = [[MAPS[map].warp, `cacería ${MAPS[map].name}`, 0]];
@@ -135,7 +135,7 @@
     ai.camp = null; ai.explore = null; ai.target = null; W().attackTarget = null;
     if (W().mapIndex !== map) { S.warpCommandRequest(MAPS[map].warp); ai.spot = MAPS[map].warp; ai.lastWarp = Date.now(); ai.arrival = null; }
     if (ai.cur) ai.cur.tag = 'cacería dorada';
-    ai.L(`HUNTER: invasión con ${aliveIn(map)} dorados en ${MAPS[map].name} → a cazar (nivel ${S.playerData.level})`);
+    ai.L(byReport ? `HUNTER: aviso de un buscador en ${MAPS[map].name} → voy ya (nivel ${S.playerData.level})` : `HUNTER: invasión con ${aliveIn(map)} dorados en ${MAPS[map].name} → a cazar (nivel ${S.playerData.level})`);
     return true;
   };
   h.stop = (why = 'a mano') => {
@@ -162,7 +162,7 @@
   }, 500);
   (window.__mubotTimers ??= []).push(h.lingerTimer);
   h.pollTimer = window.setInterval(() => {
-    if (!h.on) return; pollGold();
+    if (!h.on && !h.auto) return; pollGold(); if (!h.on) return;
     const w = W(), pe = w?.playerEntity; if (!pe || (ai.target && isGold(ai.target))) return;
     const g = reportGoal(pe.transform.pos, w);
     if (g && (ai.explore?.kind !== 'hunter:aviso' || dist(ai.explore, g) > 4)) { ai.explore = g; ai.moveTo(pe, g); }
@@ -172,6 +172,18 @@
   h.timer = window.setInterval(() => {
     if (!ai.on || ai.busy || S.uiState !== 5) return;
     const inv = window.__invasion, active = inv?.status === 1 && Date.now() - inv.at < 120000, lvl = S.playerData.level;
+    // Aviso de un buscador (usuario: "si Melu detecta algo, mandá a Horaz al instante"): con o sin
+    // invasión, si el mapa está al alcance. Corta cuando ese dorado ya no aparece (45 s sin avisos ni
+    // dorados a la vista) o a los 6 min.
+    const fresh = h.reports.filter((g) => Date.now() - g.at < 30000 && MAPS[g.map] && lvl >= MAPS[g.map].lvl);
+    if (h.on && h.byReport) {
+      const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
+      if (inView || fresh.some((g) => g.map === h.map)) h.lastGoldAt = Date.now();
+      const why = Date.now() - h.lastGoldAt > 45000 ? 'el dorado avisado ya no está' : (Date.now() - h.startedAt) / 60000 > 6 ? '6 min' : null;
+      if (why) h.stop(why);
+      return;
+    }
+    if (!h.on && h.auto && fresh.length) { h.start(fresh[0].map, true); return; }
     if (h.on) {
       const why = !active ? 'terminó la invasión' : aliveIn(h.map) <= CFG.huntStopAlive ? `quedan ${aliveIn(h.map)} en ${MAPS[h.map].name}: no vale la pena` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
       if (why) h.stop(why);
