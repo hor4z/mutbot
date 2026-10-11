@@ -13,8 +13,8 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
 - **Nunca tipear contraseñas en el navegador.** Si la pestaña no está logueada o está en la pantalla
   de login, pedirle al usuario que entre él con el personaje y avisar cuando esté.
 - **Una sola sesión por cuenta:** no correr `bun run bot` con la misma cuenta que está abierta en el navegador.
-- **`hunter.js` se carga pero con `auto` apagado**: la caza se practica supervisada (`__hunt.start()`)
-  hasta que el usuario la dé por pulida y pida meterla en la rutina. **`duo.js` no**: en pausa.
+- **`hunter.js`**: en Horaz caza solo (dorada a las :49:20 en Devias con gira por Lorencia y Noria, y
+  Dragón Rojo). En otras pestañas queda apagado salvo `__hunt.setAuto(true)`. **`duo.js` no**: en pausa.
 - **`defense.js`** (defensa propia): solo contesta a un jugador que le pegó en los últimos 10 s, con el
   skill más fuerte (DK: Death Stab); con vida < 35% se va a otro mapa de la ruta. Nunca ataca primero.
 - **Ritmo humano:** no tocar animaciones, cooldowns ni velocidad de packets.

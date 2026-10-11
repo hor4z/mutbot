@@ -157,7 +157,9 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
   parado en el mapa antes de que arranque (hh:49:20) y buscar solo los primeros 3 min.
 - **Los últimos ~20 no se buscan:** quedan en rincones o lugares a los que no se llega caminando.
   Melu barrió Noria entera con 7-8 vivos y no vio ninguno.
-- **Plan de las invasiones:** Horaz espera en Devias (225,225) y salta entre las 4 entradas; Melu
+- **Plan actual (2026-10-11), solo Horaz:** a las :49:20 espera en Devias, salta entre sus 4 entradas y,
+  si en 12 s no ve dorados, pasa a Lorencia y después a Noria; barre el mapa entero.
+- **Plan anterior, con Melu:** Horaz espera en Devias (225,225) y salta entre las 4 entradas; Melu
   espera en Lorencia (149,168) y, si en 12 s no ve nada, pasa a Noria y después a Devias.
 - **Hipótesis del usuario: los dragones salen cerca** (de las llegadas o de lugares fijos). Se
   confirma o descarta con la memoria de dorados (`mubot-gold:<pj>`) después de 2-3 invasiones.

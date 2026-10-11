@@ -42,13 +42,18 @@
   // (usuario: "seguir buscando tanto tiempo no es bueno") y se arranca solo con más de 25.
   // huntBand: Horaz barre la mitad este (x >= 128); la oeste la barre Melu (headless --scout, franja 1/2)
   // y avisa por /gold. Los dorados avisados se persiguen en cualquier mitad.
-  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, huntBand: [128, 256] };
+  // Solo Horaz busca, sin compañero (usuario 2026-10-11: "programá búsquedas para mi personaje solo
+  // por ahora"): barre el mapa entero (sin la franja oeste de Melu) y, a las :49:20, espera en Devias
+  // y gira por Lorencia y Noria si en tourSec no ve dorados (el Golden Dragon sale al azar en esos 3).
+  // En las demás pestañas el cazador queda apagado salvo que se prenda a mano (__hunt.setAuto(true)).
+  const SOLO = { Horaz: { map: 2, tour: [0, 3] } };
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, huntBand: SOLO[S.playerData?.name] ? [0, 256] : [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
   if (window.__hunt?.pollTimer) window.clearInterval(window.__hunt.pollTimer);
   if (window.__hunt?.lingerTimer) window.clearInterval(window.__hunt.lingerTimer);
-  const h = (window.__hunt = { on: false, auto: window.__hunt?.auto ?? jget(`mubot-hunt-auto:${me}`, false), map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
+  const h = (window.__hunt = { on: false, auto: SOLO[me] ? true : jget(`mubot-hunt-auto-manual:${me}`, false), map: null, visited: new Set(), seen: new Set(), saved: null, startedAt: null, timer: null });
 
   // 0xFD: estado de la invasión por mapa.
   if (!window.__invHooked) {
@@ -168,6 +173,7 @@
 
   h.start = (map = bestMap(), byReport = false, pre = false) => {
     if (map == null || !MAPS[map]) { ai.L('HUNTER: no hay mapa con dorados al alcance'); return false; }
+    if (pre && SOLO[me]) h.tour = [...SOLO[me].tour];
     Object.assign(h, { on: true, map, byReport, pre, hops: map === 2 ? [6, 7, 5, 4] : [], lastHop: 0, lastGoldAt: Date.now(), startedAt: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
     h.visited.clear();
     // allSpots: con el dúo "juntos" cfg.spots es un getter filtrado por el nivel del compañero; se guarda
@@ -197,8 +203,9 @@
   h.setPrepos = (map, x = null, z = null, tour = []) => { h.prepos = map; h.waitAt = x != null ? { x, z } : null; h.tour = tour; jset(`mubot-hunt-prepos:${me}`, { map, x, z, tour }); return { map, x, z, tour }; };
   { const pp = jget(`mubot-hunt-prepos:${me}`, null); if (pp && typeof pp === 'object') { h.prepos = pp.map; h.waitAt = pp.x != null ? { x: pp.x, z: pp.z } : null; h.tour = pp.tour ?? []; } else h.prepos = pp; }
   h.setBand = (from, to) => { h.band = [from, to]; jset(`mubot-hunt-band:${me}`, h.band); return h.band; };
-  h.band = jget(`mubot-hunt-band:${me}`, null);
-  h.setAuto = (v) => { h.auto = !!v; jset(`mubot-hunt-auto:${me}`, h.auto); return h.auto; };
+  h.band = SOLO[me] ? null : jget(`mubot-hunt-band:${me}`, null);
+  if (SOLO[me]) { h.prepos = SOLO[me].map; h.waitAt = null; h.tour = [...SOLO[me].tour]; }
+  h.setAuto = (v) => { h.auto = !!v; jset(`mubot-hunt-auto-manual:${me}`, h.auto); return h.auto; };
 
   // Cada 2 s: leer avisos; si hay uno nuevo y no estamos peleando un dorado, ir ya (no esperar a
   // terminar de caminar hacia la celda actual).
