@@ -132,13 +132,27 @@
     // del pueblo (atlas de Melu: 35 Lich vistos ahí; (132,193) medido 207k/min contra 47k de (149,171),
     // que elegía por estar más cerca). Usuario: "hacés el peor
     // recorrido en Lorencia".
-    if (w.mapIndex === 0 && S.playerData.level < 20 && (ai.camp?.x !== C.lorencia.x || ai.camp?.z !== C.lorencia.z)) {
-      ai.camp = { ...C.lorencia, map: 0, since: Date.now(), lastSeen: Date.now(), known: true };
-      if (!ai.target) { ai.explore = { ...C.lorencia, kind: 'camp' }; ai.moveTo(pe, C.lorencia); }
+    // Salida variada (usuario: "es lo más eficiente, pero agregaría cambio de rutina de salida"): en
+    // cada reset se sortea por dónde baja (directo, apenas por el oeste o por el este del camino) y en
+    // qué punto del grupo de Lich para, a pocos tiles del medido. Cuesta 1-3 s más que la línea recta.
+    if (w.mapIndex === 0 && S.playerData.level < 20 && !C.lorPlan) {
+      const r = (n) => Math.round((Math.random() * 2 - 1) * n);
+      const ok = (q) => w.isWalkable?.(q.x, q.z) !== false;
+      let camp = { x: C.lorencia.x + r(3), z: C.lorencia.z + r(3) }; if (!ok(camp)) camp = { ...C.lorencia };
+      const vias = [null, { x: 130 + r(2), z: 150 + r(4) }, { x: 141 + r(2), z: 165 + r(4) }, null];
+      let via = vias[Math.floor(Math.random() * vias.length)]; if (via && !ok(via)) via = null;
+      C.lorPlan = { camp, via }; ai.L?.(`ESQUINA: salida de Lorencia ${via ? 'por (' + via.x + ',' + via.z + ')' : 'directa'} al Lich (${camp.x},${camp.z})`);
     }
-    if (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0) {
+    if (w.mapIndex !== 0 || S.playerData.level >= 20) C.lorPlan = null;
+    const LP = C.lorPlan;
+    if (LP && (ai.camp?.x !== LP.camp.x || ai.camp?.z !== LP.camp.z)) {
+      ai.camp = { ...LP.camp, map: 0, since: Date.now(), lastSeen: Date.now(), known: true };
+    }
+    if (LP && ai.camp?.map === 0) {
+      if (LP.via && d(pe.transform.pos, LP.via) <= 3) LP.via = null;
+      const goal = LP.via ?? ai.camp;
       if (ai.target && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
-      if (!ai.target && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
+      if (!ai.target && d(pe.transform.pos, goal) > 3 && (pe.playerMoveTo.handled || ai.explore?.x !== goal.x || ai.explore?.z !== goal.z)) { ai.explore = { x: goal.x, z: goal.z, kind: 'camp' }; ai.moveTo(pe, goal); }
     }
     // Devias (nivel 20-100): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
     // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15

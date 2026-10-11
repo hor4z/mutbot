@@ -338,3 +338,10 @@ doblan al oeste por z≈10 y se quedan en la esquina **(5,11)**, con 12-18 Gaint
   el giro (preferencia por vida llena), relleno con Phantom Knights si está vacía, y registro de
   apariciones (`__corner.report()`).
 - Monstruos fantasma en (0,0) ("Gold Warrior", "Assassin") lo dejaban pegado: filtrados en `isMonster`.
+- Salida de Lorencia tras el reset (nivel 10-20): grupo de Lich (134,202), medido ~30 s de camino y
+  ~15 s de pelea hasta el 20. Cada reset sortea una variante (directa, apenas por el oeste o por el
+  este) y un punto de parada a ±3 tiles, para no repetir siempre el mismo trazado (`__corner.lorPlan`).
+- Skills de un instante (buff, teleport) guardan el de ataque en `__corner.baseSkill`: antes se pisaban
+  y Melu quedó "atacando" con Mana Shield (16) sin ganar exp.
+- Memoria: la pestaña crece ~8 MB/min (el cliente, no el agente); a ~4,4 GB Chrome la recarga y el
+  agente queda apagado (Horaz perdió 6:15-9:04 el 2026-10-11). Recargar después de un reset cada 3-4 h.
