@@ -63,10 +63,23 @@ export async function investStatPoints(force = false): Promise<number> {
   return spent;
 }
 
+// Reparto en segundo plano (como el navegador: el /add no frena la pelea). Mientras uno corre no
+// arranca otro; el loop sigue peleando. Devuelve true si arrancó uno.
+let statsRunning = false;
+export function investStatPointsInBackground(onSpent: (n: number) => void): boolean {
+  if (statsRunning || bot.resetting) return false;
+  statsRunning = true;
+  void investStatPoints()
+    .then((n) => { if (n) onSpent(n); })
+    .catch((e) => log(`Stats: el reparto falló: ${(e as Error).message}`))
+    .finally(() => { statsRunning = false; });
+  return true;
+}
+
 // ---------------------------------------------------------------------------
-// Reset (capturado del usuario): reparte lo que quede, va a Lorencia, manda
-// /reset por chat y el server lo devuelve a la selección de personaje. Hay que
-// volver a elegir el personaje, repartir los puntos nuevos y salir a farmear.
+// Reset (capturado del usuario): /reset por chat donde esté (si no lo acepta, en Lorencia) y el server
+// lo devuelve a la selección de personaje. Hay que volver a elegir el personaje, repartir los puntos
+// nuevos y salir a farmear.
 // ---------------------------------------------------------------------------
 export async function doReset(): Promise<boolean> {
   journal('reset', `/reset en nivel ${world.level}`, { level: world.level, stats: { ...world.stats } });
@@ -78,17 +91,31 @@ export async function doReset(): Promise<boolean> {
   }
 }
 
+// Si el server no acepta /reset fuera de Lorencia, se recuerda (no se vuelve a probar en el lugar).
+let resetNeedsLorencia = false;
+
+// Manda /reset y espera la lista de personajes (el server nos manda a la selección).
+async function sayReset(waitMs: number): Promise<any> {
+  const listWaiter = waitFor('CharacterList', waitMs).catch(() => null);
+  sayChat(CHAR_NAME, '/reset');
+  return listWaiter;
+}
+
 async function doResetSteps(): Promise<boolean> {
   bot.doing = `reseteando en nivel ${world.level}`;
-  await investStatPoints(true);
-  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
-  await sleep(2000);
-  let listWaiter = waitFor('CharacterList', 8000).catch(() => null);
-  sayChat(CHAR_NAME, '/reset');
-  let list = await listWaiter;
+  // Como el navegador: sin repartir antes (los puntos sobrantes se suman a los del reset, ahorra ~8 s)
+  // y /reset donde está; solo si el server no lo acepta fuera de Lorencia, warp y reintento.
+  let list = world.map === 0 || !resetNeedsLorencia ? await sayReset(6000) : null;
+  if (!list && world.map !== 0) {
+    log('Reset: no lo aceptó acá; voy a Lorencia y reintento.');
+    resetNeedsLorencia = true;
+    await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
+    await sleep(2000);
+    list = await sayReset(8000);
+  }
   if (!list) {
     // Por si el server nos dejó en la selección sin mandar la lista.
-    listWaiter = waitFor('CharacterList', 5000).catch(() => null);
+    const listWaiter = waitFor('CharacterList', 5000).catch(() => null);
     requestCharacterList();
     list = await listWaiter;
   }

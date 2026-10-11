@@ -27,7 +27,7 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { publishGold, sessionStart, setLoopView, stopHunt } from './panel';
 import { GoldReporter, mapName, shouldStopHunt } from './panel-logic';
-import { doReset, investStatPoints } from './progress';
+import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, typeStats, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
@@ -365,17 +365,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         log(report.format(Date.now(), world.level, learned.char.resets, 'reset hecho'));
         log(`Tramos por ciclo:\n${learned.cycleLog.format()}`);
       } else {
-        nextResetTry = Date.now() + 10 * 60_000;
+        nextResetTry = Date.now() + 2 * 60_000; // como el navegador: reintento a los 2 min
       }
       continue;
     }
 
-    // 3) Invertir puntos de atributo cuando junte un lote.
-    const spent = await investStatPoints();
-    if (spent) {
-      statPointsSpent += spent;
-      continue;
-    }
+    // 3) Invertir puntos de atributo cuando junte un lote, en segundo plano (sigue peleando).
+    investStatPointsInBackground((n) => { statPointsSpent += n; });
 
     // 3b) La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, salvo cazando, con un
     //     spot fijado por el panel o mientras está afuera porque estaba llena.
