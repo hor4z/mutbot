@@ -19,16 +19,16 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
 
 // --- .env ---------------------------------------------------------------------------------
 {
-  const e = parseEnvFile('# cuenta\nMUBOT_USER=horaz\nexport MUBOT_PASS="se cr=et"\n\nMUBOT_CHAR = \'Horaz\'\nbasura\n');
-  ok('env: valores, comillas, export y espacios', e.MUBOT_USER === 'horaz' && e.MUBOT_PASS === 'se cr=et' && e.MUBOT_CHAR === 'Horaz', e);
+  const e = parseEnvFile('# cuenta\nMUBOT_USER=cuenta1\nexport MUBOT_PASS="se cr=et"\n\nMUBOT_CHAR = \'Horaz\'\nbasura\n');
+  ok('env: valores, comillas, export y espacios', e.MUBOT_USER === 'cuenta1' && e.MUBOT_PASS === 'se cr=et' && e.MUBOT_CHAR === 'Horaz', e);
   ok('env: archivos de personaje', isCharEnvFile('.env') && isCharEnvFile('.env.melu') && !isCharEnvFile('.env.example') && !isCharEnvFile('.envrc') && !isCharEnvFile('x.env'));
-  const c = charFromEnv('.env.melu', 'MUBOT_USER=melu\nMUBOT_PASS=x\nMUBOT_CHAR=Melu\n');
+  const c = charFromEnv('.env.melu', 'MUBOT_USER=cuenta2\nMUBOT_PASS=x\nMUBOT_CHAR=Melu\n');
   ok('env: personaje con clave en minúscula', c?.key === 'melu' && c.char === 'Melu' && c.envFile === '.env.melu', c);
   ok('env: sin contraseña no es personaje', charFromEnv('.env', 'MUBOT_USER=a\nMUBOT_CHAR=b') === null);
 }
 
 // --- argumentos del bot -------------------------------------------------------------------
-const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'horaz', char: 'Horaz' };
+const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char: 'Horaz' };
 {
   const a = botArgs(horaz, 8791, DEFAULT_SERVER, 'headless-bot.ts');
   ok('args: env-file primero (credenciales fuera de la línea de comandos)', a[0] === '--env-file=.env' && !a.some((x) => /pass/i.test(x)), a);
@@ -61,14 +61,14 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'horaz', char: 
 
 // --- bots que ya corren -------------------------------------------------------------------
 {
-  const melu: CharConfig = { key: 'melu', envFile: '.env.melu', user: 'melu', char: 'Melu' };
+  const melu: CharConfig = { key: 'melu', envFile: '.env.melu', user: 'cuenta2', char: 'Melu' };
   const bot = ['bun', 'run', 'headless-bot.ts', '--ws-port', '8787'];
   ok('proc: otro programa no cuenta', !processRunsAccount(['bun', 'run', 'proxy.ts'], [], horaz));
   ok('proc: --env-file del personaje', processRunsAccount(['bun', '--env-file=.env.melu', ...bot.slice(1)], [], melu)
     && !processRunsAccount(['bun', '--env-file=.env.melu', ...bot.slice(1)], [], horaz));
   ok('proc: --env-file con ruta', processRunsAccount(['bun', '--env-file', '/home/x/mubot/.env.melu', ...bot.slice(1)], [], melu));
-  ok('proc: --user manda', processRunsAccount([...bot, '--user', 'melu'], ['MUBOT_USER=horaz'], melu));
-  ok('proc: MUBOT_USER del entorno', processRunsAccount(bot, ['MUBOT_USER=melu'], melu) && !processRunsAccount(bot, ['MUBOT_USER=melu'], horaz));
+  ok('proc: --user manda', processRunsAccount([...bot, '--user', 'cuenta2'], ['MUBOT_USER=cuenta1'], melu));
+  ok('proc: MUBOT_USER del entorno', processRunsAccount(bot, ['MUBOT_USER=cuenta2'], melu) && !processRunsAccount(bot, ['MUBOT_USER=cuenta2'], horaz));
   ok('proc: sin nada = .env de la raíz', processRunsAccount(bot, [], horaz) && !processRunsAccount(bot, [], melu));
 }
 
