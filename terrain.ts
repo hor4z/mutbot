@@ -7,7 +7,7 @@
  * El descifrado es copia literal de `src/common/terrain/mapFileEncryption.ts` y
  * `parseTerrainAttribute.ts` del cliente (no reescribir: ver CLAUDE.md sobre las copias).
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -53,15 +53,47 @@ export function parseAtt(file: Uint8Array): Uint8Array {
 export const worldFolderOf = (map: number) => ({ 83: 7, 84: 7, 85: 7 } as Record<number, number>)[map] ?? map + 1;
 
 const ASSETS = process.env.MU_ASSETS ?? join(homedir(), 'self/mu/public/game-assets');
+// Los mapas del SERVER (los que baja el cliente web 0.97d): pueden diferir de los del cliente genérico.
+// El World7 del server (Arenas) tiene una salida en el corral de Arena 2 que el local no: Melu quedó
+// trabada contra la cerca. Se bajan una vez y se guardan en ~/.mubot/terrain/.
+const SERVER_ASSETS = process.env.MUBOT_ASSETS_URL ?? 'https://mu.mormon.garden/game-assets-v097d';
+const SERVER_CACHE = join(homedir(), '.mubot', 'terrain');
 const cache = new Map<number, Uint8Array | null>();
+const downloading = new Set<number>();
 
-/** Atributos del mapa, o null si no están los archivos del cliente. Se cachea por mapa. */
+const serverFile = (n: number) => join(SERVER_CACHE, `World${n}`, `EncTerrain${n}.att`);
+
+// Baja el .att del server para ese World (una vez); al terminar, el mapa se vuelve a leer.
+function fetchServerTerrain(n: number) {
+  if (downloading.has(n) || process.env.MUBOT_NO_SERVER_TERRAIN) return;
+  downloading.add(n);
+  void (async () => {
+    try {
+      const r = await fetch(`${SERVER_ASSETS}/World${n}/EncTerrain${n}.att`, { signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return;
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      parseAtt(bytes); // valida antes de guardar
+      mkdirSync(join(SERVER_CACHE, `World${n}`), { recursive: true });
+      writeFileSync(serverFile(n), bytes);
+      for (const [m] of cache) if (worldFolderOf(m) === n) cache.delete(m);
+    } catch {
+      // sin red o archivo inválido: se sigue con el local
+    }
+  })();
+}
+
+/**
+ * Atributos del mapa: los del server (bajados a ~/.mubot/terrain), si no los del cliente local, si no
+ * null. Se cachea por mapa; la primera vez dispara la bajada del server (y mientras, usa el local).
+ */
 export function terrainOf(map: number): Uint8Array | null {
   if (cache.has(map)) return cache.get(map)!;
   const n = worldFolderOf(map);
-  const path = join(ASSETS, `World${n}`, `EncTerrain${n}.att`);
   let grid: Uint8Array | null = null;
-  try { if (existsSync(path)) grid = parseAtt(new Uint8Array(readFileSync(path))); } catch { grid = null; }
+  for (const path of [serverFile(n), join(ASSETS, `World${n}`, `EncTerrain${n}.att`)]) {
+    try { if (existsSync(path)) { grid = parseAtt(new Uint8Array(readFileSync(path))); break; } } catch { grid = null; }
+  }
+  if (!existsSync(serverFile(n))) fetchServerTerrain(n);
   cache.set(map, grid);
   return grid;
 }
@@ -79,3 +111,17 @@ export function isSafeZone(map: number, x: number, y: number): boolean {
   if (!g || x < 0 || y < 0 || x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return false;
   return (g[y * TERRAIN_SIZE + x] & TW.SafeZone) !== 0;
 }
+
+// Tiles que el server rechazó (paso devuelto con 0x11): bloqueados para los caminos, por mapa. Cubre
+// lo que el .att no dice (objetos, diferencias del server).
+const learned = new Map<number, Set<number>>();
+export function learnBlocked(map: number, x: number, y: number) {
+  let s = learned.get(map);
+  if (!s) learned.set(map, (s = new Set()));
+  s.add(y * TERRAIN_SIZE + x);
+  if (s.size > 5000) s.clear();
+}
+/** Caminable según el terreno y lo aprendido (para path.ts). */
+export const walkableFor = (map: number) => (x: number, y: number) => isWalkable(map, x, y) && !learned.get(map)?.has(y * TERRAIN_SIZE + x);
+/** Solo lo aprendido (cuando el terreno no tiene salida, ver loop-ctx.ts). */
+export const learnedFreeFor = (map: number) => (x: number, y: number) => x >= 0 && y >= 0 && x < 256 && y < 256 && !learned.get(map)?.has(y * TERRAIN_SIZE + x);
