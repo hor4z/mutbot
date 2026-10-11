@@ -103,7 +103,8 @@
     const lost = pd.maxHP ? (Math.max(...F.hpHist.map((x) => x.hp)) - pd.currentHP) / pd.maxHP : 0;
     if (pd.maxHP && (pd.currentHP / pd.maxHP < 0.7 || lost > 0.15)) { if (!F.calmUntil || now > F.calmUntil) L(`recibo daño (${Math.round(pd.currentHP / pd.maxHP * 100)}%): dejo de pegar`); F.calmUntil = now + 8000; }
     if ((window.__followHelp ?? true) && !(F.calmUntil && now < F.calmUntil) && dl <= 12 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 250) {
-      const skill = [9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
+      // Inferno (14) primero: 10.434 de daño/s contra 5.383 de Evil Spirit y 4.278 de Hellfire (medido 2026-10-11).
+      const skill = [14, 9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
       let m = null, md = 1e9;
       for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P); if (dd <= 6 && dd < md) { md = dd; m = e; } } // 6 tiles: con más nivel ayuda más ("a menos que la golpeen": eso lo corta calmUntil)
       if (m && skill != null) { F.helpAt = now; if (S.currentSkill !== skill) S.selectSkill(skill); const tp = m.transform.pos; w.castRequest = { target: m, point: { x: tp.x, y: tp.z }, forced: false }; F.helps = (F.helps ?? 0) + 1; return; }
