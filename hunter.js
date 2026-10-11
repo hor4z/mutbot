@@ -190,6 +190,10 @@
       return;
     }
     if (!h.on && h.auto && fresh.length) { h.start(fresh[0].map, true); return; }
+    // Dragón (prioridad 3) avisado en OTRO mapa al alcance: ir ya (el 9:50 Melu vio uno en Lorencia
+    // y Horaz seguía en Devias, porque solo miraba avisos de su mapa).
+    const dragon = fresh.filter((g) => prio(g.name ?? '') === 3 && g.map !== h.map).sort((a, b) => b.at - a.at)[0];
+    if (h.on && dragon && !(ai.target && prio(String(ai.target.objectNameInWorld ?? '')) === 3)) { h.stop(`dragón avisado en ${MAPS[dragon.map].name}`); h.start(dragon.map, h.byReport); return; }
     if (h.on) {
       const why = !active ? 'terminó la invasión' : aliveIn(h.map) <= CFG.huntStopAlive ? `quedan ${aliveIn(h.map)} en ${MAPS[h.map].name}: no vale la pena` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
       if (why) h.stop(why);
