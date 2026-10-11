@@ -128,5 +128,6 @@ export const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.
 
 // Cazador automático de invasiones (panel-logic.ts, AUTO_HUNT): prendido salvo --no-auto-hunt.
 export const AUTO_HUNT_ON = !args.has('--no-auto-hunt');
-// Party: rechazada siempre salvo --party-mates (acepta solo de un compañero). Ver world.ts.
-export const PARTY_MATES = args.has('--party-mates');
+// Party: se acepta solo de un compañero (MUBOT_MATES, que pone la estación, o --party-mates); el resto
+// se rechaza. Ver world.ts.
+export const PARTY_MATES = args.has('--party-mates') || !!process.env.MUBOT_MATES;

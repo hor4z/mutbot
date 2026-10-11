@@ -535,7 +535,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Los compañeros (`MUBOT_MATES`, que la estación pasa con todos sus personajes; por defecto Horaz y Melu) se reconocen por el nombre, que viene en `AddCharactersToScope`: byte 14 en el formato 075 de 27 bytes, byte 18 en el 095 de 31.
   - No cuentan como rivales: ni para "esquina llena", ni para la elección de lado, ni para la defensa.
   - Si un compañero está en la esquina, los lados que ocupa no se eligen y se cambia ya; el DK se planta en la esquina (2,10) si está libre.
-  - **Sin party**: se rechaza toda invitación. Con party la exp se reparte; en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min. `--party-mates` acepta party solo de un compañero.
+  - **Party solo entre compañeros**: con la estación (MUBOT_MATES) o `--party-mates` se acepta la invitación de un compañero; el resto se rechaza. Con party la exp se reparte (en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min): se está midiendo en el dúo de la esquina. En party, el mago le pone Soul Barrier (16) al compañero a <= 6 en los huecos del giro; Swell Life (48) del DK ya alcanza a la party.
 - **Equipo** (`team.ts`; la estación hace de canal: `GET/POST /api/team`, `MUBOT_TEAM_URL`):
   - Cada bot consulta cada 5 s dónde están los compañeros y los pedidos de ayuda vigentes (2 min).
   - **Pide ayuda en la esquina** con 2+ rivales, sin compañero y rindiendo < 150M/min (como mucho una vez cada 3 min).
