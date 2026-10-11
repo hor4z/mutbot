@@ -1,0 +1,24 @@
+<!-- ClickHouse local del bot: que no llene el disco. Los logs internos se guardan 3 días (o no se
+     guardan) y el log de texto rota en 3 archivos de 20 MB. Nuestros datos tienen su TTL en schema.sql. -->
+<clickhouse>
+  <logger>
+    <level>warning</level>
+    <size>20M</size>
+    <count>3</count>
+  </logger>
+  <query_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></query_log>
+  <part_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></part_log>
+  <metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></metric_log>
+  <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
+  <error_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></error_log>
+  <trace_log remove="1" />
+  <text_log remove="1" />
+  <processors_profile_log remove="1" />
+  <query_thread_log remove="1" />
+  <query_views_log remove="1" />
+  <session_log remove="1" />
+  <opentelemetry_span_log remove="1" />
+  <asynchronous_insert_log remove="1" />
+  <backup_log remove="1" />
+  <blob_storage_log remove="1" />
+</clickhouse>

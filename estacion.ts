@@ -15,7 +15,7 @@ import { serveRadarAsset } from './radar-assets';
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -196,6 +196,23 @@ setInterval(() => {
   if (!Object.keys(dbEnv()).length) return;
   Bun.spawn([process.execPath, '--env-file=.env.db', 'scripts/aprender.ts'], { cwd: ROOT, stdout: 'ignore', stderr: 'ignore' });
 }, LEARN_EVERY_MS);
+
+// Disco: si quedan menos de DISK_MIN_GB libres donde está la base, se borran los ticks y jugadores de
+// más de 7 días (los eventos se conservan) y se avisa. Se mira cada 10 min.
+const DISK_MIN_GB = 5;
+setInterval(() => {
+  const env = dbEnv();
+  if (!env.MUBOT_DB_URL) return;
+  let freeGb = Infinity;
+  try { const st = statfsSync(join(homedir(), '.mubot')); freeGb = (st.bavail * st.bsize) / 1e9; } catch {}
+  if (freeGb >= DISK_MIN_GB) return;
+  say(`disco con ${freeGb.toFixed(1)} GB libres: borro datos viejos (ticks y jugadores de más de 7 días)`);
+  for (const t of ['ticks', 'players_seen'])
+    void fetch(`${env.MUBOT_DB_URL}/?database=mubot`, {
+      method: 'POST', body: `ALTER TABLE ${t} DELETE WHERE ts < now() - INTERVAL 7 DAY`,
+      headers: { 'X-ClickHouse-User': env.MUBOT_DB_USER ?? 'mubot', 'X-ClickHouse-Key': env.MUBOT_DB_PASSWORD ?? '' },
+    }).catch(() => {});
+}, 10 * 60_000);
 
 /** MUBOT_DB_* de .env.db (ClickHouse local, ver db/docker-compose.yml); vacío si no hay archivo. */
 function dbEnv(): Record<string, string> {
