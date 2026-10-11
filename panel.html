@@ -76,13 +76,6 @@
   .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
   .alert { display: none; background: #3a1712; border: 1px solid #8a3a2e; color: #ffd9cf; border-radius: 10px; padding: 8px 12px; margin: 10px 16px 0; }
   .alert.show { display: block; }
-  details.card > summary { cursor: pointer; list-style: none; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--gold); font-weight: 700; }
-  details.card > summary::after { content: ' ▸'; color: var(--muted); } details.card[open] > summary::after { content: ' ▾'; }
-  .viewer { position: relative; height: 340px; border-radius: 10px; overflow: hidden; background: radial-gradient(400px 300px at 50% 70%, #3a2a16, #0b0907); border: 1px solid var(--line); margin-top: 10px; }
-  .viewer canvas { display: block; width: 100% !important; height: 100% !important; }
-  .viewer .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
-  .anims { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
-  .anims button { padding: 4px 8px; font-size: 12px; }
   .toast { position: fixed; right: 16px; bottom: 16px; background: #241b12; border: 1px solid var(--gold); color: var(--text); padding: 10px 14px; border-radius: 10px; max-width: 360px; opacity: 0; transition: opacity .3s; z-index: 9; }
   .toast.show { opacity: 1; }
   .nearlist { display: grid; gap: 4px; max-height: 190px; overflow: auto; font-size: 13px; }
@@ -129,11 +122,6 @@
     <section class="card">
       <h2>Lo que va haciendo <small><label><input type="checkbox" id="onlyBot"> solo el bot</label></small></h2>
       <div class="log" id="log"></div>
-    </section>
-    <section class="card">
-      <h2>Ciclos <small id="cycInfo"></small></h2>
-      <div class="row" id="tramos"></div>
-      <div style="overflow:auto;margin-top:10px"><table id="cycles"><thead><tr><th>Inicio</th><th>Min</th><th>/día</th><th>→100</th><th>→200</th><th>→300</th><th>→400</th><th></th></tr></thead><tbody></tbody></table></div>
     </section>
   </div>
 
@@ -208,13 +196,6 @@
       <div class="muted" style="margin-top:8px;font-size:12px">Puntos libres <b id="points">—</b> · Zen <b id="zen">—</b></div>
     </section>
 
-    <details class="card" id="modelBox">
-      <summary>Modelo 3D</summary>
-      <div class="viewer" id="viewer">
-        <div class="anims"><button data-anim="idle">Quieto</button><button data-anim="walk">Caminar</button><button data-anim="skill">Skill</button></div>
-        <div class="hint" id="viewerHint">cargando modelo…</div>
-      </div>
-    </details>
   </div>
 </main>
 <div class="toast" id="toast"></div>
@@ -286,7 +267,7 @@
     if (s.mode === 'farm' && s.exp.perMin5 === 0 && ses && now - ses.since > 5 * 60000) al.push('5 minutos sin ganar experiencia.');
     if (s.char.points > 400) al.push(`${fmt(s.char.points)} puntos sin repartir.`);
     $('alert').textContent = al.join(' · '); $('alert').classList.toggle('show', al.length > 0);
-    renderNear(s); renderEvents(); renderTickets(s.tickets); renderCycle(s);
+    renderNear(s); renderEvents(); renderTickets(s.tickets);
   };
 
   const renderNear = (s) => {
@@ -332,31 +313,6 @@
   const renderTickets = (t) => {
     const el = $('tickets'); el.textContent = '';
     for (const [k, n] of Object.entries(t ?? {})) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = `${k} ×${n}`; el.append(c); }
-  };
-  const MARKS = [20, 50, 100, 200, 300, 350, 400];
-  const renderCycle = (s) => {
-    const solo = (s.cycles ?? []).filter((c) => !c.tag && c.min);
-    const best = solo.reduce((b, c) => (!b || c.min < b.min ? c : b), null);
-    const c = s.cycle;
-    $('cycInfo').textContent = `actual ${c?.min != null ? c.min.toFixed(1) : '—'} min · mejor ${best ? best.min.toFixed(1) : '—'} min · ${s.resetsPerDay == null ? '—' : Math.round(s.resetsPerDay)} resets/día`;
-    const tr = $('tramos'); tr.textContent = '';
-    let prev = 0, prevB = 0, prevLvl = 10;
-    for (const lv of MARKS) {
-      const at = c?.marks?.[lv], bAt = best?.marks?.[lv];
-      const seg = at != null ? at - prev : null, bSeg = bAt != null ? bAt - prevB : null;
-      const d = document.createElement('div'); d.className = 'stat'; d.style.flex = '1 1 60px';
-      d.innerHTML = '<small></small><b></b><small></small>';
-      d.children[0].textContent = `${prevLvl}→${lv}`; d.children[1].textContent = seg != null ? seg.toFixed(1) : '…'; d.children[2].textContent = bSeg != null ? `mejor ${bSeg.toFixed(1)}` : '';
-      if (seg != null && bSeg != null) d.children[1].style.color = seg <= bSeg ? 'var(--ok)' : 'var(--bad)';
-      tr.append(d); if (at != null) prev = at; if (bAt != null) prevB = bAt; prevLvl = lv;
-    }
-    const tb = $('cycles').querySelector('tbody'); tb.textContent = '';
-    for (const r of [...(s.cycles ?? [])].reverse().slice(0, 10)) {
-      const tr2 = document.createElement('tr');
-      const cells = [hhmm(r.start), r.min?.toFixed(1) ?? '—', r.min ? Math.round(1440 / r.min) : '—', r.marks?.[100] ?? '—', r.marks?.[200] ?? '—', r.marks?.[300] ?? '—', r.marks?.[400] ?? '—'];
-      for (const v of cells) { const td = document.createElement('td'); td.textContent = v; tr2.append(td); }
-      const tag = document.createElement('td'); tag.className = 'tag'; tag.textContent = r.tag ?? ''; tr2.append(tag); tb.append(tr2);
-    }
   };
   setInterval(() => {
     renderEvents();
@@ -453,121 +409,6 @@
   });
   cv.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
 })();
-</script>
-<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
-<script>
-// El modelo 3D (three.js desde CDN) se carga solo al abrir "Modelo 3D": el mapa y el estado
-// funcionan sin él y sin internet.
-document.getElementById('modelBox').addEventListener('toggle', (e) => {
-  if (!e.target.open || window.__viewerLoaded) return; window.__viewerLoaded = true;
-  const s = document.createElement('script'); s.type = 'module'; s.textContent = document.getElementById('viewerSrc').textContent; document.body.append(s);
-});
-</script>
-<script type="text/plain" id="viewerSrc">
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-// Modelo de cada ítem (grupo/número → archivo), sacado de data/items.json del bot.
-const MODELS = {"0/0":"Item/sword01.glb","0/1":"Item/sword02.glb","0/2":"Item/sword03.glb","0/3":"Item/sword04.glb","0/4":"Item/sword05.glb","0/5":"Item/sword06.glb","0/6":"Item/sword07.glb","0/7":"Item/sword08.glb","0/8":"Item/sword09.glb","0/9":"Item/sword10.glb","0/10":"Item/sword11.glb","0/11":"Item/sword12.glb","0/12":"Item/sword13.glb","0/13":"Item/sword14.glb","0/14":"Item/sword15.glb","0/15":"Item/sword16.glb","0/16":"Item/sword17.glb","0/17":"Item/sword18.glb","0/18":"Item/sword19.glb","0/19":"Item/sword20.glb","0/20":"Item/sword21.glb","0/21":"Item/sword22.glb","0/22":"Item/HDK_Sword.glb","0/23":"Item/HDK_Sword2.glb","0/24":"Item/CW_Sword.glb","0/25":"Item/CW_Sword2.glb","0/26":"Item/Sword_27.glb","0/27":"Item/Sword_28.glb","0/28":"Item/Sword_29.glb","0/31":"Item/sword32.glb","1/0":"Item/Axe01.glb","1/1":"Item/Axe02.glb","1/2":"Item/Axe03.glb","1/3":"Item/Axe04.glb","1/4":"Item/Axe05.glb","1/5":"Item/Axe06.glb","1/6":"Item/Axe07.glb","1/7":"Item/Axe08.glb","1/8":"Item/Axe09.glb","2/0":"Item/mace01.glb","2/1":"Item/mace02.glb","2/2":"Item/mace03.glb","2/3":"Item/mace04.glb","2/4":"Item/mace05.glb","2/5":"Item/mace06.glb","2/6":"Item/mace07.glb","2/7":"Item/mace08.glb","2/8":"Item/mace09.glb","2/9":"Item/mace10.glb","2/10":"Item/mace11.glb","2/11":"Item/mace12.glb","2/12":"Item/mace13.glb","2/13":"Item/saint.glb","2/14":"Item/HDK_Mace.glb","2/15":"Item/CW_Mace.glb","2/16":"Item/Mace_17.glb","2/17":"Item/Mace_18.glb","2/18":"Item/gamble_safter01.glb","3/0":"Item/spear01.glb","3/1":"Item/spear02.glb","3/2":"Item/spear03.glb","3/3":"Item/spear04.glb","3/4":"Item/spear05.glb","3/5":"Item/spear06.glb","3/6":"Item/spear07.glb","3/7":"Item/spear08.glb","3/8":"Item/spear09.glb","3/9":"Item/Spear10.glb","3/10":"Item/spear11.glb","3/11":"Item/gamble_scyder01.glb","4/0":"Item/Bow01.glb","4/1":"Item/Bow02.glb","4/2":"Item/Bow03.glb","4/3":"Item/Bow04.glb","4/4":"Item/Bow05.glb","4/5":"Item/Bow06.glb","4/6":"Item/Bow07.glb","4/7":"Item/Arrows01.glb","4/8":"Item/CrossBow01.glb","4/9":"Item/CrossBow02.glb","4/10":"Item/CrossBow03.glb","4/11":"Item/CrossBow04.glb","4/12":"Item/CrossBow05.glb","4/13":"Item/CrossBow06.glb","4/14":"Item/CrossBow07.glb","4/15":"Item/arrows02.glb","4/16":"Item/CrossBow17.glb","4/17":"Item/Bow18.glb","4/18":"Item/Bow19.glb","4/19":"Item/CrossBow20.glb","4/20":"Item/Bow20.glb","4/21":"Item/HDK_Bow.glb","4/22":"Item/CW_Bow.glb","4/23":"Item/Bow_24.glb","4/24":"Item/gamblebow.glb","5/0":"Item/staff01.glb","5/1":"Item/staff02.glb","5/2":"Item/staff03.glb","5/3":"Item/staff04.glb","5/4":"Item/staff05.glb","5/5":"Item/staff06.glb","5/6":"Item/staff07.glb","5/7":"Item/staff08.glb","5/8":"Item/staff09.glb","5/9":"Item/staff10.glb","5/10":"Item/staff11.glb","5/11":"Item/staff12.glb","5/12":"Item/HDK_Staff.glb","5/13":"Item/CW_Staff.glb","5/14":"Item/staff15.glb","5/15":"Item/staff16.glb","5/16":"Item/staff17.glb","5/17":"Item/staff18.glb","5/18":"Item/staff19.glb","5/19":"Item/staff20.glb","5/20":"Item/staff21.glb","5/21":"Item/Book_of_Sahamutt.glb","5/22":"Item/Book_of_Neil.glb","5/23":"Item/Book_of_Rargle.glb","5/30":"Item/Staff_31.glb","5/31":"Item/Staff_32.glb","5/32":"Item/summonsprit.glb","5/33":"Item/gamble_wand.glb","5/34":"Item/gamble_stick.glb","6/0":"Item/Shield01.glb","6/1":"Item/Shield02.glb","6/2":"Item/Shield03.glb","6/3":"Item/Shield04.glb","6/4":"Item/Shield05.glb","6/5":"Item/Shield06.glb","6/6":"Item/Shield07.glb","6/7":"Item/Shield08.glb","6/8":"Item/Shield09.glb","6/9":"Item/Shield10.glb","6/10":"Item/Shield11.glb","6/11":"Item/Shield12.glb","6/12":"Item/Shield13.glb","6/13":"Item/Shield14.glb","6/14":"Item/Shield15.glb","6/15":"Item/Shield16.glb","6/16":"Item/Shield17.glb","6/17":"Item/Shield_18.glb","6/18":"Item/Shield_19.glb","6/19":"Item/Shield_20.glb","6/20":"Item/Shield_21.glb","6/21":"Item/crosssheild.glb","7/0":"Player/HelmMale01.glb","7/1":"Player/HelmMale02.glb","7/2":"Player/HelmMale03.glb","7/3":"Player/HelmMale04.glb","7/4":"Player/HelmMale05.glb","7/5":"Player/HelmMale06.glb","7/6":"Player/HelmMale07.glb","7/7":"Player/HelmMale08.glb","7/8":"Player/HelmMale09.glb","7/9":"Player/HelmMale10.glb","7/10":"Player/HelmElf01.glb","7/11":"Player/HelmElf02.glb","7/12":"Player/HelmElf03.glb","7/13":"Player/HelmElf04.glb","7/14":"Player/HelmElf05.glb","7/16":"Player/HelmMale17.glb","7/17":"Player/HelmMale18.glb","7/18":"Player/HelmMale19.glb","7/19":"Player/HelmMaleTest20.glb","7/21":"Player/HelmMale22.glb","7/22":"Player/HelmMale23.glb","7/24":"Player/HelmMale25.glb","7/25":"Player/HelmMale26.glb","7/26":"Player/HelmMale27.glb","7/27":"Player/HelmMale28.glb","7/28":"Player/HelmMale29.glb","7/29":"Item/HDK_HelmMale01.glb","7/30":"Item/HDK_HelmMale02.glb","7/31":"Item/HDK_HelmMale03.glb","7/33":"Item/HDK_HelmMale05.glb","7/34":"Item/CW_HelmMale01.glb","7/35":"Item/CW_HelmMale02.glb","7/36":"Item/CW_HelmMale03.glb","7/38":"Item/CW_HelmMale05.glb","7/39":"Player/HelmMale40.glb","7/40":"Player/HelmMale41.glb","7/41":"Player/HelmMale42.glb","7/42":"Player/HelmMale43.glb","7/43":"Player/HelmMale44.glb","7/44":"Player/HelmMale45.glb","7/45":"Player/HelmMale46.glb","7/46":"Player/HelmMale47.glb","7/49":"Player/HelmMale50.glb","7/50":"Player/HelmMale51.glb","7/51":"Player/HelmMale52.glb","7/52":"Player/HelmMale53.glb","7/53":"Player/HelmMail_succubus.glb","8/0":"Player/ArmorMale01.glb","8/1":"Player/ArmorMale02.glb","8/2":"Player/ArmorMale03.glb","8/3":"Player/ArmorMale04.glb","8/4":"Player/ArmorMale05.glb","8/5":"Player/ArmorMale06.glb","8/6":"Player/ArmorMale07.glb","8/7":"Player/ArmorMale08.glb","8/8":"Player/ArmorMale09.glb","8/9":"Player/ArmorMale10.glb","8/10":"Player/ArmorElf01.glb","8/11":"Player/ArmorElf02.glb","8/12":"Player/ArmorElf03.glb","8/13":"Player/ArmorElf04.glb","8/14":"Player/ArmorElf05.glb","8/15":"Player/ArmorMale16.glb","8/16":"Player/ArmorMale17.glb","8/17":"Player/ArmorMale18.glb","8/18":"Player/ArmorMale19.glb","8/19":"Player/ArmorMaleTest20.glb","8/20":"Player/ArmorMale21.glb","8/21":"Player/ArmorMale22.glb","8/22":"Player/ArmorMale23.glb","8/23":"Player/ArmorMale24.glb","8/24":"Player/ArmorMale25.glb","8/25":"Player/ArmorMale26.glb","8/26":"Player/ArmorMale27.glb","8/27":"Player/ArmorMale28.glb","8/28":"Player/ArmorMale29.glb","8/29":"Item/HDK_ArmorMale01.glb","8/30":"Item/HDK_ArmorMale02.glb","8/31":"Item/HDK_ArmorMale03.glb","8/32":"Item/HDK_ArmorMale04.glb","8/33":"Item/HDK_ArmorMale05.glb","8/34":"Item/CW_ArmorMale01.glb","8/35":"Item/CW_ArmorMale02.glb","8/36":"Item/CW_ArmorMale03.glb","8/37":"Item/CW_ArmorMale04.glb","8/38":"Item/CW_ArmorMale05.glb","8/39":"Player/ArmorMale40.glb","8/40":"Player/ArmorMale41.glb","8/41":"Player/ArmorMale42.glb","8/42":"Player/ArmorMale43.glb","8/43":"Player/ArmorMale44.glb","8/44":"Player/ArmorMale45.glb","8/45":"Player/ArmorMale46.glb","8/46":"Player/ArmorMale47.glb","8/47":"Player/ArmorMale48.glb","8/48":"Player/ArmorMale49.glb","8/49":"Player/ArmorMale50.glb","8/50":"Player/ArmorMale51.glb","8/51":"Player/ArmorMale52.glb","8/52":"Player/ArmorMale53.glb","8/53":"Player/ArmorMail_succubus.glb","9/0":"Player/PantMale01.glb","9/1":"Player/PantMale02.glb","9/2":"Player/PantMale03.glb","9/3":"Player/PantMale04.glb","9/4":"Player/PantMale05.glb","9/5":"Player/PantMale06.glb","9/6":"Player/PantMale07.glb","9/7":"Player/PantMale08.glb","9/8":"Player/PantMale09.glb","9/9":"Player/PantMale10.glb","9/10":"Player/PantElf01.glb","9/11":"Player/PantElf02.glb","9/12":"Player/PantElf03.glb","9/13":"Player/PantElf04.glb","9/14":"Player/PantElf05.glb","9/15":"Player/PantMale16.glb","9/16":"Player/PantMale17.glb","9/17":"Player/PantMale18.glb","9/18":"Item/t_PantMale19.glb","9/19":"Player/PantMaleTest20.glb","9/20":"Player/PantMale21.glb","9/21":"Player/PantMale22.glb","9/22":"Player/PantMale23.glb","9/23":"Player/PantMale24.glb","9/24":"Player/PantMale25.glb","9/25":"Player/PantMale26.glb","9/26":"Player/PantMale27.glb","9/27":"Player/PantMale28.glb","9/28":"Player/PantMale29.glb","9/29":"Item/HDK_PantMale01.glb","9/30":"Item/HDK_PantMale02.glb","9/31":"Item/HDK_PantMale03.glb","9/32":"Item/HDK_PantMale04.glb","9/33":"Item/HDK_PantMale05.glb","9/34":"Item/CW_PantMale01.glb","9/35":"Item/CW_PantMale02.glb","9/36":"Item/CW_PantMale03.glb","9/37":"Item/CW_PantMale04.glb","9/38":"Item/CW_PantMale05.glb","9/39":"Player/PantMale40.glb","9/40":"Player/PantMale41.glb","9/41":"Player/PantMale42.glb","9/42":"Player/PantMale43.glb","9/43":"Player/PantMale44.glb","9/44":"Player/PantMale45.glb","9/45":"Player/PantMale46.glb","9/46":"Player/PantMale47.glb","9/47":"Player/PantMale48.glb","9/48":"Player/PantMale49.glb","9/49":"Player/PantMale50.glb","9/50":"Player/PantMale51.glb","9/51":"Player/PantMale52.glb","9/52":"Player/PantMale53.glb","9/53":"Player/PantMail_succubus.glb","10/0":"Player/GloveMale01.glb","10/1":"Player/GloveMale02.glb","10/2":"Player/GloveMale03.glb","10/3":"Player/GloveMale04.glb","10/4":"Player/GloveMale05.glb","10/5":"Player/GloveMale06.glb","10/6":"Player/GloveMale07.glb","10/7":"Player/GloveMale08.glb","10/8":"Player/GloveMale09.glb","10/9":"Player/GloveMale10.glb","10/10":"Player/GloveElf01.glb","10/11":"Player/GloveElf02.glb","10/12":"Player/GloveElf03.glb","10/13":"Player/GloveElf04.glb","10/14":"Player/GloveElf05.glb","10/15":"Player/GloveMale16.glb","10/16":"Player/GloveMale17.glb","10/17":"Player/GloveMale18.glb","10/18":"Player/GloveMale19.glb","10/19":"Player/GloveMaleTest20.glb","10/20":"Player/GloveMale21.glb","10/21":"Player/GloveMale22.glb","10/22":"Player/GloveMale23.glb","10/23":"Player/GloveMale24.glb","10/24":"Player/GloveMale25.glb","10/25":"Player/GloveMale26.glb","10/26":"Player/GloveMale27.glb","10/27":"Player/GloveMale28.glb","10/28":"Player/GloveMale29.glb","10/29":"Item/HDK_GloveMale01.glb","10/30":"Item/HDK_GloveMale02.glb","10/31":"Item/HDK_GloveMale03.glb","10/32":"Item/HDK_GloveMale04.glb","10/33":"Item/HDK_GloveMale05.glb","10/34":"Item/CW_GloveMale01.glb","10/35":"Item/CW_GloveMale02.glb","10/36":"Item/CW_GloveMale03.glb","10/37":"Item/CW_GloveMale04.glb","10/38":"Item/CW_GloveMale05.glb","10/39":"Player/GloveMale40.glb","10/40":"Player/GloveMale41.glb","10/41":"Player/GloveMale42.glb","10/42":"Player/GloveMale43.glb","10/43":"Player/GloveMale44.glb","10/44":"Player/GloveMale45.glb","10/45":"Player/GloveMale46.glb","10/46":"Player/GloveMale47.glb","10/47":"Player/GloveMale48.glb","10/48":"Player/GloveMale49.glb","10/49":"Player/GloveMale50.glb","10/50":"Player/GloveMale51.glb","10/51":"Player/GloveMale52.glb","10/52":"Player/GloveMale53.glb","10/53":"Player/GloveMail_succubus.glb","11/0":"Player/BootMale01.glb","11/1":"Player/BootMale02.glb","11/2":"Player/BootMale03.glb","11/3":"Player/BootMale04.glb","11/4":"Player/BootMale05.glb","11/5":"Player/BootMale06.glb","11/6":"Player/BootMale07.glb","11/7":"Player/BootMale08.glb","11/8":"Player/BootMale09.glb","11/9":"Player/BootMale10.glb","11/10":"Player/BootElf01.glb","11/11":"Player/BootElf02.glb","11/12":"Player/BootElf03.glb","11/13":"Player/BootElf04.glb","11/14":"Player/BootElf05.glb","11/15":"Player/BootMale16.glb","11/16":"Player/BootMale17.glb","11/17":"Player/BootMale18.glb","11/18":"Player/BootMale19.glb","11/19":"Player/BootMaleTest20.glb","11/20":"Player/BootMale21.glb","11/21":"Player/BootMale22.glb","11/22":"Player/BootMale23.glb","11/23":"Player/BootMale24.glb","11/24":"Player/BootMale25.glb","11/25":"Player/BootMale26.glb","11/26":"Player/BootMale27.glb","11/27":"Player/BootMale28.glb","11/28":"Player/BootMale29.glb","11/29":"Item/HDK_BootMale01.glb","11/30":"Item/HDK_BootMale02.glb","11/31":"Item/HDK_BootMale03.glb","11/32":"Item/HDK_BootMale04.glb","11/33":"Item/HDK_BootMale05.glb","11/34":"Item/CW_BootMale01.glb","11/35":"Item/CW_BootMale02.glb","11/36":"Item/CW_BootMale03.glb","11/37":"Item/CW_BootMale04.glb","11/38":"Item/CW_BootMale05.glb","11/39":"Player/BootMale40.glb","11/40":"Player/BootMale41.glb","11/41":"Player/BootMale42.glb","11/42":"Player/BootMale43.glb","11/43":"Player/BootMale44.glb","11/44":"Player/BootMale45.glb","11/45":"Player/BootMale46.glb","11/46":"Player/BootMale47.glb","11/47":"Player/BootMale48.glb","11/48":"Player/BootMale49.glb","11/49":"Player/BootMale50.glb","11/50":"Player/BootMale51.glb","11/51":"Player/BootMale52.glb","11/52":"Player/BootMale53.glb","11/53":"Player/BootMail_succubus.glb","12/0":"Item/Wing01.glb","12/1":"Item/Wing02.glb","12/2":"Item/Wing03.glb","12/3":"Item/Wing04.glb","12/4":"Item/Wing05.glb","12/5":"Item/Wing06.glb","12/6":"Item/Wing07.glb","12/7":"Item/Gem01.glb","12/8":"Item/Gem02.glb","12/9":"Item/Gem03.glb","12/10":"Item/Gem04.glb","12/11":"Item/Gem05.glb","12/12":"Item/Gem06.glb","12/13":"Item/Gem07.glb","12/14":"Item/Gem08.glb","12/15":"Item/Jewel15.glb","12/16":"Item/Gem10.glb","12/17":"Item/Gem11.glb","12/18":"Item/Gem12.glb","12/19":"Item/Gem13.glb","12/21":"Item/SkillScroll.glb","12/22":"Item/SkillScroll.glb","12/23":"Item/SkillScroll.glb","12/24":"Item/SkillScroll.glb","12/26":"EmptyEmpty\"","12/30":"Item/rollofpaper.glb","12/31":"Item/rollofpaper.glb","12/32":"Item/giftbox_r.glb","12/33":"Item/giftbox_g.glb","12/34":"Item/giftbox_b.glb","12/35":"Item/SkillScroll.glb","12/36":"Item/Wing08.glb","12/37":"Item/Wing09.glb","12/38":"Item/Wing10.glb","12/39":"Item/Wing11.glb","12/40":"Item/DarkLordRobe02.glb","12/41":"Item/Wing42.glb","12/42":"Item/Wing43.glb","12/43":"Item/Wing44.glb","12/44":"Item/Gem06.glb","12/45":"Item/Gem06.glb","12/46":"Item/Gem06.glb","12/47":"Item/Gem06.glb","12/48":"Item/SkillScroll.glb","12/60":"Item/s30_seed.glb","12/61":"Item/s30_seed.glb","12/62":"Item/s30_seed.glb","12/63":"Item/s30_seed.glb","12/64":"Item/s30_seed.glb","12/65":"Item/s30_seed.glb","12/70":"Item/s30_sphere_body01.glb","12/100":"Item/s30_sphere01.glb","12/101":"Item/rollofpaper.glb","12/102":"Item/rollofpaper.glb","12/103":"Item/rollofpaper.glb","12/104":"Item/rollofpaper.glb","12/105":"Item/rollofpaper.glb","12/106":"Item/rollofpaper.glb","12/107":"Item/rollofpaper.glb","12/108":"Item/rollofpaper.glb","12/109":"Item/rollofpaper.glb","12/110":"Item/rollofpaper.glb","12/111":"Item/rollofpaper.glb","12/112":"Item/rollofpaper.glb","12/113":"Item/rollofpaper.glb","12/114":"Item/rollofpaper.glb","12/115":"Item/rollofpaper.glb","12/116":"Item/rollofpaper.glb","12/117":"Item/rollofpaper.glb","12/118":"Item/rollofpaper.glb","12/119":"Item/rollofpaper.glb","12/120":"Item/rollofpaper.glb","12/121":"Item/rollofpaper.glb","12/122":"Item/rollofpaper.glb","12/123":"Item/rollofpaper.glb","12/124":"Item/rollofpaper.glb","12/125":"Item/rollofpaper.glb","12/126":"Item/rollofpaper.glb","12/127":"Item/rollofpaper.glb","12/128":"Item/rollofpaper.glb","12/129":"Item/rollofpaper.glb"};
-// Clase del protocolo → índice de piel del cliente (HelmClassNN, ArmorClassNN...).
-const SKIN = { 0: 1, 2: 201, 3: 301, 4: 2, 6: 202, 7: 302, 8: 3, 10: 203, 11: 303, 12: 4, 13: 304, 16: 5, 17: 305 };
-// Acciones de player.glb (enum PlayerAction del cliente).
-const ANIM = { idle: 1, walk: 15, skill: 65, fly: 11 };
-const ASSETS = '/assets/';
-const PART_GROUP = { 7: 'helm', 8: 'armor', 9: 'pants', 10: 'gloves', 11: 'boots' };
-const CLASS_PREFIX = { helm: 'HelmClass', armor: 'ArmorClass', pants: 'PantClass', gloves: 'GloveClass', boots: 'BootClass' };
-
-const box = document.getElementById('viewer'), hint = document.getElementById('viewerHint');
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(2, devicePixelRatio)); renderer.outputColorSpace = THREE.SRGBColorSpace;
-box.prepend(renderer.domElement);
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(32, 1, 1, 5000);
-const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.enablePan = false;
-scene.add(new THREE.HemisphereLight(0xfff1d8, 0x2a1c10, 2.2));
-const key = new THREE.DirectionalLight(0xffe2b0, 2.4); key.position.set(150, 300, 200); scene.add(key);
-const rim = new THREE.DirectionalLight(0x6a8cff, 1.2); rim.position.set(-200, 150, -200); scene.add(rim);
-const floor = new THREE.Mesh(new THREE.CircleGeometry(90, 48), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: .35 }));
-floor.rotation.x = -Math.PI / 2; scene.add(floor);
-const loader = new GLTFLoader();
-window.__viewer = { scene, camera, controls };
-let rig = null, mixer = null, clips = [], current = null, signature = '';
-const clock = new THREE.Clock();
-
-const resize = () => { const w = box.clientWidth, h = box.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
-new ResizeObserver(resize).observe(box); resize();
-
-const load = (path) => loader.loadAsync(ASSETS + path);
-const playAnim = (name) => {
-  if (!mixer || !clips.length) return; const clip = clips[ANIM[name] ?? 1] ?? clips[1];
-  const a = mixer.clipAction(clip); if (current === a) return; a.reset().fadeIn(.25).play(); current?.fadeOut(.25); current = a;
-};
-document.querySelectorAll('[data-anim]').forEach((b) => b.addEventListener('click', () => playAnim(b.dataset.anim)));
-
-// Cada pieza trae su propio esqueleto con los mismos nombres de hueso que player.glb:
-// se re-enlaza al esqueleto del cuerpo para que todas se muevan con la misma animación.
-function attachPart(base, bonesByName, partScene) {
-  const meshes = []; partScene.traverse((o) => { if (o.isSkinnedMesh) meshes.push(o); });
-  (window.__partDbg ??= []).push(meshes.map((m) => ({ part: m.skeleton.bones.slice(0, 4).map((b) => b.name), miss: m.skeleton.bones.filter((b) => !bonesByName.has(b.name)).map((b) => b.name).slice(0, 5), base: [...bonesByName.keys()].slice(0, 4) })));
-  for (const m of meshes) {
-    // El hueso raíz se llama distinto en cada archivo (skin_ArmorMale02 / skin_player): emparejar por rol.
-    const bones = m.skeleton.bones.map((b) => bonesByName.get(b.name) ?? (b.name.startsWith('skin_') ? base.getObjectByName('skin_player') : null) ?? b);
-    const sk = new THREE.Skeleton(bones, m.skeleton.boneInverses);
-    // Colgarla del nodo del modelo del cuerpo (mismo lugar que tenía en su archivo: model_X).
-    const holder = base.getObjectByName('model_player') ?? base; m.removeFromParent(); holder.add(m); m.bind(sk, m.bindMatrix);
-    for (const mat of [].concat(m.material)) { mat.side = THREE.DoubleSide; if (mat.transparent || mat.map?.format === THREE.RGBAFormat) mat.alphaTest = .3; }
-    m.frustumCulled = false;
-  }
-}
-function attachToBone(bone, objScene) { objScene.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; for (const mat of [].concat(o.material)) mat.side = THREE.DoubleSide; } }); bone.add(objScene); }
-
-async function buildCharacter(classId, equipment) {
-  const skin = SKIN[classId] ?? 2, sig = JSON.stringify([skin, equipment]);
-  if (sig === signature) return; signature = sig; hint.textContent = 'cargando modelo…';
-  const baseGltf = await load('Player/player.glb');
-  const base = baseGltf.scene; const bonesByName = new Map(); base.traverse((o) => { if (o.isBone) bonesByName.set(o.name, o); });
-  const eq = new Map((equipment ?? []).map((e) => [e.slot, e]));
-  const jobs = [];
-  for (const [slot, part] of [[2, 'helm'], [3, 'armor'], [4, 'pants'], [5, 'gloves'], [6, 'boots']]) {
-    const it = eq.get(slot); const file = it && MODELS[`${it.group}/${it.num}`];
-    const path = file && PART_GROUP[it.group] ? file : `Player/${CLASS_PREFIX[part]}${String(skin).padStart(2, '0')}.glb`;
-    jobs.push(load(path).then((g) => attachPart(base, bonesByName, g.scene)).catch(() => {}));
-  }
-  await Promise.all(jobs); jobs.length = 0;
-  base.updateMatrixWorld(true);
-
-  const boneList = [...bonesByName.values()];
-  const wings = eq.get(7), wFile = wings && MODELS[`${wings.group}/${wings.num}`];
-  // Alas: traen su propio esqueleto (Bip01 + huesos de ala) y su animación; van como hermanas del
-  // cuerpo dentro del modelo rotado, no colgadas de un hueso.
-  if (wFile) jobs.push(load(wFile).then((g) => { const holder = base.getObjectByName('model_player') ?? base; g.scene.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; for (const mat of [].concat(o.material)) mat.side = THREE.DoubleSide; } }); holder.add(g.scene); if (g.animations[0]) { const wm = new THREE.AnimationMixer(g.scene); wm.clipAction(g.animations[0]).play(); extraMixers.push(wm); } }).catch(() => {}));
-  const hand = (side) => boneList.find((b) => new RegExp(`${side} Hand$`).test(b.name));
-  // Armas: falta el offset de cada una en la mano (el cliente lo trae por arma). Por ahora no.
-  if (false) for (const [slot, side] of [[0, 'R'], [1, 'L']]) { const w = eq.get(slot), f = w && MODELS[`${w.group}/${w.num}`]; if (f && w.group <= 6) jobs.push(load(f).then((g) => attachToBone(hand(side) ?? base, g.scene)).catch(() => {})); }
-  await Promise.all(jobs);
-  if (rig) scene.remove(rig); rig = base; scene.add(rig);
-  // Misma transformación que aplica el cliente a cada modelo (modelObject.ts): escala (1,-1,1)
-  // y -90° en X (MU usa Z hacia arriba).
-  base.rotation.x = -Math.PI / 2; base.scale.set(1, -1, 1);
-  mixer = new THREE.AnimationMixer(base); clips = baseGltf.animations; current = null;
-  // Con alas el cliente usa las acciones de vuelo (STOP_FLY) en vez de las de a pie.
-  ANIM.idle = wFile ? 11 : 1; ANIM.walk = wFile ? 34 : 15;
-  playAnim('idle'); mixer.update(0.05); base.updateMatrixWorld(true);
-  // Encuadre con las posiciones de los huesos ya animados (en reposo están todos en el origen;
-  // la caja de las mallas con skin sale mal).
-  // Caja exacta de las mallas ya deformadas por la animación (setFromObject con precise=true).
-  const bodyBox = new THREE.Box3(); base.traverse((o) => { if (o.isSkinnedMesh) bodyBox.union(new THREE.Box3().setFromObject(o, true)); });
-  window.__viewerDbg = { bones: bonesByName.size, box: [bodyBox.min.toArray(), bodyBox.max.toArray()] };
-  const bb = bodyBox; const size = bb.getSize(new THREE.Vector3()), c = bb.getCenter(new THREE.Vector3());
-  const hgt = Math.max(size.y, 0.01); controls.target.set(c.x, bb.min.y + hgt * 1.05, c.z); camera.position.set(c.x + hgt * 1.6, bb.min.y + hgt * 1.4, c.z + hgt * 6); camera.near = hgt / 100; camera.far = hgt * 50; camera.updateProjectionMatrix();
-  floor.position.set(c.x, bb.min.y, c.z); floor.scale.setScalar(hgt / 150);
-  hint.textContent = 'arrastrá para girar · rueda para acercar';
-}
-const extraMixers = [];
-(function loop() { requestAnimationFrame(loop); const dt = clock.getDelta(); mixer?.update(dt); for (const m of extraMixers) m.update(dt); controls.update(); renderer.render(scene, camera); })();
-const ASSETS_LAST = { s: null };
-window.addEventListener('panel-state', (ev) => { ASSETS_LAST.s = ev.detail; buildCharacter(ev.detail.char.classId, ev.detail.equipment).catch((e) => { hint.textContent = 'no pude cargar el modelo: ' + e.message; }); });
 </script>
 </body>
 </html>

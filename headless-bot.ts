@@ -1212,15 +1212,29 @@ function step(dir: number) {
 // proporcional a BUILD_WEIGHTS. Es como lo hace el usuario: confirmado que el
 // server acepta str/ene/vit así (ver AGENTS.md, "Reset y stats").
 const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit', ene: 'ene' };
+// Si el server no los toma (stat en el tope: Melu con fuerza y energía en 65535), los puntos vuelven a
+// aparecer en el próximo CharacterLevelUpdate y el bot repetía los /add cada pocos segundos sin pelear
+// (2026-10-11: +13 niveles en 15 min). Si después de un reparto los puntos no bajaron, 15 min sin repartir.
+let statTry: { points: number; at: number } | null = null;
+let statOffUntil = 0;
 async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  if (!force && Date.now() < statOffUntil) return 0;
+  if (statTry && Date.now() - statTry.at > 3000 && points >= statTry.points) {
+    statTry = null; statOffUntil = Date.now() + 15 * 60_000;
+    log(`Stats: el server no tomó el reparto (siguen ${points} puntos libres; ¿stats en el tope?): no reparto por 15 min.`);
+    return 0;
+  }
   let plan: Array<[StatName, number]>;
   if (!BUILD_ARG) {
     // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
     // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
     const p = planStats(points, world.stats.str, world.stats.ene);
-    plan = [['ene', p.ene], ['str', p.str], ['vit', p.vit]];
+    plan = ([['ene', p.ene], ['str', p.str], ['vit', p.vit]] as Array<[StatName, number]>).filter(([name]) => world.stats[name] < 65535); // 65535 = tope del server (u16)
+    // Lo que iba a un stat en el tope va al primero que quede (si no, cada vuelta repartía solo el 5% de vit).
+    if (!plan.length) { const v = (['vit', 'agi'] as StatName[]).find((k) => world.stats[k] < 65535); if (!v) return 0; plan = [[v, 0]]; }
+    plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
   } else {
     const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
     const total = active.reduce((acc, [, w]) => acc + w, 0);
@@ -1235,6 +1249,7 @@ async function investStatPoints(force = false): Promise<number> {
     autoOk: false,
   });
   if (!ok) return 0;
+  statTry = { points, at: Date.now() };
   let spent = 0;
   for (const [name, n] of plan) {
     if (n <= 0) continue;
