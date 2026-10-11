@@ -51,7 +51,6 @@
   }
   F.timers.push(setInterval(() => {
     const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe || S.uiState !== 5 || S.sceneLoading) return;
-    if (window.__ai?.on) window.__ai.on = false;
     const now = Date.now();
     // Pociones (el agente está apagado).
     if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.6 && now - (F.potAt ?? 0) > 900) {
@@ -65,13 +64,33 @@
     if (ai?.busy) return;
     let lp = null; try { lp = JSON.parse(localStorage.getItem(`mubot:pos:${leader}`) || 'null'); } catch {}
     if (!lp || now - lp.at > 10000) return; // el líder no publica (pestaña cerrada o cargando)
+    // Mapa del líder fuera de su nivel (después del reset Melu está en 10 y Horaz en Arena 4): farmear
+    // sola con su agente (misma ruta) hasta que le alcance; ahí vuelve a seguirlo.
+    const REQ = { 0: 0, 3: 10, 2: 20, 6: 50, 83: 100, 84: 200, 85: 300 };
+    if (pd.level < (REQ[lp.map] ?? 0)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level}: no puedo entrar al mapa ${lp.map}, farmeo sola`); } F.solo = true; return; }
+    if (F.solo) { F.solo = false; L(`nivel ${pd.level}: vuelvo con ${leader}`); }
+    if (ai?.on) { ai.on = false; ai.target = null; w.attackTarget = null; }
+    // Escapar: con poca vida, teleport a 7 tiles en dirección contraria al monstruo más cercano.
+    if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < 0.4 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 1500 && !w.castRequest && w.mapIndex === lp.map) {
+      const P0 = pe.transform.pos; let m = null, md = 1e9;
+      for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P0); if (dd < md) { md = dd; m = e.transform.pos; } }
+      if (m && md < 6) { const vx = P0.x - m.x, vz = P0.z - m.z, n = Math.hypot(vx, vz) || 1, x = Math.round(P0.x + vx / n * 7), z = Math.round(P0.z + vz / n * 7);
+        if (w.isWalkable?.(x, z) !== false) { F.tpAt = now; if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; L(`escapo (vida ${Math.round(pd.currentHP / pd.maxHP * 100)}%)`); return; } }
+    }
     if (w.mapIndex !== lp.map) {
       const wp = WARP[lp.map];
       if (wp != null && now - F.warpAt > 8000) { F.warpAt = now; S.warpCommandRequest(wp); L(`voy con ${leader} (mapa ${lp.map})`); }
       return;
     }
     const P = pe.transform.pos;
-    if (d(P, lp) > 2.5 && pe.playerMoveTo.handled) {
+    // Teleport (skill 6) si está a > 5 tiles: salto de hasta 7 tiles hacia el líder, uno cada 1,5 s
+    // (usuario: "que Melu use más teletransportación"). Caminando, quedaba atrás después de cada warp.
+    const dl = d(P, lp);
+    if (dl > 5 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 1500 && !w.castRequest && pd.currentMana > 30) {
+      F.tpAt = now; const k = Math.min(1, 7 / dl), x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
+      if (w.isWalkable?.(x, z) !== false) { if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
+    }
+    if (dl > 2.5 && pe.playerMoveTo.handled) {
       // Un paso al lado (no encima), del lado de donde viene.
       const k = Math.min(1, 1.5 / Math.max(d(P, lp), 0.1)), x = Math.round(lp.x + (P.x - lp.x) * k), z = Math.round(lp.z + (P.z - lp.z) * k);
       const m = pe.playerMoveTo; m.point.x = x; m.point.y = z; m.handled = false; m.sendToServer = true;
