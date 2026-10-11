@@ -125,7 +125,8 @@
     // En dúo el líder SIEMPRE protege al compañero (usuario): primero los monstruos a <= 5
     // tiles de él; la ruta y el estilo de farmeo del líder no cambian.
     const ai = window.__ai;
-    if (ai && !ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = read(name); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
+    // window.__duoProtect = false: el compañero se cuida solo (usuario: "no necesita tanto cuidado de Horaz").
+    if (ai && !ai.duoProtect) { const inner = ai.pickTarget; ai.pickTarget = (w, P, c) => { const f = window.__duoProtect === false ? null : read(name); if (f && f.map === w.mapIndex) { let best = null, bd = 1e9; for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(e.transform.pos, f); if (d <= 5 && d < bd) { bd = d; best = e; } } if (best) return best; } return inner(w, P, c); }; ai.duoProtect = true; }
     // Llegar los dos a 400 (usuario, 2026-10-10): el líder no resetea hasta que el compañero
     // llegue a su nivel de reset; mientras tanto sigue farmeando en party para subirlo.
     // Basta con haberlo visto en 400 una vez: el compañero resetea primero y vuelve a nivel 10
@@ -135,9 +136,9 @@
     // ella quedaba quieta lanzando): si está a > 8 tiles en el mismo mapa, el líder no avanza a su
     // próxima meta, vuelve hacia él; protegerlo (pickTarget) sigue igual. Con 4 tiles quedaban en
     // bucle en Lorencia: al caminar el seguidor siempre va 4-6 tiles atrás y el líder volvía.
-    if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > 8) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
+    if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > (window.__duoWaitDist ?? 8)) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
     // nextGoal solo se consulta al llegar: cortar el viaje en curso si el compañero quedó atrás.
-    if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > 8 && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
+    if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > (window.__duoWaitDist ?? 8) && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
