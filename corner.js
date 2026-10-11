@@ -266,11 +266,14 @@
     { const sd = C.sides.find((x) => x.name === C.side); const exp = ai.expLog.filter((x) => x.t > (C.statAt ?? now)).reduce((a, x) => a + x.added, 0); const dt = now - (C.statAt ?? now); C.statAt = now;
       if (sd && dt > 0 && d(P, sd) <= 4) { const st = (C.sideStats[sd.name] ??= { exp: 0, ms: 0, rate: 0 }); st.exp += exp; st.ms += dt; if (st.ms >= 15000) { const r = st.exp / st.ms * 60000; st.rate = st.rate ? st.rate * 0.6 + r * 0.4 : r; st.exp = 0; st.ms = 0; } } }
     // Swell Life en la esquina.
-    if (d(P, C.home) <= C.radius + 3 && now - C.swellAt > 55000 && !w.castRequest && (S.skills ?? []).some((k) => k.number === 48)) {
+    // Buff propio en la esquina: Swell Life (48, DK) o Mana Shield (16, mago: lo que usan LeanLive y
+    // Yatsuky; Melu con ~5.900 de vida tomaba pociones cada segundo frente a los Drakan).
+    const buffSkill = [48, 16].find((k) => (S.skills ?? []).some((x) => x.number === k));
+    if (d(P, C.home) <= C.radius + 3 && now - C.swellAt > 55000 && !w.castRequest && buffSkill != null) {
       // El agente vuelve a elegir su skill cada 400 ms: se le cambia el suyo un instante para que no
       // pise a Swell Life antes de que el cliente lo tire.
-      C.swellAt = now; const sk = ai.cfg.skill; ai.cfg.skill = 48; S.selectSkill(48); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
-      setTimeout(() => { if (ai.cfg.skill === 48) ai.cfg.skill = sk; }, 900);
+      C.swellAt = now; const sk = ai.cfg.skill; ai.cfg.skill = buffSkill; S.selectSkill(buffSkill); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
+      setTimeout(() => { if (ai.cfg.skill === buffSkill) ai.cfg.skill = sk; }, 900);
     }
     ai.camp.lastSeen = Date.now();
     // Apariciones: netId nuevo, con la vida llena, cerca de la esquina.
