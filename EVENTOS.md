@@ -73,9 +73,24 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
 | Lorencia / Noria / Devias, al azar | **Golden Dragon** (los "dragones") |
 
 - Icarus no entra en la invasión.
+- **Ojo con el nombre "Golden Dragon":** el cliente llama así a dos monstruos distintos. El **tipo 79** es
+  el dorado de esta invasión. El **tipo 44** es el **Dragón Rojo** de la otra invasión (los dragones que
+  se ven volar). El avistamiento de las 21:50 en Lorencia probablemente fue un tipo 44.
 - Este server la corre cada hora (:50) y con más de 200 dorados; los valores por defecto de OpenMU son cada 4 h y 20/10 por tipo.
-- Otras invasiones de OpenMU, si están activas: Red Dragon (cada 6 h desde las 2:00, 5 dragones en
-  Lorencia/Noria/Devias) y White Wizard (cada 2 h, de 12 a 23).
+- Otra invasión activa en este server: **Dragón Rojo** (ver abajo). White Wizard (cada 2 h, de 12 a 23) no se vio todavía.
+
+## Invasión del Dragón Rojo
+
+- **Qué es:** `RedDragonInvasionPlugIn` de OpenMU. ~5 dragones (monstruo **tipo 44**, el cliente lo muestra
+  como "Golden Dragon") en **uno solo** de Lorencia / Noria / Devias, elegido al azar.
+- **Aviso:** mensaje dorado en el centro ("el dragón rojo está invadiendo"), sin decir el mapa.
+- **Cómo saber el mapa:** paquete `MapEventState` `C1 05 0B <on> <tipo>` (tipo 1 = Dragón Rojo). Llega
+  al arrancar y al terminar a los que están en ese mapa, y a cada uno que entra mientras dura.
+  Medido 2026-10-10 23:23: Melu entró a Lorencia y llegó `c1 05 0b 01 01`.
+- **En el bot (`hunter.js`, con `auto`):** con el anuncio, cada pestaña recorre los 3 mapas (warp cada
+  7 s, en órdenes opuestos) hasta recibir el paquete; el mapa se comparte por `localStorage`
+  (`mubot:red`) y los dos cazan ahí hasta que el server diga que terminó (o 12 min). Los dragones a la
+  vista se avisan por `/gold`.
 
 ## Devil Square
 

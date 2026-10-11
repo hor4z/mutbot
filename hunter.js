@@ -62,6 +62,36 @@
     });
     window.__invHooked = true;
   }
+  // Invasión del Dragón Rojo (RedDragonInvasionPlugIn de OpenMU): ~5 dragones en UNO de Lorencia /
+  // Noria / Devias al azar. El monstruo es el tipo 44, que el cliente llama "Golden Dragon" (entra en
+  // isGold con prioridad 3). Para saber en qué mapa:
+  //  - MapEventState `C1 05 0B <on> <tipo>` (tipo 1 = Dragón Rojo): el server lo manda al arrancar y al
+  //    terminar a los que están en el mapa elegido, y a cada uno que entra a ese mapa mientras dura.
+  //    Medido el 2026-10-10 23:23: Melu entró a Lorencia y llegó `c1 05 0b 01 01`.
+  //  - El anuncio en el centro (ServerMessage 0x0D) avisa que empezó, sin el mapa: entonces se recorren
+  //    los 3 mapas (un warp cada pocos segundos) hasta que en uno llegue el MapEventState.
+  // Se comparte entre pestañas por localStorage (`mubot:red`).
+  const RED_MAPS = [0, 3, 2];
+  const red = () => jget('mubot:red', null);
+  if (!window.__redHooked) {
+    const bytes = (raw) => (raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw.buffer ?? raw));
+    __eventBus.on('MapEventState', (raw) => {
+      try {
+        const u = bytes(raw); if (u[2] !== 0x0b || u[4] !== 1) return;
+        const map = W()?.mapIndex, on = u[3] === 1;
+        if (on) jset('mubot:red', { map, on: true, at: Date.now(), by: S.playerData?.name });
+        else if (red()?.map === map) jset('mubot:red', { ...red(), on: false, endedAt: Date.now() });
+        window.__ai?.L?.(`HUNTER: Dragón Rojo ${on ? 'en' : 'terminó en'} mapa ${map}`);
+      } catch {}
+    });
+    __eventBus.on('ServerMessage', (raw) => {
+      try {
+        const txt = new TextDecoder('latin1').decode(bytes(raw).slice(4));
+        if (/drag[oó]n rojo|red dragon/i.test(txt)) { localStorage.setItem('mubot:red-announced', String(Date.now())); window.__ai?.L?.(`HUNTER: anuncio "${txt.replace(/\0/g, '').trim().slice(0, 80)}"`); }
+      } catch {}
+    });
+    window.__redHooked = true;
+  }
   const aliveIn = (map) => window.__invasion?.maps?.find((m) => m.map === map)?.alive ?? 0;
   // Qué tan bien rindió cada mapa en cacerías anteriores (dorados por minuto); sin datos, Noria primero.
   const mapScore = (map) => {
@@ -82,7 +112,12 @@
     if (b && !h.seen.has(b.netId)) {
       h.seen.add(b.netId); const p = b.transform.pos, k = cellOf(p.x, p.z);
       const g = (gold[w.mapIndex] ??= {}); g[k] = (g[k] ?? 0) + 1; jset(`mubot-gold:${me}`, gold);
-      ai.L(`HUNTER: ${String(b.objectNameInWorld).trim()} en (${Math.round(p.x)},${Math.round(p.z)})`);
+      ai.L(`HUNTER: ${String(b.objectNameInWorld).trim()} en (${Math.round(p.x)},${Math.round(p.z)})${b.npcType === 44 ? ' (Dragón Rojo, tipo 44)' : ''}`);
+    }
+    // Un dragón a la vista se avisa al compañero (antes solo avisaba el explorador de Melu).
+    if (b && prio(String(b.objectNameInWorld ?? '')) === 3 && Date.now() - (h.lastPost ?? 0) > 3000) {
+      h.lastPost = Date.now(); const p = b.transform.pos;
+      fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, map: w.mapIndex, x: Math.round(p.x), y: Math.round(p.z), name: String(b.objectNameInWorld ?? '').trim(), id: b.netId & 0xffff, at: Date.now() }) }).catch(() => {});
     }
     return b;
   };
@@ -147,7 +182,7 @@
     if (!h.on) return;
     const min = (Date.now() - h.startedAt) / 60000, kills = h.seen.size - (h.golds0 ?? 0);
     hunts.push({ at: h.startedAt, map: h.map, min: +min.toFixed(1), kills, lvl0: h.lvl0, lvl1: S.playerData.level, why }); jset(`mubot-hunts:${me}`, hunts.slice(-50));
-    h.on = false;
+    h.on = false; h.redHunt = false;
     if (h.saved) { ai.cfg.spots = h.saved.spots; ai.cfg.leashMaps = h.saved.leash; ai.cfg.roam = h.saved.roam; h.saved = null; }
     ai.lastWarp = 0; ai.tierSeen = 0; ai.camp = null; ai.explore = null;
     ai.L(`HUNTER: fin (${why}): ${min.toFixed(1)} min, ${kills} dorados vistos, nivel ${h.lvl0} → ${S.playerData.level}`);
@@ -208,6 +243,23 @@
     if (active && !h.invStart) h.invStart = Date.now(); if (!active) h.invStart = null;
     if (h.on && h.pre) { if (active) h.pre = false; else if (![49, 50].includes(nowD.getMinutes())) { h.stop('no hubo invasión'); return; } else return; }
     if (!h.on && h.auto && h.prepos && !active && nowD.getMinutes() === 49 && nowD.getSeconds() >= 20 && lvl >= (MAPS[h.prepos]?.lvl ?? 0)) { h.start(h.prepos, false, true); ai.L(`HUNTER: me paro en ${MAPS[h.prepos].name} a esperar la invasión`); return; }
+    // Dragón Rojo: con el mapa conocido, cazar ahí hasta que el server diga que terminó (o 12 min).
+    // Con solo el anuncio, recorrer los 3 mapas (un warp cada 7 s, cada pestaña en otro orden) hasta
+    // que llegue el MapEventState.
+    const R = red(), redLive = R?.on && Date.now() - R.at < 12 * 60000 && MAPS[R.map] && lvl >= MAPS[R.map].lvl;
+    if (h.on && h.redHunt) {
+      const why = !redLive ? 'terminó el Dragón Rojo' : R.map !== h.map ? null : (Date.now() - h.startedAt) / 60000 > 12 ? '12 min' : null;
+      if (why) { h.stop(why); h.redHunt = false; return; }
+      if (R.map !== h.map) { h.stop(`Dragón Rojo en ${MAPS[R.map].name}`); h.start(R.map, false); h.redHunt = true; }
+      return;
+    }
+    if (h.auto && redLive && (!h.on || h.pre)) { if (h.on) h.stop('Dragón Rojo'); h.start(R.map, false); h.redHunt = true; ai.L(`HUNTER: Dragón Rojo en ${MAPS[R.map].name} → a cazar`); return; }
+    const ann = Number(localStorage.getItem('mubot:red-announced') || 0);
+    if (h.auto && !h.on && !redLive && Date.now() - ann < 90000 && Date.now() - (h.redProbeAt ?? 0) > 7000) {
+      const order = me === 'Melu' ? RED_MAPS : [...RED_MAPS].reverse(); h.redProbeIdx = ((h.redProbeIdx ?? -1) + 1) % order.length;
+      const m = order[h.redProbeIdx]; if (MAPS[m] && lvl >= MAPS[m].lvl) { h.redProbeAt = Date.now(); S.warpCommandRequest(MAPS[m].warp); ai.spot = MAPS[m].warp; ai.lastWarp = Date.now(); ai.L(`HUNTER: busco dónde invade el Dragón Rojo: ${MAPS[m].name}`); }
+      return;
+    }
     const fresh = h.reports.filter((g) => Date.now() - g.at < 30000 && MAPS[g.map] && lvl >= MAPS[g.map].lvl);
     if (h.on && h.byReport) {
       const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
