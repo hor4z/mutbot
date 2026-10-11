@@ -57,6 +57,7 @@
       // rinde < campMinFrac del mejor campamento del mapa, o si pasa campEmptyMs vacío.
       campRadius: 10, campEvalMs: 90000, campEmptyMs: 12000, campMinFrac: 0.5,
       excursionMs: 2500, excursionScan: 20, excursionMax: 22,
+      vaultMinFree: 8, vaultAfterResetFree: 16,
       // Mudarse si hay >= crowdRivals jugadores cerca del campamento durante crowdMs.
       // Con 2 jugadores/10 s saltaba de campamento todo el tiempo en Arena (25% caminando).
       campUpgrade: 1.25, crowdRivals: 3, crowdMs: 20000, crowdMinFrac: 0.7, campDistDecay: 12, clusterStop: 3, clusterStopDown: 8,
@@ -374,6 +375,42 @@
   const RMIN_KEY = `mubot-resetmin:${S.playerData?.name ?? 'pj'}`;
   ai.resetMin = (() => { try { return JSON.parse(localStorage.getItem(RMIN_KEY) || 'null') ?? { rejected: 0, accepted: null }; } catch { return { rejected: 0, accepted: null }; } })();
   const saveRMin = () => { try { localStorage.setItem(RMIN_KEY, JSON.stringify(ai.resetMin)); } catch {} };
+  // Baúl (usuario: "si el inventario se llena andá a descargar: no puede pasar que matemos dragones y no
+  // haya lugar para las cajas"). Lorencia, "Baz, Storage Guard" (NPC 240). Solo ítems de 1x1 que
+  // valen: Box of Luck (14/11) y joyas (Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22,
+  // Chaos 12/15). Nada de invitaciones, pociones ni equipo. Cada ítem se verifica: si el baúl está
+  // con clave o lleno, se avisa y no se sigue. La clave del baúl nunca se escribe.
+  const VAULT_KEEP = new Set(['14/11', '14/13', '14/14', '14/16', '14/22', '12/15']);
+  const freeSlots = () => (S.playerData.items || []).slice(12).filter((x) => !x).length;
+  ai.depositToVault = async (why) => {
+    if (ai.busy) return false;
+    const toMove = () => (S.playerData.items || []).map((x, i) => (i >= 12 && x && VAULT_KEEP.has(`${x.group}/${x.num}`) ? i : -1)).filter((i) => i >= 0);
+    if (!toMove().length) { L(`baúl: nada para guardar (${why})`); return false; }
+    ai.busy = true; W().attackTarget = null;
+    try {
+      L(`baúl: voy a guardar ${toMove().length} ítem(s) (${why})`);
+      if (W().mapIndex !== 0) { S.warpCommandRequest(2); ai.spot = 2; ai.lastWarp = Date.now(); for (let i = 0; i < 30 && (W()?.mapIndex !== 0 || S.sceneLoading); i++) await sleep(500); await sleep(1500); }
+      let npc = null; for (const e of W().byNetId.values()) if (e.npcType === 240) npc = e;
+      if (!npc) { L('baúl: no encuentro a Baz (Storage Guard)'); return false; }
+      const pe = W().playerEntity, tp = npc.transform.pos;
+      for (let i = 0; i < 40 && dist(pe.transform.pos, tp) > 2; i++) { if (i % 6 === 0) ai.moveTo(pe, { x: Math.round(tp.x), z: Math.round(tp.z) + 1 }); await sleep(500); }
+      S.talkToNpc(npc); await sleep(2500);
+      const vault = () => S.itemsOfStorage?.(2) ?? [];
+      if (!vault().length) { L('baúl: no se abrió'); return false; }
+      let moved = 0;
+      for (const slot of toMove()) {
+        const vi = vault().findIndex((x) => !x); if (vi < 0) { L('baúl: lleno'); break; }
+        const before = vault().filter(Boolean).length;
+        S.pickInventoryItem(slot); await sleep(400); S.placePickedItem(vi, 2); await sleep(900);
+        if (vault().filter(Boolean).length <= before) { if (S.pickedItem) S.cancelPickedItem?.(); L('baúl: no aceptó el ítem (¿con clave o lleno?); paro'); break; }
+        moved++;
+      }
+      S.closeVault?.(); await sleep(500);
+      L(`baúl: guardé ${moved} ítem(s); libres ${freeSlots()}`);
+      ai.lastVault = Date.now();
+      return moved > 0;
+    } catch (e) { L('baúl error: ' + e.message); return false; } finally { if (S.pickedItem) S.cancelPickedItem?.(); ai.busy = false; ai.camp = null; ai.explore = null; ai.lastWarp = 0; ai.tierSeen = 0; }
+  };
   ai.doReset = async (probe = false) => {
     ai.busy = true; W().attackTarget = null;
     try {
@@ -582,6 +619,9 @@
     ai.charSelectSince = null;
     if (ai.busy || !ai.on || S.uiState !== 5 || S.sceneLoading) return;
     const pd = S.playerData;
+    // Baúl: con menos de vaultMinFree libres (o < vaultAfterResetFree recién reseteado, que ya está en
+    // Lorencia), como mucho cada 3 min. No en medio de una cacería.
+    if (!window.__hunt?.on && Date.now() - (ai.lastVault ?? 0) > 180000 && (freeSlots() < ai.cfg.vaultMinFree || (pd.level < 15 && W().mapIndex === 0 && freeSlots() < ai.cfg.vaultAfterResetFree))) { ai.lastVault = Date.now(); return ai.depositToVault(`${freeSlots()} lugares libres`); }
     if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
     // Prueba del nivel mínimo de reset: 300 y, si lo rechaza, 350. Una vez por nivel, para siempre.
     // Si lo acepta, desde ahí resetea a ese nivel (lo que se mide son resets por día).
