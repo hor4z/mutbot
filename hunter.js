@@ -93,7 +93,9 @@
   const nextCell = (P, w) => {
     h.visited.add(cellOf(P.x, P.z));
     const walk = (x, z) => { for (let r = 0; r < 10; r++) for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r]]) if (w.isWalkable(x + dx, z + dz)) return { x: x + dx, z: z + dz }; return null; };
-    const inBand = (x) => x >= CFG.huntBand[0] && x < CFG.huntBand[1];
+    // Franja: la del CFG solo si hay un buscador activo (h.band la pisa; sin buscador, el mapa entero).
+    const band = h.band ?? CFG.huntBand;
+    const inBand = (x) => x >= band[0] && x < band[1];
     const known = Object.entries(gold[w.mapIndex] ?? {}).filter(([k]) => !h.visited.has(k) && inBand(Number(k.split(',')[0]) * 25 + 12)).map(([k, n]) => { const [cx, cz] = k.split(',').map(Number); return { n, p: walk(cx * 25 + 12, cz * 25 + 12) }; }).filter((x) => x.p);
     if (known.length) { known.sort((a, b) => b.n / (1 + dist(b.p, P) / 40) - a.n / (1 + dist(a.p, P) / 40)); return { ...known[0].p, kind: 'hunter:conocido' }; }
     let best = null, bd = 1e9;
@@ -143,6 +145,8 @@
     ai.L(`HUNTER: fin (${why}): ${min.toFixed(1)} min, ${kills} dorados vistos, nivel ${h.lvl0} → ${S.playerData.level}`);
   };
   h.history = () => hunts.slice(-10);
+  h.setBand = (from, to) => { h.band = [from, to]; jset(`mubot-hunt-band:${me}`, h.band); return h.band; };
+  h.band = jget(`mubot-hunt-band:${me}`, null);
   h.setAuto = (v) => { h.auto = !!v; jset(`mubot-hunt-auto:${me}`, h.auto); return h.auto; };
 
   // Cada 2 s: leer avisos; si hay uno nuevo y no estamos peleando un dorado, ir ya (no esperar a
