@@ -5,6 +5,7 @@
  */
 import { askHelp, newRequests, teammates } from './team';
 import { track, trackEvent } from './telemetry';
+import { isPriorityChar } from './knowledge';
 import { DRAGON_TYPES } from './golden';
 import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
@@ -487,7 +488,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           }
         } else if (r.kind === 'golden') {
           const hm = HUNT_MAPS.find((h) => h.map === r.map);
-          if (bot.hunting && bot.hunting.hunt.map === r.map) {
+          if (isPriorityChar(bot.charName) && !bot.hunting) decide(`${r.from} vio ${r.note}: sigo en la carrera de resets, que vaya ${r.from}.`);
+          else if (bot.hunting && bot.hunting.hunt.map === r.map) {
             (bot.hunting.spots ??= new Map()).set(-r.at, { x: r.x, y: r.y, type: 0, at: nowG });
             decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
           } else if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} vio ${r.note}, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
@@ -504,7 +506,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 1e) Cazador automático: invasión activa con más de 25 vivos en un mapa al alcance → a cazar, una
     //     vez por invasión (hunter.js del navegador).
-    if (AUTO_HUNT_ON && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
+    // Carrera de resets: el prioritario (Horaz) no sale a cazar; los dorados son de Melu.
+    const racing = isPriorityChar(bot.charName);
+    if (AUTO_HUNT_ON && !racing && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
       const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);
@@ -518,7 +522,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería). Entre
     //    :47 y :51 no, para llegar a la invasión de las :50 (con el cazador prendido).
-    if (!bot.hunting && !goldHold && !(AUTO_HUNT_ON && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    if (!bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;

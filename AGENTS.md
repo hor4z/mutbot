@@ -553,6 +553,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Con vida < 35 % se va a Lorencia y evita ese mapa 5 min.
   - Sin verificar: los nombres de los jugadores en scope (no se excluye a los propios por nombre).
 - **Cacería con memoria** (`HuntState.spots`): cada dorado visto se recuerda 3 min. Sin dorados a la vista, va primero al recordado más cercano (después de morir, por ejemplo) y recién después recorre celdas. Un dorado nuevo se le avisa al compañero al momento (`askHelp('golden', …, 15 s)`); si caza en el mismo mapa, va. Al morir se anota quién lo mató (`Me mató X en (x,y)`, KillerId del 0x17): casi siempre un rival, los dorados no pueden con Horaz ni con Melu.
+- **Carrera de resets del prioritario** (`isPriorityChar`, `MUBOT_PRIORITY`, por defecto Horaz; meta: top 10 en 1-2 días): no sale a cazar ni contesta pedidos de dorados (van para Melu), el reset no se frena por invasiones, y sin party salvo que los datos digan que le suma.
 - **Cazador automático** (`autoHuntChoice`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y más de 25 vivos en un mapa al alcance (Lorencia, Noria, Devias), sale a cazar solo, una vez por invasión. Corta con 20 o menos vivos, con la invasión terminada o a los 15 min. Entre :47 y :51 no resetea.
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
 
