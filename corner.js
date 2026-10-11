@@ -123,7 +123,20 @@
     // de Arena 3/4, irse ahí 5 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
     // Nancho y Pachegas encima, Horaz sacaba 16M/min (usuario: "estamos molestando bastante").
     const nowA = Date.now();
-    if (C.awayUntil && nowA < C.awayUntil) return;
+    // Afuera (Arena 2 otro spot / 3 / 4): si hay un jugador farmeando a <= 6 tiles del campamento,
+    // pasar al mejor spot medido de ese mapa sin nadie a <= 8 (2026-10-11: un DK en el spot de Horaz en
+    // Arena 4; usuario: "no lo dejes ganarme"). Competencia limpia: no se le roban los monstruos.
+    if (C.awayUntil && nowA < C.awayUntil) {
+      if (nowA - (C.freeAt ?? 0) > 15000 && ai.camp && ai.camp.map === w.mapIndex) {
+        C.freeAt = nowA;
+        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe);
+        if (others.some((e) => d(e.transform.pos, ai.camp) <= 6)) {
+          const alt = (ai.campHist?.[w.mapIndex] ?? []).filter((k) => !k.seed && k.rate > 0 && d(k, ai.camp) > 10 && !others.some((e) => d(e.transform.pos, k) <= 8)).sort((a, b) => b.rate - a.rate)[0];
+          if (alt) { ai.camp = { x: alt.x, z: alt.z, map: w.mapIndex, since: nowA, lastSeen: nowA, known: true }; ai.target = null; w.attackTarget = null; ai.explore = { x: alt.x, z: alt.z, kind: 'camp' }; ai.moveTo(pe, alt); L(`spot ocupado: paso a (${alt.x},${alt.z}) ~${Math.round(alt.rate / 1e6)}M/min sin nadie`); }
+        }
+      }
+      return;
+    }
     // Cerca del reset no vale la pena volver: el camino a la esquina lleva ~1 min (a las 1:25 dejó
     // Arena 4 en nivel 385 para encontrarla llena otra vez).
     if (C.awayUntil && nowA >= C.awayUntil && S.playerData.level >= 360) C.awayUntil = nowA + 60000;
