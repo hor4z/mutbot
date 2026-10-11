@@ -24,7 +24,7 @@
   if (role === 'lider') {
     F.timers.push(setInterval(() => {
       const w = W(), p = w?.playerEntity?.transform?.pos; if (!p || S.uiState !== 5) return;
-      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), at: Date.now() })); } catch {}
+      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), level: S.playerData.level, at: Date.now() })); } catch {}
       // Invitar al seguidor a la party si está a <= 10 tiles (cada 30 s como mucho).
       const name = window.__followMate; if (!name || window.__inParty || Date.now() - (F.invAt ?? 0) < 30000) return;
       for (const e of w.byNetId.values()) if (e.objectNameInWorld === name && d(e.transform.pos, p) <= 10) { F.invAt = Date.now(); const id = e.netId & 0x7fff; send([0xc1, 0x05, 0x40, id >> 8, id & 0xff]); L(`invito a ${name} a la party`); break; }
@@ -67,7 +67,9 @@
     // Mapa del líder fuera de su nivel (después del reset Melu está en 10 y Horaz en Arena 4): farmear
     // sola con su agente (misma ruta) hasta que le alcance; ahí vuelve a seguirlo.
     const REQ = { 0: 0, 3: 10, 2: 20, 6: 50, 83: 100, 84: 200, 85: 300 };
-    if (pd.level < (REQ[lp.map] ?? 0)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level}: no puedo entrar al mapa ${lp.map}, farmeo sola`); } F.solo = true; return; }
+    // Tampoco seguirlo si el líder va por debajo de ella (Horaz recién reseteado en Lorencia y Melu en
+    // 150): la party rinde cuando el que mata es de nivel parecido o más alto.
+    if (pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
     if (F.solo) { F.solo = false; L(`nivel ${pd.level}: vuelvo con ${leader}`); }
     if (ai?.on) { ai.on = false; ai.target = null; w.attackTarget = null; }
     // Escapar: con poca vida, teleport a 7 tiles en dirección contraria al monstruo más cercano.
