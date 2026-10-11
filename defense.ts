@@ -40,9 +40,9 @@ export class Defense {
   }
 
   /** ¿Huir? (vida baja peleando con un jugador). Marca el mapa para evitarlo un rato. */
-  shouldFlee(hpPct: number, map: number, now: number): boolean {
+  shouldFlee(hpPct: number, map: number, now: number, avoidMs: number = DEFENSE.avoidMapMs): boolean {
     if (hpPct >= DEFENSE.fleeHp) return false;
-    this.avoid.set(map, now + DEFENSE.avoidMapMs);
+    this.avoid.set(map, now + avoidMs);
     return true;
   }
 

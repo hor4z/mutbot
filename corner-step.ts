@@ -95,7 +95,10 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       sendToGS(new DataView(buildPartyInvite(invitee[0]).buffer));
       decide(`Invito a ${invitee[1].name} a party (dúo en la esquina).`);
     }
-    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level, mateHere })) {
+    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level,
+      // Mesa de agentes (2026-10-11): afuera (Arena 4 ~50-177M/min) rinde 5-8x menos que la esquina disputada.
+      // El prioritario y el mago del dúo no se van nunca.
+      mateHere: mateHere || isPriorityChar(bot.charName) || isMage() })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;
       ctx.target = null;
