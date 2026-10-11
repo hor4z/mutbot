@@ -9,6 +9,7 @@ import { warpTo } from './actions';
 import { CycleLog } from './farming';
 import { journal } from './journal';
 import { CROWD_FALLBACK, activeDryExclusions, chooseFixedRoute, loadLearning, saveLearningChar, type Spot } from './learning';
+import { isPriorityChar } from './knowledge';
 import { bot, hotGrid, learned, typeStats, world } from './state';
 import { log } from './util';
 
@@ -120,6 +121,7 @@ export async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const exclude = activeDryExclusions(dryAt, now);
   const currentSpot = bot.currentSpot;
   const choice = chooseFixedRoute({
+    noFallback: isPriorityChar(bot.charName),
     spots: WARP_SPOTS.filter((sp) => !exclude.has(sp.index) || sp.index === currentSpot?.index),
     level: world.level,
     allowed: ALLOWED_SPOTS,

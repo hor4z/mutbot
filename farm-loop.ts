@@ -108,6 +108,10 @@ let lastAutoHuntKey: number | null = null;
 let aggroHooked = false;
 // Último skill de área confirmado por el server (para los datos).
 let castSkill = 0;
+// Apoyo esperando el reset del prioritario.
+let supportHoldSince: number | null = null;
+let supportHoldLogged = 0;
+let longCycleWarned = 0;
 let aggroTarget: Map<number, number> | null = null;
 function hookAggro() {
   if (aggroHooked) return;
@@ -303,6 +307,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // También sin exp: con la sesión "fantasma" llegan monstruos pero ninguno muere y no entra exp.
     const farming = !bot.paused && !bot.hunting && !bot.resetting && bot.inGameAt > 0;
     if (bot.inGameAt > 0 && Date.now() - lastTickAt >= TICK_MS) dataTick(ctx, corner);
+    // Vigía de ciclo largo (mesa de agentes): más de 15 min sin resetear → aviso (una vez por ciclo), con el tramo.
+    const cyc = learned.cycleLog.cur;
+    if (Date.now() - cyc.start > 15 * 60_000 && longCycleWarned !== cyc.start) {
+      longCycleWarned = cyc.start;
+      decide(`Vigía: ciclo de más de 15 min (nivel ${world.level} en ${mapName(world.map)}, ${bot.doing}).`);
+      trackEvent('long_cycle', bot.doing, world.level);
+    }
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
     const sinceIn = Date.now() - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(Date.now(), BLIND_RECONNECT_MS) === 0;
@@ -418,10 +429,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const foe = defense.target({ x: world.x, y: world.y }, [...world.players].map(([id, q]) => ({ id, x: q.x, y: q.y, name: q.name })), nowD);
       if (foe) {
         const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
-        if (world.map !== 0 && nowD - lastFleeAt > 30_000 && defense.shouldFlee(hpPct, world.map, nowD)) {
+        if (world.map !== 0 && nowD - lastFleeAt > 30_000 && defense.shouldFlee(hpPct, world.map, nowD, isPriorityChar(bot.charName) ? 60_000 : DEFENSE.avoidMapMs)) {
           lastFleeAt = nowD;
           decide(`Defensa: vida ${Math.round(hpPct * 100)} % peleando con un jugador: me voy a Lorencia y evito este mapa ${DEFENSE.avoidMapMs / 60_000} min.`);
-          if (world.map === CORNER.map) corner.awayUntil = nowD + DEFENSE.avoidMapMs;
+          // El prioritario vuelve al minuto (5 min afuera costaban ~30 % del ciclo).
+          if (world.map === CORNER.map) corner.awayUntil = nowD + (isPriorityChar(bot.charName) ? 60_000 : DEFENSE.avoidMapMs);
           ctx.target = null;
           journal('travel', 'huyo de un jugador: warp a Lorencia', { warp: 2, reason: 'defense' });
           await warpAndWait(WARP_SPOTS.find((sp) => sp.index === 2)!);
@@ -522,7 +534,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería). Entre
     //    :47 y :51 no, para llegar a la invasión de las :50 (con el cazador prendido).
-    if (!bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    // Apoyo: resetea mientras el prioritario hace 10→100, así la esquina nunca queda sola (espera como
+    // mucho 20 min; sin datos del prioritario, resetea).
+    const prio = isPriorityChar(bot.charName) ? undefined : teammates().find((m) => isPriorityChar(m.char));
+    const holdForPrio = world.level >= RESET_LEVEL && prio != null && prio.level >= 100 && prio.level < RESET_LEVEL;
+    if (holdForPrio) supportHoldSince ??= Date.now(); else supportHoldSince = null;
+    const supportWaits = holdForPrio && Date.now() - supportHoldSince! < 20 * 60_000;
+    if (supportWaits && world.level >= RESET_LEVEL && Date.now() - supportHoldLogged > 60_000) {
+      supportHoldLogged = Date.now();
+      decide(`Nivel ${world.level}: espero que ${prio!.char} resetee para resetear yo (sostengo la esquina).`);
+    }
+    if (!supportWaits && !bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;
@@ -549,7 +571,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 3b) La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, salvo cazando, con un
     //     spot fijado por el panel o mientras está afuera porque estaba llena.
     // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.
-    if (corner.awayUntil && Date.now() >= corner.awayUntil && world.level >= CORNER.noReturnLevel) corner.awayUntil = Date.now() + 60_000;
+    // (el prioritario vuelve siempre: afuera hacía 350→400 en Arena 4 a ~50M/min, el ciclo de 36 min)
+    if (corner.awayUntil && Date.now() >= corner.awayUntil && world.level >= CORNER.noReturnLevel && !isPriorityChar(bot.charName)) corner.awayUntil = Date.now() + 60_000;
     if (!bot.hunting && !bot.pinnedSpot && !goldHold && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: corner.awayUntil, now: Date.now() })) {
       await cornerStep(ctx, corner);
       continue;
