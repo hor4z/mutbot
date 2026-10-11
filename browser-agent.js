@@ -405,7 +405,8 @@
         if (vault().filter(Boolean).length <= before) { if (S.pickedItem) S.cancelPickedItem?.(); L('baúl: no aceptó el ítem (¿con clave o lleno?); paro'); break; }
         moved++;
       }
-      S.closeVault?.(); await sleep(500);
+      // Cerrar la ventana del NPC (CloseNpcRequest C1 03 31), como hace el cliente.
+      S.sendToGS(new DataView(Uint8Array.from([0xc1, 0x03, 0x31]).buffer)); await sleep(500);
       L(`baúl: guardé ${moved} ítem(s); libres ${freeSlots()}`);
       ai.lastVault = Date.now();
       return moved > 0;
