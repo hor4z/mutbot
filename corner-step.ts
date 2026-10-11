@@ -6,7 +6,7 @@
 import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
 import { castReach, isMage, pickAttackSkill, useSkill } from './combat';
-import { CORNER, CornerSides, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { decide, journal } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
@@ -100,6 +100,17 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   const mateInCorner = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
   const planted = here && isMage() && mateInCorner && skill != null;
   const st = here ? (spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
+  // Mago parado en la esquina con un compañero a la vista: primero dejarle la esquina al DK (si no,
+  // con monstruos siempre a tiro no salía nunca del giro).
+  const matesSeen = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
+  if (here && isMage() && matesSeen.length && Math.hypot(me.x - SIDES[0].x, me.y - SIDES[0].y) <= SIDE.near) {
+    const side = corner.sides.pick(now, rivalPlayers(), matesSeen, false, true);
+    ctx.phase = 'walk';
+    bot.goalPoint = [side.x, side.y];
+    bot.doing = `esquina de Arena 2: le dejo la esquina a ${matesSeen[0].name}, voy al lado ${side.name}`;
+    await walkTowards(ctx, side.x, side.y);
+    return;
+  }
   if (st && Date.now() - ctx.lastCastAt >= SKILL_PACE_MS) {
     ctx.phase = 'fight';
     bot.doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
