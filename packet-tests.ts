@@ -269,6 +269,7 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('aggro: golpe 0x18 a mí → atacante', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2a]), 0x2a) === 0x410);
   ok('aggro: skill 0x19 de 0.97d (8 bytes, skill u8) a mí → atacante', attackerOf(Uint8Array.from([0xc3, 8, 0x19, 43, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
   ok('aggro: skill 0x19 de 9 bytes (season 6) también', attackerOf(Uint8Array.from([0xc3, 9, 0x19, 0, 41, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
+  ok('aggro: un curado o buff (Heal 26) a mí no es un ataque', attackerOf(Uint8Array.from([0xc3, 8, 0x19, 26, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === null);
   ok('aggro: a otro → null', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2b]), 0x2a) === null);
   ok('aggro: área 0x1E → null', attackerOf(Uint8Array.from([0xc1, 9, 0x1e, 0, 0, 0, 0, 0, 0x2a]), 0x2a) === null);
 }

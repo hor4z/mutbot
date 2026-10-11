@@ -15,6 +15,7 @@ import { log } from './util';
 const DEVIAS_WARPS = [7, 6, 5];
 // Donde deja el warp a Devias 4.
 const DEVIAS4_ARRIVAL: Pos = { x: 70, y: 180 };
+const LICH_EMPTY_MS = 20_000;
 
 export class EarlyPlanner {
   private arrivalAt = -1;
@@ -22,11 +23,16 @@ export class EarlyPlanner {
   camp: Pos | null = null;
   private poorSince: number | null = null;
   private lorPlan: { camp: Pos; via: Pos | null } | null = null;
+  // Lich vaciado (21 jugadores, ni un monstruo a la vista): tras LICH_EMPTY_MS en el campamento sin
+  // monstruos se deja el plan del Lich por esta llegada y manda la lógica general (campamentos,
+  // exploración) hasta el 20.
+  private lichEmptySince: number | null = null;
+  private lichOffFor = -1;
 
   /** ¿Manda el arranque ahora? */
   active(): boolean {
     if (bot.hunting || bot.pinnedSpot || world.level >= CORNER.minLevel) return false;
-    if (world.map === EARLY.lorencia.map) return world.level < EARLY.lorencia.maxLevel;
+    if (world.map === EARLY.lorencia.map) return world.level < EARLY.lorencia.maxLevel && this.lichOffFor !== bot.lastArrivalAt;
     return world.map === EARLY.devias.map && bot.currentSpot != null && DEVIAS_WARPS.includes(bot.currentSpot.index);
   }
 
@@ -56,8 +62,9 @@ export class EarlyPlanner {
       this.arrivalAt = bot.lastArrivalAt;
       // Reconectando el bot aparece donde quedó (Horaz entró en (181,72)): si eso está lejos de la
       // llegada de Devias 4, los grupos se buscan alrededor de la llegada, no de ahí.
-      // (solo si el spot es Devias 4: tras un warp a Devias 3 o 2 vale la llegada real).
-      this.arrival = world.map === EARLY.devias.map && bot.currentSpot?.index === 7 && dist(me, DEVIAS4_ARRIVAL) > 30 ? { ...DEVIAS4_ARRIVAL } : { ...me };
+      // (solo si el spot es Devias 4 o todavía no hay spot, al reconectar: tras un warp a Devias 3 o 2
+      // vale la llegada real).
+      this.arrival = world.map === EARLY.devias.map && (bot.currentSpot == null || bot.currentSpot.index === 7) && dist(me, DEVIAS4_ARRIVAL) > 30 ? { ...DEVIAS4_ARRIVAL } : { ...me };
       this.camp = null;
       this.poorSince = null;
       this.lorPlan = null;
@@ -68,6 +75,14 @@ export class EarlyPlanner {
     }
     if (world.map === EARLY.lorencia.map && this.lorPlan) {
       if (this.lorPlan.via && dist(me, this.lorPlan.via) <= EARLY.viaReached) this.lorPlan.via = null;
+      const atCamp = !this.lorPlan.via && dist(me, this.lorPlan.camp) <= 3;
+      const any = [...npcs].some((n) => dist(n, this.lorPlan!.camp) <= 15);
+      this.lichEmptySince = atCamp && !any ? (this.lichEmptySince ?? now) : null;
+      if (this.lichEmptySince != null && now - this.lichEmptySince > LICH_EMPTY_MS) {
+        this.lichOffFor = bot.lastArrivalAt;
+        this.lichEmptySince = null;
+        log(`Arranque: el Lich está vacío hace ${LICH_EMPTY_MS / 1000} s: busco monstruos por Lorencia.`);
+      }
       return { camp: this.lorPlan.camp, goal: this.lorPlan.via ?? this.lorPlan.camp };
     }
     const r = deviasCamp({ arrival: this.arrival ?? me, monsters: [...npcs], prev: this.camp, poorSince: this.poorSince, now });

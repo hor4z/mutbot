@@ -157,6 +157,11 @@ export class CornerSides {
     return pick;
   }
 
+  /** Al (re)entrar a la esquina: el reloj de medición arranca de nuevo (lo de afuera no cuenta). */
+  restartClock() {
+    this.statAt = null;
+  }
+
   /** Anota la exp ganada desde la última llamada al lado actual, si está a <= SIDE.near de él. */
   record(now: number, me: Pos, exp: number) {
     const dt = this.statAt == null ? 0 : now - this.statAt;

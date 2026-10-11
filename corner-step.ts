@@ -46,7 +46,12 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   const mons = [...ctx.npcs.values()];
   const here = inCorner(me);
   if (here) {
-    corner.since ??= now;
+    if (corner.since == null) {
+      // Recién entrado: la exp y el tiempo de afuera no se le anotan a ningún lado.
+      corner.since = now;
+      corner.sides.restartClock();
+      corner.expSeen = ctx.expTotal;
+    }
     // Exp de este tick al lado elegido (si está cerca de él).
     corner.sides.record(now, me, ctx.expTotal - corner.expSeen);
     corner.expSeen = ctx.expTotal;
@@ -105,7 +110,9 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     }
     const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
     // El que me pega primero; si no, el grupo; si no, el lado elegido por exp medida.
-    const ct = aggro ?? cornerTarget(me, mons, playersNear, r);
+    // (el que me pega, solo si está dentro de la esquina: si no, salía de la esquina y volvía sin parar)
+    const aggroHere = aggro && Math.hypot(aggro.x - CORNER.home.x, aggro.y - CORNER.home.y) <= CORNER.radius + CORNER.fill ? aggro : null;
+    const ct = aggroHere ?? cornerTarget(me, mons, playersNear, r);
     const goal = ct ?? corner.sides.pick(now, [...world.players.values()]);
     // Sin skill hay que llegar pegado para el golpe normal.
     const reach = ct ? (skill ? r : 1) : 0.8;
