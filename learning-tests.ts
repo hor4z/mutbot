@@ -147,5 +147,20 @@ const MIN = 60_000;
   ok('--spots limita la ruta', c.spot?.index === 5, c);
 }
 
+// --- Adoptar la entrada correcta al reconectar ----------------------------------------------------
+{
+  const dv: Spot[] = [
+    { index: 7, name: 'Devias 4', reqLevel: 20, zen: 0, map: 2, arrival: { x: 70, y: 179 } },
+    { index: 6, name: 'Devias 3', reqLevel: 20, zen: 0, map: 2, arrival: { x: 226, y: 228 } },
+  ];
+  const base = { spots: dv, level: 60, allowed: null, current: null, currentMap: 2, mapDead: false, crowded: false, crowdedAt: new Map(), now: 0 };
+  let c = chooseFixedRoute({ ...base, pos: { x: 205, y: 226 } });
+  ok('reconecta junto a Devias 3: adopta Devias 3 (no cruza a Devias 4)', c.reason === 'adopt' && c.spot?.index === 6, c);
+  c = chooseFixedRoute({ ...base, pos: { x: 72, y: 182 } });
+  ok('reconecta junto a Devias 4: adopta Devias 4', c.reason === 'adopt' && c.spot?.index === 7, c);
+  c = chooseFixedRoute({ ...base, pos: { x: 150, y: 100 } });
+  ok('reconecta lejos de toda llegada: warp a la preferida', c.warp && c.spot?.index === 7, c);
+}
+
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE APRENDIZAJE PASARON' : `\n${fails} TEST(S) DE APRENDIZAJE FALLARON`);
 process.exit(fails ? 1 : 0);

@@ -13,7 +13,8 @@ import type { CycleRecord } from './farming';
 
 // map: número de mapa al que deja el warp (si se conoce). Sirve para retomar
 // sin warpear cuando el bot arranca (o reconecta) ya parado en el mapa del tramo.
-export type Spot = { index: number; name: string; reqLevel: number; zen: number; map?: number };
+// arrival: donde deja el warp (medido); sirve para adoptar la entrada correcta al reconectar.
+export type Spot = { index: number; name: string; reqLevel: number; zen: number; map?: number; arrival?: { x: number; y: number } };
 
 export type HotCellData = { map: number; cx: number; cy: number; exp: number };
 export type TypeData = { expByType: Record<number, number>; killSecByType: Record<number, number> };
@@ -66,6 +67,8 @@ export const FIXED_ROUTE: readonly RouteTier[] = [
 export const CROWD_FALLBACK = { warp: 1, minLevel: 50, maxLevel: 99 } as const;
 // Una entrada llena de gente no se vuelve a probar durante esto.
 export const CROWDED_SPOT_MS = 5 * 60_000;
+// Adoptar una entrada al reconectar solo si su llegada está a esto o menos.
+export const ADOPT_NEAR = 45;
 
 export function routeTier(level: number, route: readonly RouteTier[] = FIXED_ROUTE): RouteTier {
   let t = route[0];
@@ -84,6 +87,7 @@ export type FixedRouteInput = {
   crowdedAt: ReadonlyMap<number, number>; // spot → cuándo se lo dejó por gente
   now: number;
   prefer?: number | null;        // sin spot actual (tras morir): volver a esta entrada si es del tramo
+  pos?: { x: number; y: number }; // dónde está (para adoptar la entrada más cercana)
 };
 export type FixedRouteReason = 'stay' | 'start' | 'adopt' | 'new-tier' | 'dry' | 'crowd' | 'none';
 export type FixedRouteChoice = { spot: Spot | null; reason: FixedRouteReason; what: string; tier: number; warp: boolean };
@@ -102,7 +106,16 @@ export function chooseFixedRoute(inp: FixedRouteInput, route: readonly RouteTier
 
   if (!cur) {
     // Ya está en el mapa del tramo: adoptarlo sin warpear.
-    if (inp.currentMap === tier.map) return { ...base, spot: tierSpots[0], reason: 'adopt', what: `ya estoy en el mapa ${tier.map} (${tierSpots[0].name})`, warp: false };
+    if (inp.currentMap === tier.map) {
+      // La entrada cuya llegada está más cerca (Horaz reconectó junto a Devias 3 y "adoptaba" Devias 4:
+      // cruzaba el mapa a pie). Si ninguna llegada conocida está a <= ADOPT_NEAR, warp a la preferida.
+      const withArrival = tierSpots.filter((s) => s.arrival);
+      const near = inp.pos && withArrival.length
+        ? withArrival.map((s) => ({ s, d: Math.hypot(s.arrival!.x - inp.pos!.x, s.arrival!.y - inp.pos!.y) })).sort((a, b) => a.d - b.d)[0]
+        : null;
+      if (!near) return { ...base, spot: tierSpots[0], reason: 'adopt', what: `ya estoy en el mapa ${tier.map} (${tierSpots[0].name})`, warp: false };
+      if (near.d <= ADOPT_NEAR) return { ...base, spot: near.s, reason: 'adopt', what: `ya estoy en el mapa ${tier.map}, junto a ${near.s.name}`, warp: false };
+    }
     const usable = tierSpots.filter((s) => s.reqLevel <= inp.level);
     const to = usable.find((s) => s.index === inp.prefer) ?? usable[0];
     if (!to) return stay(`nivel ${inp.level}: ${tierSpots[0].name} pide ${tierSpots[0].reqLevel}`);
