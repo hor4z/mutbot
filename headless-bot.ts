@@ -25,6 +25,7 @@
  *   --spots 2,6,24       limita la ruta a esos warps
  *   --explore-dir 1      primera dirección a explorar desde el pueblo en mapas sin salida conocida
  *   --learn-file p.json  dónde guarda lo aprendido (default ~/.mubot/learning.json)
+ *   --no-auto-hunt       sin el cazador automático de invasiones doradas
  *
  * Panel:
  *   --ws-port 8791       panel en http://127.0.0.1:<puerto>/panel (ws-server.ts)

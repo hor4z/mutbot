@@ -8,6 +8,7 @@
  */
 import { PANEL_COMMANDS, isPanelCommand } from './panel-protocol';
 import {
+  AUTO_HUNT, autoHuntChoice, invasionKey, resetBlockedByInvasion,
   GoldReporter, HUNT_MAX_MS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
   goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt,
   toPanelCycle, validateWarp,
@@ -210,6 +211,24 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('warp: de la ruta y con nivel', validateWarp(26, 350, spots).ok);
   ok('warp: nivel insuficiente', !validateWarp(26, 200, spots).ok);
   ok('warp: fuera de la ruta', !validateWarp(99, 400, spots).ok);
+}
+
+// --- Cazador automático -------------------------------------------------------------------------
+{
+  const t0 = new Date(2026, 9, 11, 13, 50, 30).getTime();
+  const inv = (status: number, maps: [number, number][], at: number) =>
+    ({ ...parseInvasion(Uint8Array.from([0xc1, 7 + maps.length * 3, 0xfd, status, 0, 0, maps.length, ...maps.flatMap(([m, a]) => [m, a >> 8, a & 0xff])]), at)! });
+  const active = inv(1, [[0, 10], [2, 40], [3, 30]], t0);
+  const ch = autoHuntChoice({ invasion: active, level: 300, now: t0 + 1000, lastKey: null });
+  ok('auto: invasión activa con > 25 vivos → caza el mapa con más (Devias 40)', ch?.ok === true && ch.hunt.map === 2, ch);
+  ok('auto: una vez por invasión', autoHuntChoice({ invasion: active, level: 300, now: t0 + 1000, lastKey: invasionKey(active) }) === null);
+  ok('auto: 25 o menos vivos → no sale', autoHuntChoice({ invasion: inv(1, [[2, 25]], t0), level: 300, now: t0, lastKey: null }) === null);
+  ok('auto: 0xFD viejo (> 2 min) → no sale', autoHuntChoice({ invasion: active, level: 300, now: t0 + AUTO_HUNT.freshMs + 1, lastKey: null }) === null);
+  ok('auto: invasión derrotada → no sale', autoHuntChoice({ invasion: inv(2, [], t0), level: 300, now: t0, lastKey: null }) === null);
+  ok('auto: corta con 20 o menos vivos', shouldStopHunt({ invasion: inv(1, [[2, 20]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) !== null &&
+    shouldStopHunt({ invasion: inv(1, [[2, 21]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) === null);
+  const at = (h: number, m: number) => new Date(2026, 9, 11, h, m, 0).getTime();
+  ok('sin reset entre :47 y :51', resetBlockedByInvasion(at(13, 47)) && resetBlockedByInvasion(at(13, 50)) && !resetBlockedByInvasion(at(13, 51)) && !resetBlockedByInvasion(at(13, 46)));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DEL PANEL PASARON' : `\n${fails} TEST(S) DEL PANEL FALLARON`);

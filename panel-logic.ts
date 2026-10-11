@@ -172,7 +172,7 @@ export function chooseHuntMap(inp: { invasion: Invasion | null; level: number; m
  * Solo cuenta un 0xFD recibido después de empezar la cacería; un mapa que no
  * figura en la lista de un 0xFD activo cuenta como 0 vivos.
  */
-export function shouldStopHunt(inp: { invasion: Invasion | null; map: number; since: number; now: number; maxMs?: number }): string | null {
+export function shouldStopHunt(inp: { invasion: Invasion | null; map: number; since: number; now: number; maxMs?: number; stopAlive?: number }): string | null {
   if (inp.now - inp.since >= (inp.maxMs ?? HUNT_MAX_MS)) return `pasaron ${Math.round((inp.maxMs ?? HUNT_MAX_MS) / 60_000)} min`;
   const inv = inp.invasion;
   if (!inv || inv.at < inp.since) return null;
@@ -180,7 +180,33 @@ export function shouldStopHunt(inp: { invasion: Invasion | null; map: number; si
   if (inv.status !== 'active') return 'no hay invasión activa';
   const alive = inv.maps.find((m) => m.map === inp.map)?.alive ?? 0;
   if (alive <= 0) return `no quedan dorados vivos en ${mapName(inp.map)}`;
+  if (inp.stopAlive != null && alive <= inp.stopAlive) return `quedan ${alive} dorados en ${mapName(inp.map)}: no vale la pena`;
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Cazador automático (port de hunter.js): con la invasión dorada activa y más de AUTO_HUNT.startAlive
+// vivos en un mapa al alcance, sale a cazar solo, una vez por invasión; corta con AUTO_HUNT.stopAlive
+// o menos vivos ("si quedan pocos no tiene sentido buscar"). Entre :47 y :51 no resetea, para llegar
+// a la invasión de las :50 con el nivel para entrar.
+// ---------------------------------------------------------------------------
+export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, noResetFromMin: 47, noResetToMin: 51 } as const;
+
+/** Clave de la invasión (la hora en la que empezó): una cacería automática por invasión. */
+export const invasionKey = (inv: Invasion) => Math.floor(inv.at / 3_600_000);
+
+export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null }): HuntChoice | null {
+  const inv = inp.invasion;
+  if (!inv || inv.status !== 'active' || inp.now - inv.at > AUTO_HUNT.freshMs) return null;
+  if (inp.lastKey === invasionKey(inv)) return null;
+  const ch = chooseHuntMap({ invasion: inv, level: inp.level });
+  return ch.ok && (ch.alive ?? 0) > AUTO_HUNT.startAlive ? ch : null;
+}
+
+/** ¿Minuto de la hora en que no se resetea (para no perder la invasión de las :50)? */
+export function resetBlockedByInvasion(now: number): boolean {
+  const m = new Date(now).getMinutes();
+  return m >= AUTO_HUNT.noResetFromMin && m < AUTO_HUNT.noResetToMin;
 }
 
 // ---------------------------------------------------------------------------

@@ -534,6 +534,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.
   - Con vida < 35 % se va a Lorencia y evita ese mapa 5 min.
   - Sin verificar: los nombres de los jugadores en scope (no se excluye a los propios por nombre).
+- **Cazador automático** (`autoHuntChoice`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y más de 25 vivos en un mapa al alcance (Lorencia, Noria, Devias), sale a cazar solo, una vez por invasión. Corta con 20 o menos vivos, con la invasión terminada o a los 15 min. Entre :47 y :51 no resetea.
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
 
 ## Estación (conectar personajes desde el navegador)
