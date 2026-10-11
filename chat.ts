@@ -37,9 +37,9 @@ export function sayFromPanel(c: Extract<PanelCommand, { cmd: 'say' }>): { ok: bo
   if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
   const now = Date.now();
   if (now - lastSentAt < CHAT_SEND_GAP_MS) return { ok: false, msg: 'despacio: un mensaje cada 2 s' };
-  lastSentAt = now;
   const prefix = c.channel === 'party' ? '~' : c.channel === 'guild' ? '@' : '';
   if (Buffer.byteLength(prefix + c.text, 'utf8') > CHAT_MAX) return { ok: false, msg: `muy largo: máximo ${CHAT_MAX} bytes (con acentos y el prefijo de party/guild cuentan más)` };
+  lastSentAt = now;
   const bytes = c.to ? buildWhisper(c.to, c.text) : buildPublicChat(bot.charName, prefix + c.text);
   sendToGS(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
   log(`Chat (panel)${c.to ? ` a ${c.to}` : c.channel && c.channel !== 'normal' ? ` [${c.channel}]` : ''}: ${c.text}`);

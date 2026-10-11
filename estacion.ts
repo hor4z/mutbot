@@ -1,3 +1,4 @@
+import { serveRadarAsset } from './radar-assets';
 /**
  * Estación: un panel para conectar y desconectar a los personajes sin navegador y ponerlos en una
  * rutina (farmear, spot fijo, explorar, pausa). Cada personaje es un bot `headless-bot.ts` aparte,
@@ -284,6 +285,21 @@ const GOLD_CORS = {
   'access-control-allow-headers': 'content-type',
 };
 
+// Ranking: la API del server del juego (la que usa el cliente web para /ranking), con caché de 1 min.
+const RANKING_URL = process.env.MUBOT_RANKING_URL ?? `https://${new URL(SERVER.proxy).host}/api/ranking`;
+let rankingCache: { at: number; data: unknown } | null = null;
+async function ranking(): Promise<unknown> {
+  if (rankingCache && Date.now() - rankingCache.at < 60_000) return rankingCache.data;
+  try {
+    const r = await fetch(RANKING_URL, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    rankingCache = { at: Date.now(), data: await r.json() };
+    return rankingCache.data;
+  } catch (e) {
+    return rankingCache?.data ?? { error: `no pude leer el ranking: ${(e as Error).message}` };
+  }
+}
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 refreshSlots();
@@ -294,6 +310,8 @@ Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
   async fetch(req) {
+    const visualAsset = await serveRadarAsset(req);
+    if (visualAsset) return visualAsset;
     const url = new URL(req.url);
     if (req.method === 'GET') {
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
@@ -301,6 +319,8 @@ Bun.serve({
       }
       // Los avistamientos vigentes, también para el cazador del navegador (CORS del juego).
       if (url.pathname === '/api/gold') return new Response(JSON.stringify(freshGolds(golds, Date.now())), { headers: { ...GOLD_CORS, 'content-type': 'application/json', 'cache-control': 'no-store' } });
+      // Ranking del server (top de resets y ELO de Arena), el mismo que muestra el cliente web.
+      if (url.pathname === '/api/ranking') return json(await ranking());
       if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });

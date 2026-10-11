@@ -88,7 +88,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'hunt', map: 'Noria' }, { cmd: 'hunt', map: 300 }, { cmd: 'hunt', map: 3, warp: 3 },
     { cmd: 'hunt', sector: 1 },
     { cmd: 'scout' }, { cmd: 'atlas' },
-    { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
+    { cmd: 'ranking' }, { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
     { cmd: 'say', text: 'a\nb' }, { cmd: 'say', text: 'hola', to: 'no válido!' }, { cmd: 'say', text: 'hola', channel: 'global' }, { cmd: 'say', text: 'hola', to: 'Melu', channel: 'party' },
     { cmd: 'say', text: 'hola', extra: 1 }, { cmd: 'say', text: 42 },
   ];

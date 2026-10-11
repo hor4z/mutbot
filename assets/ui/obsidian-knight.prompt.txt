@@ -1,0 +1,6 @@
+Asset: obsidian-knight.webp
+Generated with the built-in image_gen tool.
+Prompt:
+Use case: stylized-concept. Asset type: cinematic background artwork for a modern MU Online inspired game companion dashboard. A magnificent dark fantasy armored knight with elaborate dark steel and antique gold armor, luminous cyan crystalline wings, standing on the RIGHT third, distant gothic citadel ruins and mountain silhouettes disappearing into deep midnight navy mist. Wide panoramic composition, left two thirds nearly empty dark atmospheric negative space for interface typography. Premium AAA fantasy game key art, refined cinematic rendering, restrained gold embers, icy teal magic glow, richly detailed armor, low key lighting, elegant and mature. No text, no letters, no logos, no UI, no watermark. Wide landscape 1536x1024.
+
+Integration: embedded as a WebP data URL in estacion.html and panel.html so existing running servers need no new routes or restart. Source asset is preserved here for reuse. WebP conversion only, no external fonts or network asset dependencies.

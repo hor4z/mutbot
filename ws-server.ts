@@ -1,3 +1,4 @@
+import { serveRadarAsset } from './radar-assets';
 /**
  * Servidor del bot (headless-bot.ts) para el panel (panel.html), detrás de
  * `--ws-port`. Solo escucha en 127.0.0.1.
@@ -133,6 +134,8 @@ export function startStatusServer(opts: { port: number }): StatusServer {
     hostname: '127.0.0.1',
     port: opts.port,
     async fetch(req, srv) {
+      const visualAsset = await serveRadarAsset(req);
+      if (visualAsset) return visualAsset;
       const url = new URL(req.url);
       if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
         if (!originAllowed(req.headers.get('origin'), opts.port)) return new Response('Origen no permitido.', { status: 403 });

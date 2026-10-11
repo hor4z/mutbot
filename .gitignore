@@ -5,3 +5,9 @@ node_modules/
 !.claude/skills/
 .env.*
 !.env.example
+
+ui/dist/
+
+# Archivos del cliente del juego para el radar (91 MB): se generan con `bun run ui:maps`, no van al repo (público).
+assets/radar
+node_modules
