@@ -22,8 +22,16 @@ export const PARTY_MIN_TICKS = 360;
 /** Diferencia que hace falta para cambiar (si no, se queda con party: lo de siempre). */
 export const PARTY_MARGIN = 0.05;
 
-/** ¿Party sí o no? Suma la exp/min del dúo (los dos personajes) con y sin party. */
-export function decideParty(rows: readonly PartyRow[]): PartyKnob {
+/**
+ * Personaje prioritario (usuario: "el foco está en subir a Horaz para que sea top ten"): las perillas
+ * se deciden por SU exp/min, no por la suma del dúo. MUBOT_PRIORITY cambia cuál es.
+ */
+export const PRIORITY_CHAR = process.env.MUBOT_PRIORITY ?? 'Horaz';
+
+/** ¿Party sí o no? Por la exp/min del prioritario con y sin party (si no hay datos de él, la del dúo). */
+export function decideParty(all: readonly PartyRow[], priority = PRIORITY_CHAR): PartyKnob {
+  const mine = all.filter((x) => x.char.toLowerCase() === priority.toLowerCase());
+  const rows = mine.length ? mine : all;
   const side = (p: number) => {
     const r = rows.filter((x) => x.in_party === p);
     const ticks = Math.min(...r.map((x) => x.ticks), Infinity);

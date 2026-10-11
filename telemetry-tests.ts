@@ -20,6 +20,10 @@ ok('party: sin party rinde 20 % más → no', decideParty([
   { char: 'Horaz', in_party: 1, ticks: T, exp_min: 400e6 }, { char: 'Melu', in_party: 1, ticks: T, exp_min: 100e6 },
   { char: 'Horaz', in_party: 0, ticks: T, exp_min: 480e6 }, { char: 'Melu', in_party: 0, ticks: T, exp_min: 120e6 },
 ]).use === false);
+ok('party: decide por Horaz (prioritario) aunque Melu gane con party', decideParty([
+  { char: 'Horaz', in_party: 1, ticks: T, exp_min: 300e6 }, { char: 'Melu', in_party: 1, ticks: T, exp_min: 300e6 },
+  { char: 'Horaz', in_party: 0, ticks: T, exp_min: 400e6 }, { char: 'Melu', in_party: 0, ticks: T, exp_min: 50e6 },
+]).use === false);
 ok('party: diferencia menor al margen → sí', decideParty([
   { char: 'Horaz', in_party: 1, ticks: T, exp_min: 400e6 }, { char: 'Horaz', in_party: 0, ticks: T, exp_min: 410e6 },
 ]).use === true);
