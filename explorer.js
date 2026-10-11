@@ -79,6 +79,18 @@
   // Solo con invasión (usuario: "si no hay dorados, ¿para qué vamos a buscar?"): fuera de la invasión
   // espera en Lorencia; a los :50, si un mapa al alcance tiene > startAlive vivos (0xFD), va ahí y
   // barre su franja (oeste; Horaz el este); con <= stopAlive vuelve a Lorencia.
+  // 0xFD: estado de la invasión por mapa (mismo hook que hunter.js).
+  if (!window.__invHooked) {
+    __eventBus.on('InvasionMonsters', (raw) => {
+      try {
+        const e = raw instanceof DataView ? raw : new DataView(raw.buffer ?? raw);
+        const maps = []; const n = e.getUint8(6);
+        for (let i = 0; i < n; i++) { const r = 7 + i * 3; if (r + 3 > e.byteLength) break; maps.push({ map: e.getUint8(r), alive: e.getUint16(r + 1, false) }); }
+        window.__invasion = { status: e.getUint8(3), total: e.getUint16(4, false), maps, at: Date.now() };
+      } catch {}
+    });
+    window.__invHooked = true;
+  }
   const INV_MAPS = ROUTE.filter((r) => [0, 3, 2, 7, 8].includes(r[1]));
   const aliveIn = (m) => window.__invasion?.maps?.find((x) => x.map === m)?.alive ?? 0;
   const invActive = () => window.__invasion?.status === 1 && Date.now() - window.__invasion.at < 120000;
@@ -128,7 +140,7 @@
     const m = pe.playerMoveTo; if (m.handled || m.point.x !== X.goal.x || m.point.y !== X.goal.z) ai.moveTo(pe, X.goal);
     if (now - X.lastPost > 60000) { X.lastPost = now; save(); fetch('http://127.0.0.1:8788/atlas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, atlas }) }).catch(() => {}); }
   };
-  X.start = () => { X.on = true; X.mapSince = 0; X.visited.clear(); X.goal = null; ai.on = false; ai.L(`ATLAS: arranco (${route().map((r) => r[2]).join(' → ')})`); };
+  X.start = () => { if (X.invasionOnly) { X.on = false; ai.on = false; ai.L('ATLAS: espero la invasión en Lorencia'); return; } X.on = true; X.mapSince = 0; X.visited.clear(); X.goal = null; ai.on = false; ai.L(`ATLAS: arranco (${route().map((r) => r[2]).join(' → ')})`); };
   X.stop = () => { X.on = false; save(); ai.L('ATLAS: paro'); };
   X.report = () => Object.fromEntries(Object.entries(atlas.maps).map(([map, cells]) => {
     const tot = {}; for (const c of Object.values(cells)) for (const [t, v] of Object.entries(c)) { tot[t] ??= { name: v.name, seen: 0 }; tot[t].seen += v.seen; }
