@@ -37,37 +37,32 @@ en el navegador.
 Medido después de los arreglos: Melu sin navegador en Arena 4, unos **80-86M de exp/min** (lo
 mismo que en el navegador), 0 paquetes perdidos.
 
+## Hecho el 2026-10-11 (tarde), probado en vivo con Horaz
+
+- **Estación** (`bun run estacion`): conectar/desconectar, rutinas, consola, dorados vistos.
+- **Esquina de Arena 2** (`corner.ts`, port de `corner.js`): desde el 100, ~30-35 niveles/min contra
+  ~10 de las Arenas 3/4. Primer ciclo con esquina: 10 → 100 en 3,6 min.
+- **Ítems de 5 bytes**: inventario, equipo y drops (las cajas se reconocen). Verificado con bytes reales.
+- Arreglos que lo trababan: no atacar en zona segura (Lord centurion en el pueblo de Lorencia); el
+  daño 0x15 de 10 bytes no es movimiento; objetivo que no muere en 15 s se abandona; "hambre" sin
+  referencia solo con 0 exp; Devias lleno → Arena 1 desde el 50.
+- **Sin compras ni ventas** (pedido del usuario). Fuera buscador, atlas, ruta libre y la capa de decisión.
+
 ## Pendiente, en orden
 
-1. **Ítems de 5 bytes (bloqueante).** Este server manda cada ítem en **5 bytes**; el cliente web los
-   convierte a 12 antes de leerlos (`i=5, f=12` y la función `v()` del bundle `index-*.js`). El bot
-   los lee como de 12, así que el **inventario, la tienda (`StoreItemList`) y los drops** salen mal
-   ("packet de drop con layout inesperado", catálogos con ítems como `4/143`). Consecuencias: no
-   encuentra pociones para comprar y no reconoce las cajas en el piso. Conversión del cliente
-   (wire `e` desde `o`): `r = e[0] | (e[3] & 0x80) << 1`, grupo `r >> 5`, número `r & 31`, nivel en
-   `e[1]` (bits 3-6), opciones excelentes `e[3] & 0x7f`. Detectar el formato por largo: inventario y
-   tienda `6 + n*(1+5)`, drops `5 + n*(4+5)`, ítem agregado `4+5`.
-2. **Pociones: sin compras** (pedido del usuario, 2026-10-11). El bot no compra nada salvo con
-   `--buy-potions` (viaje a Lorencia farmeando, merchant en scope, antes del atlas). Antes Horaz iba y
-   volvía de Arena 2 a Lorencia cada 5 min sin poder comprar.
-3. **Horaz (DK) sin navegador**: lo que el agente del navegador ya hace y el headless no, por orden de
-   impacto:
-   - la esquina de Arena 2 (`corner.js`): quedarse en (5,11), Twisting Slash al grupo más grande,
-     lados adaptativos, irse si está llena;
-   - ruta de reset: Lorencia Lich (134,202) → Devias 4 (69,181) → Arena 2 → 3 → 4 por nivel, con la
-     salida de Lorencia variada;
-   - reset a 400 y repartir puntos como en el navegador (`/add agi`/`/add vit`);
-   - defensa propia (`defense.js`: Death Stab + Swell Life a quien le pega);
-   - regla fuerte de dorados: cualquier dorado a la vista se mata (dragones primero) y no se cambia
-     de mapa ni se resetea hasta levantar las cajas.
-   - Medir cada cambio contra el navegador: minutos por reset (el navegador hizo 5-7 min con la
-     pestaña recién cargada).
-4. **Melu (SM)**: modo mago completo (quieta en la esquina, Evil Spirit, Soul Barrier cada ~50 s; ya
-   está el skill de área y el Soul Barrier), ceder el spot a Horaz por resets.
-5. **Panel**: que todo lo de arriba se vea en tiempo real (ya están el mapa, la sesión y las alertas).
-   **Conectar/desconectar y rutinas:** hecho con la estación (`bun run estacion`, ver AGENTS.md
-   "Estación"). Falta probarla en vivo contra el server.
-6. **Caza** (después de que el farmeo esté bien): ver "Caza conjunta" en EVENTOS.md.
+1. **Igualar al agente del navegador regla por regla** (usuario: "habíamos pulido todas estas
+   cuestiones"). Se está armando la lista completa de diferencias contra `browser/*.js`; lo conocido:
+   lados adaptativos de la esquina (esquina/medio/este con exp medida), focos de reaparición,
+   competir o irse cuando un jugador está en el spot, aggro (pegarle primero a quien le pega),
+   defensa propia (`defense.js`), regla fuerte de dorados (matar lo que se vea, dragones primero, no
+   resetear hasta levantar las cajas), salida variada de Lorencia, campamento de Devias 4 en (69,181).
+   Medir cada cambio en minutos por ciclo contra el navegador (mejor: 10,4 min; esquina: ~5-7).
+2. **Melu (SM)**: modo mago completo (quieta en la esquina, Evil Spirit, Soul Barrier), ceder el spot
+   a Horaz por resets.
+3. **Panel**: el mapa confunde (grilla norte-arriba sin brújula ni escala, leyenda incompleta); chat
+   (leer ChatMessage/ServerMessage y susurros, mandar desde el panel).
+4. **Partir `headless-bot.ts`** en módulos (conexión, mundo, combate, ruta, reset, panel).
+5. **Caza** y cooperación entre bots (después).
 
 ## Lo que aprendimos del agente del navegador (para no repetirlo)
 

@@ -12,8 +12,8 @@ Leé ese archivo antes de tocar `headless-bot.ts`. Contiene:
 - la estructura y por qué `net/`, `packets/` y `data/` son copias del cliente
 - las trampas de protocolo: packets donde los parsers generados están mal para
   0.97d y el bot queda ciego sin avisar
-- el flujo de economía con merchants y la capa de decisión
-- el estado del combate (bloqueante para jugar solo) y lo pendiente
+- la estación, el panel y la esquina de Arena 2
+- lo pendiente (en PLAN-SIN-NAVEGADOR.md)
 
 Foco: **bot sin navegador + estación/panel**. Para "correlo", "arrancalo", "ponelo a jugar":
 `bun run estacion` (`http://127.0.0.1:8787/panel`) y Conectar al personaje con su rutina (o
