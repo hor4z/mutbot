@@ -34,7 +34,7 @@
     const inner = (ai.cornerInner ??= ai.pickTarget);
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
-      if (!C?.on || w.mapIndex !== C.map || window.__hunt?.on) return inner(w, P, c);
+      if (!C?.on || w.mapIndex !== C.map || window.__hunt?.on || (C.awayUntil && Date.now() < C.awayUntil)) return inner(w, P, c);
       const mons = [...w.byNetId.values()].filter(alive);
       // Camino a la esquina: derecho, sin pelear lo que hay en el camino (zigzagueaba con los Elite
       // Skeleton de (50,80) y tardaba minutos). Solo lo que bloquea el paso (<= 1,5 tiles).
@@ -84,6 +84,25 @@
       if (ai.target && d(ai.target.transform.pos, A) > 18) { ai.target = null; w.attackTarget = null; }
     }
     if (S.playerData.level < C.minLevel) { if (!ai.cfg.spots.some((x) => x[0] === 1)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
+    // Esquina llena: con 3 o más jugadores cerca y el último minuto rindiendo menos que el mejor spot
+    // de Arena 3/4 (~116M/min), irse ahí 3 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
+    // Nancho y Pachegas encima, Horaz sacaba 16M/min (usuario: "estamos molestando bastante").
+    const nowA = Date.now();
+    if (C.awayUntil && nowA < C.awayUntil) return;
+    if (C.awayUntil && nowA >= C.awayUntil) { C.awayUntil = 0; L('vuelvo a mirar la esquina'); }
+    if (w.mapIndex === C.map && d(pe.transform.pos, C.home) <= C.radius + 3) {
+      const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && d(e.transform.pos, C.home) <= 15).length;
+      const rate = ai.expLog.filter((x) => x.t > nowA - 60000).reduce((a, x) => a + x.added, 0);
+      C.inCornerSince ??= nowA;
+      const alt = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24; // 24: Arena 2 fuera de la esquina
+      const altRate = Math.max(ai.spotScore?.[alt] ?? 0, 60e6);
+      if (rivals >= 3 && nowA - C.inCornerSince > 60000 && rate < altRate * 0.8) {
+        C.awayUntil = nowA + 180000; C.inCornerSince = null;
+        ai.cfg.spots = C.ROUTE.filter((x) => x[0] === alt); ai.spot = alt; ai.lastWarp = nowA; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = nowA;
+        S.warpCommandRequest(alt); L(`esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M en el último min): ${['Arena 2 (otro spot)', 'Arena 3', 'Arena 4'][alt - 24]} por 3 min`);
+        return;
+      }
+    } else C.inCornerSince = null;
     if (!(ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] === C.warp)) { C.savedSpots ??= ai.cfg.allSpots ?? window.__drakSaved ?? ai.cfg.spots; ai.cfg.spots = [[C.warp, 'Arena 2 esquina', 0]]; }
     if (w.mapIndex !== C.map) {
       if (Date.now() - C.warpAt > 8000) { C.warpAt = Date.now(); ai.spot = C.warp; ai.lastWarp = Date.now(); S.warpCommandRequest(C.warp); L(`warp a Arena 2 en nivel ${S.playerData.level} (desde mapa ${w.mapIndex})`); }
@@ -149,7 +168,7 @@
   // ya (el agente revisa cada 400 ms y el mago de al lado borra la tanda en ~1 s).
   if (window.__corner?.fast) clearInterval(window.__corner.fast);
   C.fast = setInterval(() => {
-    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged) return;
+    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (C.awayUntil && Date.now() < C.awayUntil)) return;
     const w = W(), pe = w?.playerEntity; if (!pe || w.mapIndex !== C.map || w.castRequest) return;
     const P = pe.transform.pos; if (d(P, C.home) > C.radius + C.fill) return;
     let best = null, bn = 0;
