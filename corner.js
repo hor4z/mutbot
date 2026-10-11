@@ -36,7 +36,8 @@
       const C = window.__corner;
       // Devias hasta el 100: solo lo que está a <= 8 tiles del campamento (usuario: "en Devias no te
       // salgas del spot muy lejos"). Sin nada cerca, esperar ahí la reaparición.
-      if (C?.on && w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2 && !window.__hunt?.on) {
+      // (lo mismo en Lorencia hasta el 20: "en Lorencia te saliste del spot")
+      if (C?.on && ((w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2) || (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0)) && !window.__hunt?.on) {
         const near = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= C.deviasR);
         let best = null, bs = -1e9;
         for (const e of near) { const n = near.filter((o) => d(o.transform.pos, e.transform.pos) <= C.spinR).length; const sc = n * 3 - d(P, e.transform.pos) * 0.5; if (sc > bs) { bs = sc; best = e; } }
@@ -75,6 +76,10 @@
     if (w.mapIndex === 0 && S.playerData.level < 20 && (ai.camp?.x !== C.lorencia.x || ai.camp?.z !== C.lorencia.z)) {
       ai.camp = { ...C.lorencia, map: 0, since: Date.now(), lastSeen: Date.now(), known: true };
       if (!ai.target) { ai.explore = { ...C.lorencia, kind: 'camp' }; ai.moveTo(pe, C.lorencia); }
+    }
+    if (w.mapIndex === 0 && S.playerData.level < 20 && ai.camp?.map === 0) {
+      if (ai.target && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
+      if (!ai.target && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
     }
     // Hasta 100: la ruta del usuario con Arena 1 desde nivel 50 (faltaba: se quedaba con los Yetis de
     // Devias, "muy esparcidos", del 20 al 100).
