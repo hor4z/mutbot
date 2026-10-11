@@ -11,6 +11,12 @@ import { CORNER, cornerActive } from './corner';
 import { cornerStep, newCornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
+import { DEFENSE, Defense } from './defense';
+import { GoldenRule } from './golden';
+import { attackerOf } from './protocol097';
+import { GOLDEN_TYPES } from './state';
+import { WARP_SPOTS } from './route';
+import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
 import { SelfReport } from './farming';
 import { journal, panelLog } from './journal';
@@ -45,6 +51,24 @@ const typeKills: Record<number, number> = {};
 // Muerte propia: llega por dos lados (HP 0 y ObjectGotKilled); dentro de esta ventana es una sola.
 let lastDeathAt = -Infinity;
 let economyWatched = false;
+// Defensa propia (defense.ts) y aggro: quién me pega, de los paquetes 0x18/0x19 (protocol097.ts).
+const defense = new Defense();
+let aggroHooked = false;
+let aggroTarget: Map<number, number> | null = null;
+function hookAggro() {
+  if (aggroHooked) return;
+  aggroHooked = true;
+  for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
+    EventBus.on(ev, (raw: any) => {
+      const id = attackerOf(toBytes(raw), bot.playerId & 0x7fff);
+      if (id == null) return;
+      const now = Date.now();
+      if (world.players.has(id)) {
+        if (defense.hit(id, now)) panelLog(`Defensa: un jugador (id ${id}) me pega: le contesto.`);
+      } else if (world.npcs.has(id)) aggroTarget?.set(id, now);
+    });
+  }
+}
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
 export async function autonomousLoop(deadline: number): Promise<LoopResult> {
@@ -128,6 +152,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const added = p.AddedExperience;
     const now = Date.now();
     totalExpGained += added;
+    ctx.expTotal += added;
     report.addExp(added, now);
     const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
     if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
@@ -167,6 +192,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const corner = newCornerState();
   let devCrowdSince: number | null = null;
   const early = new EarlyPlanner();
+  // Regla fuerte de dorados (golden.ts) y los ya avisados.
+  const golden = new GoldenRule();
+  const goldAnnounced = new Set<number>();
+  hookAggro();
+  aggroTarget = ctx.aggro;
   let attackTarget: number | null = null;
   let attackSince = 0;
   // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
@@ -277,8 +307,57 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
     }
 
+    // 1c) Defensa propia: solo a un jugador que me pegó (10 s, <= 10 tiles), con el skill más fuerte;
+    //     con vida < 35 % me voy a Lorencia y evito ese mapa 5 min.
+    {
+      const nowD = Date.now();
+      const foe = defense.target({ x: world.x, y: world.y }, [...world.players].map(([id, q]) => ({ id, x: q.x, y: q.y })), nowD);
+      if (foe) {
+        const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
+        if (defense.shouldFlee(hpPct, world.map, nowD)) {
+          panelLog(`Defensa: vida ${Math.round(hpPct * 100)} % peleando con un jugador: me voy a Lorencia y evito este mapa ${DEFENSE.avoidMapMs / 60_000} min.`);
+          if (world.map === CORNER.map) corner.awayUntil = nowD + DEFENSE.avoidMapMs;
+          ctx.target = null;
+          journal('travel', 'huyo de un jugador: warp a Lorencia', { warp: 2, reason: 'defense' });
+          await warpAndWait(WARP_SPOTS.find((sp) => sp.index === 2)!);
+          continue;
+        }
+        const sk = Defense.skill((n) => world.skills.has(n));
+        const info = sk != null ? world.skills.get(sk)! : null;
+        const d = chebyshev(world.x, world.y, foe.x, foe.y);
+        ctx.phase = 'fight';
+        bot.doing = `defensa: le contesto a un jugador en (${foe.x},${foe.y})`;
+        if (info && d <= castReach(sk!) && nowD - ctx.lastCastAt >= SKILL_PACE_MS) {
+          sendTargetedSkill(info.index, foe.id);
+          ctx.lastCastAt = nowD;
+          await sleep(SKILL_PACE_MS);
+        } else if (!info && d <= 1) {
+          sendHit(foe.id, directionTowards(world.x, world.y, foe.x, foe.y));
+          await sleep(ATTACK_PACE_MS);
+        } else await walkTowards(ctx, foe.x, foe.y);
+        continue;
+      }
+    }
+
+    // 1d) Regla fuerte de dorados (golden.ts): farmeando, un dorado a <= 20 es el objetivo (dragones
+    //     primero); mientras tanto y 15 s después (cajas) no se resetea, no se cambia de spot ni se
+    //     vuelve a la esquina.
+    const nowG = Date.now();
+    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t), nowG);
+    const goldHold = !bot.hunting && golden.holding(nowG);
+    if (gold && ctx.target !== gold.id) {
+      if (!goldAnnounced.has(gold.id)) {
+        goldAnnounced.add(gold.id);
+        panelLog(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
+      }
+      ctx.target = gold.id;
+      targetType = gold.type;
+      targetSince = nowG;
+      stuckCount = 0;
+    }
+
     // 2) Reset al llegar al nivel: lo más importante para progresar (no a mitad de una cacería).
-    if (!bot.hunting && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    if (!bot.hunting && !goldHold && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;
@@ -302,7 +381,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //     spot fijado por el panel o mientras está afuera porque estaba llena.
     // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.
     if (corner.awayUntil && Date.now() >= corner.awayUntil && world.level >= CORNER.noReturnLevel) corner.awayUntil = Date.now() + 60_000;
-    if (!bot.hunting && !bot.pinnedSpot && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: corner.awayUntil, now: Date.now() })) {
+    if (!bot.hunting && !bot.pinnedSpot && !goldHold && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: corner.awayUntil, now: Date.now() })) {
       await cornerStep(ctx, corner);
       continue;
     }
@@ -333,16 +412,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // En el arranque solo cuenta Devias lleno (el navegador tenía el hambre apagado debajo del 100), con
     // una red: 60 s en el mapa sin NADA de exp (17 jugadores en Devias 4 a las 13 h: 99 skills y 0
     // kills; otra vez, Devias 4 vacío sin un monstruo a la vista) → otra entrada o Arena 1 desde el 50.
-    const earlyStarving = inEarly && now0 - bot.lastArrivalAt > EARLY_STARVE_MS && expLog.perMin(now0, EARLY_STARVE_MS) === 0;
+    // Solo en Devias: en Lorencia no hay otro spot (y el camino al Lich con el punto de paso puede pasar 60 s).
+    const earlyStarving = inEarly && world.map === 2 && now0 - bot.lastArrivalAt > EARLY_STARVE_MS && expLog.perMin(now0, EARLY_STARVE_MS) === 0;
     if (earlyStarving && now0 - starvingLogged > 15_000) {
       starvingLogged = now0;
       log(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
     }
-    const crowded = inEarly ? devCrowded || earlyStarving : hungry.starving || camps.crowdedSpot(now0) || devCrowded;
+    // Sin exp: con jugadores cerca cuenta como lleno (desde el 50 → Arena 1); sin nadie, como mapa
+    // vacío (otra entrada de Devias).
+    const crowded = inEarly ? devCrowded || (earlyStarving && rivalsNear > 0) : hungry.starving || camps.crowdedSpot(now0) || devCrowded;
+    const earlyDry = earlyStarving && rivalsNear === 0;
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
-    if (!bot.hunting && (ticks % 10 === 0 || crowded || !bot.currentSpot)) {
-      const moved = await maybeChangeSpot({ crowded });
+    if (!bot.hunting && !goldHold && (ticks % 10 === 0 || crowded || earlyDry || !bot.currentSpot)) {
+      const moved = await maybeChangeSpot({ crowded, mapDead: earlyDry });
       if (moved) {
         ctx.target = null;
         continue;
@@ -415,9 +498,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           stuckCount = 0;
         }
       }
-    } else if (early.active()) {
+    } else if (early.active() && !goldHold) {
       // Arranque: objetivo con correa del campamento; uno que se alejó más de 10 se suelta.
-      const { camp } = early.goal(ctx.npcs.values());
+      const { camp } = early.goal([...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), ticks);
       const cur = ctx.target != null ? ctx.npcs.get(ctx.target) : null;
       if (cur && dist(cur, camp) > EARLY.dropTargetAt) ctx.target = null;
       if (ctx.target == null && !early.viaPending()) {
@@ -462,14 +545,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (ctx.target != null) {
       const target = ctx.target;
       const t = ctx.npcs.get(target)!;
-      const dist = chebyshev(world.x, world.y, t.x, t.y);
+      const tDist = chebyshev(world.x, world.y, t.x, t.y);
       if (process.env.MUBOT_DEBUG_COMBAT && ticks % 5 === 0) {
-        log(`DEBUG combate: target=${target} yo=(${world.x},${world.y}) target_pos=(${t.x},${t.y}) dist=${dist} stuck=${stuckCount}`);
+        log(`DEBUG combate: target=${target} yo=(${world.x},${world.y}) target_pos=(${t.x},${t.y}) dist=${tDist} stuck=${stuckCount}`);
       }
       ctx.phase = 'fight';
       bot.doing = `${bot.hunting ? 'cazando: ' : ''}peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
       const reachSkill = pickAttackSkill();
-      if (dist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
+      if (tDist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
         if (attackTarget !== target) {
           attackTarget = target;
           attackSince = Date.now();
@@ -492,7 +575,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           ctx.lastCastAt = Date.now();
           ctx.skillsUsed++;
           await sleep(SKILL_PACE_MS);
-        } else if (dist <= 1) {
+        } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
           await sleep(ATTACK_PACE_MS);
         } else {
@@ -527,7 +610,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const now = Date.now();
     // Arranque sin objetivo: al campamento (o al punto de paso de Lorencia) y esperar ahí.
     if (early.active()) {
-      const { goal } = early.goal(ctx.npcs.values());
+      const { goal } = early.goal([...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), ticks);
       bot.goalPoint = [goal.x, goal.y];
       if (dist({ x: world.x, y: world.y }, goal) > 2) {
         ctx.phase = 'walk';

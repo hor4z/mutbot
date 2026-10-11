@@ -3,6 +3,7 @@
  * cada 1 s. Todo sale de lo que el bot ya trackea de los packets: funciona igual sin navegador.
  * También las señales de dorados a la estación.
  */
+import { sayFromPanel } from './chat';
 import { SKILL_TABLE, pickAttackSkill } from './combat';
 import { eventTimers } from './events';
 import { journal, panelLog } from './journal';
@@ -83,6 +84,8 @@ function runPanelCommand(c: PanelCommand): CommandResult {
       bot.pinnedSpot = v.spot;
       return { ok: true, msg: `voy a ${v.spot.name} (warp ${v.spot.index}); queda fijo hasta la orden farm` };
     }
+    case 'say':
+      return sayFromPanel(c);
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };

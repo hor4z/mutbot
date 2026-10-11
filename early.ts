@@ -101,5 +101,7 @@ export function leashedTarget<M extends Pos>(me: Pos, camp: Pos, monsters: reado
     if (s > bs) { bs = s; best = m; }
   }
   if (best) return best;
-  return [...monsters].filter((m) => dist(m, me) <= EARLY.nearMe).sort((a, b) => dist(a, me) - dist(b, me))[0] ?? null;
+  // Sin nada en la correa: el más cercano a <= nearMe de mí (los que pegan de lejos), pero sin salir de
+  // dropTargetAt del campamento (si no, el que se suelta por lejos se vuelve a elegir y se aleja).
+  return [...monsters].filter((m) => dist(m, me) <= EARLY.nearMe && dist(m, camp) <= EARLY.dropTargetAt).sort((a, b) => dist(a, me) - dist(b, me))[0] ?? null;
 }
