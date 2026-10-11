@@ -51,6 +51,7 @@
  *   util.ts         log, sleep, bytes, direcciones
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
+import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
 import { sendEcho, sendPing } from './actions';
@@ -95,6 +96,7 @@ function clearScope() {
 async function session(deadline: number): Promise<LoopResult> {
   bot.kicked = false;
   clearScope();
+  resetStatTracking();
   await connectToConnectServer();
   const { ip, port } = await getGameServerAddress();
   await connectToGameServer(ip, port);
