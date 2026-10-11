@@ -195,6 +195,8 @@ export const HUNT_CELL_GIVE_UP_MS = 45_000;
 export class HuntExplorer {
   readonly visited = new Set<string>();
   goal: { x: number; y: number; key: string; since: number } | null = null;
+  /** Vueltas completas al mapa (o a la franja): el atlas pasa al mapa siguiente con una. */
+  passes = 0;
 
   /** `band`: solo las celdas cuyo centro cae en [minX, maxX) (franja del buscador). */
   constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256, readonly band: ScoutBand | null = null) {}
@@ -209,6 +211,19 @@ export class HuntExplorer {
     const inBand = all.filter((cx) => cx >= b.minX && cx < b.maxX);
     // Franja más angosta que una celda: su medio, para no quedarse sin destino.
     return inBand.length ? inBand : [Math.floor((b.minX + b.maxX) / 2)];
+  }
+
+  /** Celdas a recorrer (para "celda 12/40"). */
+  totalCells(): number {
+    return this.columns().length * Math.ceil((this.size - Math.floor(this.cell / 2)) / this.cell);
+  }
+
+  /** Celdas ya visitadas de las que se recorren (la franja). */
+  visitedCount(): number {
+    const cols = new Set(this.columns().map((cx) => Math.floor(cx / this.cell)));
+    let n = 0;
+    for (const k of this.visited) if (cols.has(Number(k.split(',')[0]))) n++;
+    return n;
   }
 
   private key(x: number, y: number) {
@@ -244,6 +259,7 @@ export class HuntExplorer {
     }
     if (!best) {
       // Mapa entero recorrido: otra vuelta (los dorados se mueven y reaparecen).
+      this.passes++;
       this.visited.clear();
       this.visited.add(this.key(x, y));
       return this.next(x, y, now);

@@ -10,7 +10,7 @@
  */
 
 /** Qué está haciendo el bot, en una palabra (para el panel y el log). */
-export type BotMode = 'farm' | 'hunt' | 'scout' | 'paused' | 'resetting' | 'connecting' | 'dead';
+export type BotMode = 'farm' | 'hunt' | 'scout' | 'atlas' | 'paused' | 'resetting' | 'connecting' | 'dead';
 
 export type MapName = string; // "Lorencia", "Devias", "Arena 4", ... (o "mapa N")
 
@@ -93,10 +93,15 @@ export type PanelCommand =
    * map: como `hunt`; sector/sectors: franja vertical (por x) que recorre, default 1 de 2.
    */
   | { cmd: 'scout'; map?: number; sector?: number; sectors?: number }
+  /**
+   * explorar mapas enteros SIN pelear y anotar qué aparece dónde (atlas, ~/.mubot/atlas.json).
+   * Los mapas salen de --atlas-maps (o los default al alcance del nivel). `farm`/`pause` lo terminan.
+   */
+  | { cmd: 'atlas' }
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
   | { cmd: 'warp'; warp: number };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'scout'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'scout', 'atlas'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -111,7 +116,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
   pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'],
-  scout: ['cmd', 'map', 'sector', 'sectors'],
+  scout: ['cmd', 'map', 'sector', 'sectors'], atlas: ['cmd'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {

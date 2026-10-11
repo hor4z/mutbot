@@ -26,7 +26,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 ```bash
 bun install
 
-# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts + panel-tests.ts.
+# Tests offline (no tocan el server): packet-tests.ts + learning-tests.ts + explore-tests.ts + farming-tests.ts + camp-tests.ts + panel-tests.ts + atlas-tests.ts.
 bun run test
 
 # Typecheck (tiene que dar limpio)
@@ -61,6 +61,9 @@ pasó una vez y costó tres intentos de debugging.
 | `panel-protocol.ts` | Contrato bot ↔ panel (tipos, `PANEL_COMMANDS`, `isPanelCommand`). |
 | `panel-logic.ts` | Lado bot del panel en lógica pura: 0x91, 0xFD, tickets, ciclos, cacería y buscador de dorados. |
 | `panel-tests.ts` | Tests offline de `panel-logic.ts`, `isPanelCommand` y la parte pura de `ws-server.ts`. |
+| `atlas.ts` | Explorador / atlas (lógica pura): mapas por nivel, tiempo por mapa, registro de monstruos por celda y dorados, persistencia y reporte. |
+| `atlas-tests.ts` | Tests offline de `atlas.ts` (dir temporal, sin red). |
+| `scripts/atlas-report.ts` | `bun run atlas-report`: imprime el atlas (solo lectura, sin red). |
 | `packet-tests.ts` | Tests offline de parsers y builders. Sin red. |
 | `learning.ts` | Capa de aprendizaje (lógica pura): medición por spot, bandit UCB1, persistencia. |
 | `learning-tests.ts` | Tests offline de `learning.ts` (usa un dir temporal, sin red). |
@@ -858,7 +861,7 @@ cacería), `command-result`, y los viejos `state`/`decision`.
 - `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
   (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
   primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).
-- `mode` (`farm`/`hunt`/`scout`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
+- `mode` (`farm`/`hunt`/`scout`/`atlas`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
   (frase corta que pone el loop).
 - `exp.perMin1`/`perMin5` del `ExpLog`; `cycle`/`cycles`/`resetsPerDay` del
   `CycleLog` (1440 / promedio de los últimos 5 ciclos sin tag).
@@ -874,7 +877,7 @@ cacería), `command-result`, y los viejos `state`/`decision`.
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 6 órdenes **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 7 órdenes **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
@@ -947,6 +950,76 @@ terminar, `gone` de todos los avisados. `id` es el id de objeto del server.
 **Sin verificar en vivo:** probado offline (`panel-tests.ts`: franjas, payload,
 reintentos/`gone`, corte, `isPanelCommand`) y `tsc`; no corrió contra el server
 ni contra un receptor `/gold` real.
+
+### Explorador (atlas)
+
+Melu (DW) recorre mapas enteros **sin pelear** y anota qué aparece dónde, para
+encontrar lugares de farmeo y dónde salen dorados o monstruos especiales (también
+fuera de la invasión de cada hora).
+
+```bash
+bun --env-file=.env.melu run headless-bot.ts --allow-remote --proxy wss://mu.mormon.garden/ws \
+  --cs-host mu.mormon.garden --cs-port 44405 --auto-seconds 0 --ws-port 8787 --atlas
+```
+
+- `--atlas-maps 0,3,2`: índices de mapa, en orden. Default: Lorencia 0, Noria 3,
+  Devias 2, Dungeon 1, Lost Tower 4, Atlans 7, Tarkan 8. Se saltea (con una línea
+  de log) lo que pide más nivel que el del personaje o no está en `ATLAS_WARPS`
+  (`atlas.ts`). Warps (menú del cliente 0.97d / OpenMU): Lorencia 2 (nivel 10),
+  Noria 3 (10), Devias 6 (Devias 3, 20), Dungeon 8 (30), Lost Tower 14 (50),
+  Atlans 11 (70), Tarkan 21 (140). Icarus (23, nivel 170, pide alas) no va. Con
+  Melu en ~120, Tarkan queda afuera.
+- `--atlas-minutes-per-map 12` (default): tope por mapa; pasa antes si recorrió
+  todas las celdas. Terminada la lista, otra vuelta (para siempre): cada vuelta suma datos.
+- Igual que el buscador: **nunca pelea** (ni golpe, ni skill, ni `castOnTheWay`),
+  no levanta loot, no farmea ni resetea. Con `--atlas`, `resume`, `warp`, `hunt` y
+  `scout` se rechazan; `farm`/`pause` lo terminan y queda en pausa (`atlas` lo
+  vuelve a arrancar). Sin `--atlas`, la orden `{ cmd: 'atlas' }` lo arranca en
+  cualquier momento y `farm` vuelve a farmear.
+- **Pociones antes de salir** (y al empezar otra vuelta si se acabaron): va a
+  Lorencia, habla con los merchants conocidos y los NPC de pueblo en scope, y en el
+  primero cuyo catálogo (`StoreItemList`) tenga pociones de curación compra de a
+  una (600 ms entre compras) hasta 40, grandes si hay, si no medianas, si no chicas
+  (sin catálogo, `--buy-slot`). Cuenta una compra si llega `ItemBought` o baja el
+  zen; dos fallos seguidos cortan. Loguea cuántas compró y el zen gastado. Si no
+  pudo comprar, sale igual con la regla de huida más prudente.
+- Recorrido: warp al mapa (hasta 3 intentos, 15 s entre intentos), celdas de 25
+  tiles con `HuntExplorer` (la sin visitar más cercana, visitada al llegar o a los
+  45 s). Hay un explorador por mapa que dura toda la corrida: la vuelta siguiente
+  sigue por las celdas que faltaban, no vuelve a empezar cerca del warp.
+- Supervivencia: pociones con HP ≤ `--heal-at` (60 %). HP < 50 % y un monstruo a
+  ≤ 6 tiles: camina 5 tiles para el otro lado (sin haber podido comprar: < 70 % y
+  ≤ 8). HP < 30 % y sin pociones: warp a Lorencia, 60 s de descanso y sigue con el
+  mapa siguiente. Muerta: espera el respawn y vuelve a warpear.
+- `doing`: `explorando Atlans (celda 12/100)`; `where.spot`: `atlas Atlans`.
+
+**Qué anota** (`~/.mubot/atlas.json`, se suma entre corridas; se escribe como
+mucho cada 30 s, al cambiar de mapa, al terminar y con Ctrl+C/SIGTERM):
+
+```ts
+{ version: 1,
+  maps: { "<mapa>": { "<cx>,<cy>": { "<tipo>": { name, seen, lastSeen, sampleXY: [x, y] } } } },
+  goldens: [{ map, x, y, type, name, at, duringInvasion, id }] }
+```
+
+- Celda = `floor(x/25),floor(y/25)`. `seen` = ids de objeto distintos vistos en
+  esa celda por visita al mapa (el mismo monstruo en cada tick cuenta una vez; en
+  la vuelta siguiente vuelve a contar: el server reusa ids al respawnear).
+- `goldens`: cada dorado (`GOLDEN_TYPES`), sin repetir el mismo id en el mismo
+  mapa dentro de 30 min. `duringInvasion` = el último 0xFD decía activa (y es de
+  hace menos de 20 min). Además van a `/gold` como con el buscador (`GoldReporter`),
+  para que el cazador de Horaz reaccione si está cazando.
+- **`special` no se anota:** `data/monsters.json` no dice en qué mapa sale cada
+  monstruo, así que no se puede saber qué es "fuera de lo normal" para un mapa. El
+  atlas mismo es la base para deducirlo después.
+
+`bun run atlas-report [ruta] [--top 8]`: por mapa, los más vistos y las zonas con
+más monstruos, y todos los dorados con hora local, ordenados. Solo lee el archivo.
+
+**Sin verificar en vivo:** probado offline (`atlas-tests.ts`, `panel-tests.ts`) y
+`tsc`. No corrió contra el server: los warps de Dungeon/Lost Tower/Atlans/Tarkan,
+la compra de pociones (catálogo, `ItemBought`, descuento de zen) y que el NPC de
+pociones de Lorencia esté en scope al llegar por warp.
 
 ## Separar dúo y cacería del farmeo (2026-10-10)
 
