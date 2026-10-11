@@ -296,7 +296,7 @@
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false }; C.fastCasts = (C.fastCasts ?? 0) + 1;
   }, 100);
-  // Teleport de viaje (magos con skill 6, Melu): yendo a un destino a > 8 tiles sin pelear, saltar 7
+  // Teleport de viaje (magos con skill 6, Melu): yendo a un destino a > 12 tiles sin pelear, saltar 7
   // tiles hacia él cada ~1,3 s en vez de caminar (usuario: "Melu es mago, puede llegar más rápido a
   // los spots usando teleport").
   if (window.__corner?.tpTimer) clearInterval(window.__corner.tpTimer);
@@ -304,10 +304,11 @@
     if (!C.on || !ai.on || ai.busy || ai.looting || ai.target || S.uiState !== 5 || S.sceneLoading || window.__defense?.engaged) return;
     if (!(S.skills ?? []).some((k) => k.number === 6)) return;
     const w = W(), pe = w?.playerEntity, dst = ai.explore; if (!pe || !dst || w.castRequest) return;
-    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 8 || Date.now() - (C.tpAt ?? 0) < 1300) return;
+    const P = pe.transform.pos, dd = d(P, dst); if (dd <= 12 || Date.now() - (C.tpAt ?? 0) < 2000) return; // > 12 tiles y cada 2 s (más seguido se veía torpe)
     const pd = S.playerData; if ((pd.currentMana ?? 100) < 30) return;
     const k = 7 / dd, x = Math.round(P.x + (dst.x - P.x) * k), z = Math.round(P.z + (dst.z - P.z) * k);
     if (w.isWalkable?.(x, z) === false) return;
+    if ([...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, { x, z }) <= 3).length >= 3) return; // no caer en medio de un grupo
     C.tpAt = Date.now(); const sk = ai.cfg.skill; ai.cfg.skill = 6; S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
     setTimeout(() => { if (ai.cfg.skill === 6) ai.cfg.skill = sk; }, 900);
   }, 300);

@@ -85,22 +85,24 @@
       return;
     }
     const P = pe.transform.pos;
-    // Teleport (skill 6) si está a > 5 tiles: salto de hasta 7 tiles hacia el líder, uno cada 1,5 s
-    // (usuario: "que Melu use más teletransportación"). Caminando, quedaba atrás después de cada warp.
+    // Teleport (skill 6), refinado (usuario: "las teletransportaciones no parecen buenas"): solo si
+    // está a > 10 tiles (para menos, caminar), cada 2 s, cayendo a ~2 tiles del líder (no más allá) y
+    // nunca en medio de un grupo (>= 3 monstruos a <= 3 tiles del punto de llegada).
     const dl = d(P, lp);
-    if (dl > 5 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 1500 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
-      F.tpAt = now; const k = Math.min(1, 7 / dl), x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
-      if (w.isWalkable?.(x, z) !== false) { if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
+    const monsNear = (q, r) => [...w.byNetId.values()].filter((e) => window.__ai?.isMonster?.(e) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && d(e.transform.pos, q) <= r).length;
+    if (dl > 10 && (S.skills ?? []).some((k) => k.number === 6) && now - (F.tpAt ?? 0) > 2000 && !w.castRequest && (pd.currentMana ?? 100) > 30) {
+      const step = Math.min(7, dl - 2), k = step / dl, x = Math.round(P.x + (lp.x - P.x) * k), z = Math.round(P.z + (lp.z - P.z) * k);
+      if (w.isWalkable?.(x, z) !== false && monsNear({ x, z }, 3) < 3) { F.tpAt = now; if (S.currentSkill !== 6) S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; F.tps = (F.tps ?? 0) + 1; return; }
     }
-    // Ayudar sin moverse (usuario: "ya Melu puede ayudar un poco"): al lado del líder (<= 3 tiles), si
-    // hay un monstruo a <= 5 tiles de ella, tirar su skill de área (Evil Spirit, 9) sin caminar hacia
-    // él. Nunca se aleja de Horaz por pelear. window.__followHelp = false lo apaga.
+    // Ayudar (usuario: "ya Melu puede ayudar un poco"; "mientras se mueve puede ir atacando"): a <= 12
+    // tiles del líder, también caminando, si hay un monstruo a <= 5 tiles de ella, tirar su skill de
+    // área (Evil Spirit, 9) sin desviarse hacia él. Nunca se aleja de Horaz por pelear. window.__followHelp = false lo apaga.
     // Recibiendo mucho daño, no pegar (usuario): con < 70% de vida, o si perdió > 15% en los últimos
     // 3 s, deja de atacar 8 s (pegar la vuelve objetivo de los monstruos).
     F.hpHist = (F.hpHist ?? []).filter((x) => now - x.t < 3000); F.hpHist.push({ t: now, hp: pd.currentHP });
     const lost = pd.maxHP ? (Math.max(...F.hpHist.map((x) => x.hp)) - pd.currentHP) / pd.maxHP : 0;
     if (pd.maxHP && (pd.currentHP / pd.maxHP < 0.7 || lost > 0.15)) { if (!F.calmUntil || now > F.calmUntil) L(`recibo daño (${Math.round(pd.currentHP / pd.maxHP * 100)}%): dejo de pegar`); F.calmUntil = now + 8000; }
-    if ((window.__followHelp ?? true) && !(F.calmUntil && now < F.calmUntil) && dl <= 3 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 400) {
+    if ((window.__followHelp ?? true) && !(F.calmUntil && now < F.calmUntil) && dl <= 12 && !w.castRequest && (pd.currentMana ?? 100) > 30 && now - (F.helpAt ?? 0) > 400) {
       const skill = [9, 17, 5].find((k) => (S.skills ?? []).some((x) => x.number === k));
       let m = null, md = 1e9;
       for (const e of w.byNetId.values()) { if (!window.__ai?.isMonster?.(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const dd = d(e.transform.pos, P); if (dd <= 5 && dd < md) { md = dd; m = e; } }
