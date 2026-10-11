@@ -363,8 +363,18 @@
       const iYield = theirs > mineR || (theirs === mineR && me > m);
       if (!iYield || q.map !== w.mapIndex || d(q, P) > 20 || ai.busy || (C.yieldAt && now - C.yieldAt < 15000)) continue;
       const lv = S.playerData.level, opts = [[26, 85, 300], [25, 84, 200], [24, 83, 100], [7, 2, 20], [6, 2, 20], [2, 0, 0]];
-      const to = opts.find(([, mp, req]) => lv >= req && mp !== q.map);
-      if (!to) continue;
+      // Solo mapas de su tramo (requisito >= 40% de su nivel): a las 3:21 Melu en 198 cedió Arena 2 y la
+      // mandó a Devias 4 (nivel 20) con ~1M/min. Sin mapa de su tramo: mismo mapa, el mejor spot medido
+      // a >= 30 tiles del otro.
+      const to = opts.find(([, mp, req]) => lv >= req && req >= lv * 0.4 && mp !== q.map);
+      if (!to) {
+        const far = (ai.campHist?.[w.mapIndex] ?? []).filter((k) => !k.seed && k.rate > 0 && d(k, q) >= 30).sort((a, b) => b.rate - a.rate)[0];
+        if (!far) continue;
+        C.yieldAt = now; C.awayUntil = now + 180000; C.inCornerSince = null;
+        ai.camp = { x: far.x, z: far.z, map: w.mapIndex, since: now, lastSeen: now, known: true }; ai.target = null; w.attackTarget = null; ai.explore = { x: far.x, z: far.z, kind: 'camp' }; ai.moveTo(pe, far);
+        L(`${m} (${theirs} resets) está acá: le dejo la zona, voy a (${far.x},${far.z}) ~${Math.round(far.rate / 1e6)}M/min`);
+        return;
+      }
       C.yieldAt = now; C.awayUntil = now + 180000; C.inCornerSince = null;
       ai.cfg.spots = [[to[0], `cedo a ${m}`, 0]]; ai.spot = to[0]; ai.lastWarp = now; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = now;
       S.warpCommandRequest(to[0]); L(`${m} (${theirs} resets) está acá: le dejo el spot, voy al warp ${to[0]}`);
