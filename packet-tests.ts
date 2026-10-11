@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, RECONNECT, buildPartyDecline, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -240,6 +240,27 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('drop: largo inesperado → null', parseItemsDropped(hex('c2000a20010001')) === null);
   ok('caja 14/11: e[0] = 0xcb con el bit alto en e[3]', JSON.stringify(decodeItem5(Uint8Array.from([0xcb, 0x00, 0x01, 0x80, 0]))) === JSON.stringify({ group: 14, num: 11, level: 0, excellent: false }));
   ok('ítem agregado de 5 bytes', parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.slot === 20 && parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.num === 11);
+}
+
+// --- Chat -------------------------------------------------------------------------------------
+{
+  const msg = (code: number, from: string, text: string) => {
+    const f = new Array(10).fill(0); [...Buffer.from(from, 'latin1')].forEach((c, i) => (f[i] = c));
+    const t = [...Buffer.from(text, 'latin1')];
+    return Uint8Array.from([0xc1, 13 + t.length, code, ...f, ...t]);
+  };
+  ok('chat: normal', JSON.stringify(parseChatMessage(msg(0, 'Yatsuky', 'hola'))) === JSON.stringify({ kind: 'normal', from: 'Yatsuky', text: 'hola' }));
+  ok('chat: susurro llega con 0x02', parseChatMessage(msg(2, 'Melu', 'vamos'))?.kind === 'whisper');
+  ok('chat: party "~" y guild "@"', parseChatMessage(msg(0, 'A', '~arena 2'))?.kind === 'party' && parseChatMessage(msg(0, 'A', '~arena 2'))?.text === 'arena 2' && parseChatMessage(msg(0, 'A', '@hola'))?.kind === 'guild');
+  ok('chat: texto con terminador 0', parseChatMessage(Uint8Array.from([...msg(0, 'A', 'ok'), 0, 0]))?.text === 'ok');
+  ok('chat: corto o de otro code → null', parseChatMessage(Uint8Array.from([0xc1, 5, 0, 1, 2])) === null && parseChatMessage(msg(3, 'A', 'x')) === null);
+  const sm = Uint8Array.from([0xc1, 9, 0x0d, 1, ...Buffer.from('Golden', 'latin1')]);
+  ok('aviso del server (0x0D)', parseServerMessage(sm)?.kind === 'server' && parseServerMessage(sm)?.text === 'Golden');
+  const pc = buildPublicChat('Horaz', 'hola');
+  ok('mandar: público C1 len 00 nombre[10] texto', pc[0] === 0xc1 && pc[1] === pc.length && pc[2] === 0 && Buffer.from(pc.subarray(3, 8)).toString() === 'Horaz' && pc[8] === 0 && Buffer.from(pc.subarray(13)).toString() === 'hola');
+  const w = buildWhisper('Melu', 'ven');
+  ok('mandar: susurro C1 len 02 destino', w[2] === 2 && Buffer.from(w.subarray(3, 7)).toString() === 'Melu' && w.length === 16);
+  ok('mandar: corta en CHAT_MAX', buildPublicChat('A', 'x'.repeat(200)).length === 13 + CHAT_MAX);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);

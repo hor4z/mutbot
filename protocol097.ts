@@ -144,3 +144,58 @@ export function parseItemAdded(raw: Uint8Array | DataView | ArrayBuffer): ItemSl
   if (b.length >= 4 + 5) return { slot: b[3], ...decodeItem5(b.subarray(4, 9)) };
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Chat. S2C ChatMessage: C1 len <tipo> <remitente[10]> <mensaje>; el tipo es el mismo byte del code:
+// 0x00 normal (público, party, guild) y 0x02 susurro (por eso el susurro llega por la ruta de 0x02).
+// ServerMessage: C1 len 0D <tipo> <mensaje> (0 dorado al centro, 1 azul, 2 aviso de guild).
+// C2S: PublicChatMessage C1 len 00 <nombre[10]> <mensaje> (party con "~", guild con "@", comandos con
+// "/"); WhisperMessage C1 len 02 <destino[10]> <mensaje>. Texto en latin1, sin terminador.
+// Party/guild se reconocen por el prefijo del mensaje: sin verificar contra el server.
+// ---------------------------------------------------------------------------
+export type ChatKind = 'normal' | 'party' | 'guild' | 'whisper' | 'server';
+export type ChatLine = { kind: ChatKind; from: string; text: string };
+
+/** Texto latin1 hasta el primer 0 (o el final). */
+function latin1(b: Uint8Array): string {
+  const end = b.indexOf(0);
+  return Buffer.from(end >= 0 ? b.subarray(0, end) : b).toString('latin1');
+}
+
+export function parseChatMessage(raw: Uint8Array | DataView | ArrayBuffer): ChatLine | null {
+  const b = u8(raw);
+  if (b[0] !== 0xc1 || b.length < 13 || (b[2] !== 0x00 && b[2] !== 0x02)) return null;
+  const from = latin1(b.subarray(3, 13));
+  const text = latin1(b.subarray(13));
+  if (b[2] === 0x02) return { kind: 'whisper', from, text };
+  if (text.startsWith('~')) return { kind: 'party', from, text: text.slice(1) };
+  if (text.startsWith('@')) return { kind: 'guild', from, text: text.replace(/^@+/, '') };
+  return { kind: 'normal', from, text };
+}
+
+export function parseServerMessage(raw: Uint8Array | DataView | ArrayBuffer): ChatLine | null {
+  const b = u8(raw);
+  if (b[0] !== 0xc1 || b[2] !== 0x0d || b.length < 5) return null;
+  return { kind: 'server', from: '', text: latin1(b.subarray(4)) };
+}
+
+/** Máximo de un mensaje de chat (el cliente corta en 60; el largo del C1 tampoco pasa de 255). */
+export const CHAT_MAX = 60;
+
+function nameField(name: string): number[] {
+  const out = new Array<number>(10).fill(0);
+  [...Buffer.from(name, 'latin1').subarray(0, 10)].forEach((c, i) => (out[i] = c));
+  return out;
+}
+
+/** Chat público (también party "~", guild "@" y comandos "/"): C1 len 00 <nombre propio[10]> <texto>. */
+export function buildPublicChat(myName: string, text: string): Uint8Array {
+  const t = [...Buffer.from(text.slice(0, CHAT_MAX), 'latin1')];
+  return Uint8Array.from([0xc1, 13 + t.length, 0x00, ...nameField(myName), ...t]);
+}
+
+/** Susurro: C1 len 02 <destino[10]> <texto>. */
+export function buildWhisper(to: string, text: string): Uint8Array {
+  const t = [...Buffer.from(text.slice(0, CHAT_MAX), 'latin1')];
+  return Uint8Array.from([0xc1, 13 + t.length, 0x02, ...nameField(to), ...t]);
+}
