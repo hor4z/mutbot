@@ -214,6 +214,21 @@ setInterval(() => {
     }).catch(() => {});
 }, 10 * 60_000);
 
+// Ranking a la base cada hora (tabla ranking): ritmo de resets de los rivales.
+async function saveRanking() {
+  const env = dbEnv();
+  if (!env.MUBOT_DB_URL) return;
+  const data = (await ranking()) as { resets?: { name: string; classNumber: number; totalResets: number; grandResets?: number; level: number }[] };
+  if (!Array.isArray(data?.resets)) return;
+  const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  const body = data.resets.slice(0, 100).map((r, i) => JSON.stringify({ ts, name: r.name, class: r.classNumber, resets: r.totalResets, grand_resets: r.grandResets ?? 0, level: r.level, pos: i + 1 })).join('\n');
+  await fetch(`${env.MUBOT_DB_URL}/?database=mubot&query=${encodeURIComponent('INSERT INTO ranking FORMAT JSONEachRow')}`, {
+    method: 'POST', body, headers: { 'X-ClickHouse-User': env.MUBOT_DB_USER ?? 'mubot', 'X-ClickHouse-Key': env.MUBOT_DB_PASSWORD ?? '' },
+  }).catch(() => {});
+}
+setTimeout(() => void saveRanking(), 30_000);
+setInterval(() => void saveRanking(), 60 * 60_000);
+
 /** MUBOT_DB_* de .env.db (ClickHouse local, ver db/docker-compose.yml); vacío si no hay archivo. */
 function dbEnv(): Record<string, string> {
   const out: Record<string, string> = {};

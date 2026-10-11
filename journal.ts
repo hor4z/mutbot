@@ -20,7 +20,7 @@ export function journal(kind: JournalKind, what: string, detail: Record<string, 
   if (DECISION_LOG_PATH) void appendFile(DECISION_LOG_PATH, JSON.stringify(entry) + '\n').catch(() => {});
   bot.statusServer?.broadcastDecision(entry);
   // A la base, solo lo que sirve para aprender: decisiones, viajes y resets (no comandos ni modos).
-  if (kind === 'decide' || kind === 'travel' || kind === 'reset') trackEvent(kind, what, 0, 0, detail);
+  if (kind === 'decide' || kind === 'travel' || kind === 'reset' || kind === 'pickup') trackEvent(kind, what, 0, 0, detail);
 }
 
 /** Una decisión con su motivo: a la consola, al log del panel y al diario (tarjeta "Decisiones"). */

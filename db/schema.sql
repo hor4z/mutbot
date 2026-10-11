@@ -42,3 +42,27 @@ CREATE TABLE IF NOT EXISTS players_seen (
 ALTER TABLE ticks MODIFY TTL toDateTime(ts) + INTERVAL 90 DAY;
 ALTER TABLE players_seen MODIFY TTL toDateTime(ts) + INTERVAL 60 DAY;
 ALTER TABLE events MODIFY TTL toDateTime(ts) + INTERVAL 365 DAY;
+
+-- Versión del bot y política activa (perillas/experimento), para la línea base desde el día 1.
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS version LowCardinality(String);
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS policy LowCardinality(String);
+ALTER TABLE events ADD COLUMN IF NOT EXISTS version LowCardinality(String);
+ALTER TABLE events ADD COLUMN IF NOT EXISTS policy LowCardinality(String);
+-- Pelea por el spot: kills en scope en los últimos 5 s (nuestras, del compañero, de rivales) y el rival
+-- que más mató; dónde está el compañero (0 = no se ve, 1 = mismo spot a <= 8, 2 = a la vista, otro spot).
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS kills_me UInt16;
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS kills_mate UInt16;
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS kills_rival UInt16;
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS top_rival String;
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS mate_spot UInt8;
+
+-- Ranking del server cada hora (lo guarda la estación): ritmo de resets de los rivales.
+CREATE TABLE IF NOT EXISTS ranking (
+  ts DateTime64(3),
+  name String,
+  class UInt8,
+  resets UInt32,
+  grand_resets UInt16,
+  level UInt16,
+  pos UInt16
+) ENGINE = MergeTree ORDER BY (name, ts) TTL toDateTime(ts) + INTERVAL 365 DAY;

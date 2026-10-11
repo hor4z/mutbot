@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { setPolicy } from './telemetry';
 
 export const KNOWLEDGE_PATH = process.env.MUBOT_KNOWLEDGE ?? join(homedir(), '.mubot', 'knowledge.json');
 
@@ -60,6 +61,8 @@ export function knowledge(now = Date.now()): Knowledge | null {
 export function partyWanted(now = Date.now()): { use: boolean; why: string } {
   const p = knowledge(now)?.party;
   const base = p?.use ?? true;
-  if (experimentSlot(now, 1)) return { use: !base, why: `experimento: pruebo ${base ? 'sin' : 'con'} party 30 min` };
+  const exp = experimentSlot(now, 1);
+  setPolicy(`party=${(exp ? !base : base) ? 'si' : 'no'}${exp ? ' (experimento)' : ''}`);
+  if (exp) return { use: !base, why: `experimento: pruebo ${base ? 'sin' : 'con'} party 30 min` };
   return { use: base, why: p ? `datos: ${p.reason}` : 'sin datos todavía: con party' };
 }

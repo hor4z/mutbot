@@ -568,6 +568,10 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   dorados, party, ciclos, decisiones/viajes/resets, y jugadores vistos fuera de la zona segura. No se
   guarda cada kill (la exp ya está en la foto) ni comandos o modos. `v_outcome` / `v_outcome_type`: el
   resultado de cada decisión (exp/min 5 min antes contra 5 después), la base para aprender qué conviene.
+- Pelea por los spots: cada tick guarda kills en scope de los últimos 5 s (nuestras, del compañero, de
+  rivales y el rival que más mató) y dónde está el compañero (`mate_spot`); `v_spot_fight` muestra qué
+  parte del sector es nuestra, solos/juntos/separados. Versión (commit) y política (perillas) en cada fila.
+  La estación guarda el ranking cada hora (`ranking`, `v_rival_pace`: ritmo de resets de los rivales).
 - `bun run aprender` (la estación lo corre cada 30 min) muestra las vistas (`v_party`, `v_exp_spot`,
   `v_skill`, `v_killers`, `v_rivals`, `v_cycles`, `v_golden`) y escribe `~/.mubot/knowledge.json`.
 - `knowledge.ts`: perillas que el bot ajusta solo con lo aprendido (lista cerrada). Hoy: party sí/no en
