@@ -26,6 +26,7 @@ import { drops } from './loot';
 import { EventBus } from './net/eventBus';
 import { PARTY_MATES } from './config';
 import { parsePositionFix } from './protocol097';
+import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
@@ -299,6 +300,8 @@ export function trackWorld() {
     const f = parsePositionFix(toBytes(raw));
     if (!f) return;
     if (f.id === (bot.playerId & 0x7fff)) {
+      // El tile que creíamos alcanzado no se puede pisar: queda bloqueado para los caminos.
+      if (world.x !== f.x || world.y !== f.y) learnBlocked(world.map, world.x, world.y);
       if ((world.x !== f.x || world.y !== f.y) && Date.now() - lastFixLog > 10_000) {
         lastFixLog = Date.now();
         log(`Posición corregida por el server: (${world.x},${world.y}) → (${f.x},${f.y}).`);
