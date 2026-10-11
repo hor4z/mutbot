@@ -3,6 +3,7 @@
  * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
+import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
@@ -40,6 +41,8 @@ const REPORT_EVERY_MS = 5 * 60_000;
 const HUNT_NORMAL_RANGE = 3;
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
 const EARLY_STARVE_MS = 60_000;
+// Ningún monstruo a la vista durante esto = el server dejó de mandar el scope: reconectar.
+const BLIND_RECONNECT_MS = 3 * 60_000;
 
 // Totales de todas las sesiones (el loop corre una vez por conexión).
 export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
@@ -194,6 +197,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // Esquina de Arena 2 (corner-step.ts).
   const corner = newCornerState();
   let altMeasuredAt = 0;
+  let lastAnyNpcAt = Date.now();
   let devCrowdSince: number | null = null;
   const early = new EarlyPlanner();
   // Regla fuerte de dorados (golden.ts) y los ya avisados.
@@ -216,6 +220,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked) {
     refreshAttackable();
+    // Ciego: el server a veces deja de mandar el scope de monstruos (Horaz y Melu en Lorencia: 0
+    // monstruos, 0 muertes, solo jugadores y paquetes 0x11). Reconectar lo arregla: con NINGÚN
+    // monstruo a la vista (ni en zona segura) durante BLIND_RECONNECT_MS, se corta y se vuelve a entrar.
+    if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
+    else if (Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
+      panelLog(`Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto (el server dejó de mandar el scope).`);
+      journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
+      bot.kicked = true;
+      closeSockets();
+      break;
+    }
     // Señales de dorados a la estación (nuevos, movidos, idos): los ve aunque estén en zona segura.
     for (const { payload } of goldReporter.update(world.map, [...world.npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) })), Date.now())) publishGold(payload);
     ticks++;
