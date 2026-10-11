@@ -85,10 +85,13 @@
     }
     if (S.playerData.level < C.minLevel) { if (!ai.cfg.spots.some((x) => x[0] === 1)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
     // Esquina llena: con 3 o más jugadores cerca y el último minuto rindiendo menos que el mejor spot
-    // de Arena 3/4 (~116M/min), irse ahí 3 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
+    // de Arena 3/4, irse ahí 5 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
     // Nancho y Pachegas encima, Horaz sacaba 16M/min (usuario: "estamos molestando bastante").
     const nowA = Date.now();
     if (C.awayUntil && nowA < C.awayUntil) return;
+    // Cerca del reset no vale la pena volver: el camino a la esquina lleva ~1 min (a las 1:25 dejó
+    // Arena 4 en nivel 385 para encontrarla llena otra vez).
+    if (C.awayUntil && nowA >= C.awayUntil && S.playerData.level >= 360) C.awayUntil = nowA + 60000;
     if (C.awayUntil && nowA >= C.awayUntil) { C.awayUntil = 0; L('vuelvo a mirar la esquina'); }
     if (w.mapIndex === C.map && d(pe.transform.pos, C.home) <= C.radius + 3) {
       const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && d(e.transform.pos, C.home) <= 15).length;
@@ -97,7 +100,7 @@
       const alt = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24; // 24: Arena 2 fuera de la esquina
       const altRate = Math.max(ai.spotScore?.[alt] ?? 0, 60e6);
       if (rivals >= 3 && nowA - C.inCornerSince > 60000 && rate < altRate * 0.8) {
-        C.awayUntil = nowA + 180000; C.inCornerSince = null;
+        C.awayUntil = nowA + 300000; C.inCornerSince = null;
         ai.cfg.spots = C.ROUTE.filter((x) => x[0] === alt); ai.spot = alt; ai.lastWarp = nowA; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = nowA;
         S.warpCommandRequest(alt); L(`esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M en el último min): ${['Arena 2 (otro spot)', 'Arena 3', 'Arena 4'][alt - 24]} por 3 min`);
         return;
