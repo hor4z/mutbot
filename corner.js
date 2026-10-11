@@ -115,12 +115,41 @@
       if (ai.target && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
       if (!ai.target && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
     }
+    // Devias (nivel 20-100): el spot lleno pegado a la llegada de Devias 4 (usuario: "tenés un spot
+    // pegado lleno", "spot de arriba"). Campamento = centro del grupo más grande a la vista a <= 15
+    // tiles de la llegada; no salir de ahí persiguiendo Yetis sueltos (se iba hacia el este).
+    if (w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.arrival?.map === 2 && !C.planB) {
+      const A = ai.arrival, mons = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, A) <= 15);
+      let best = null, bn = 0;
+      for (const e of mons) { const n = mons.filter((o) => d(o.transform.pos, e.transform.pos) <= 4).length; if (n > bn) { bn = n; best = e.transform.pos; } }
+      if (best && bn >= 3 && (!ai.camp || ai.camp.map !== 2 || d(ai.camp, best) > 4 || d(ai.camp, A) > 15)) {
+        ai.camp = { x: Math.round(best.x), z: Math.round(best.z), map: 2, since: Date.now(), lastSeen: Date.now(), known: true };
+        if (!ai.target) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
+      }
+      if (ai.target && ai.camp && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
+      if (!ai.target && ai.camp && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
+    }
+    // Devias 4 lleno (3+ jugadores ajenos a <= 8 del campamento por 20 s): irse. 2026-10-11 2:08:
+    // Tyuy, ZackFair, Lucy y Yatsuky en el spot de la llegada y Horaz sacaba 4M/min. Plan B: Arena 1
+    // desde el 50 (warp 1); antes del 50, Devias 3. Se queda ahí hasta el 100 / 50.
+    if (w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2 && !C.planB) {
+      const mine = new Set([S.playerData.name, ...(window.__partyAllow ?? []), window.__followMate].filter(Boolean));
+      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && !mine.has(e.objectNameInWorld) && d(e.transform.pos, ai.camp) <= 8).length;
+      if (crowd >= 3) C.devCrowdSince ??= Date.now(); else C.devCrowdSince = null;
+      if (C.devCrowdSince && Date.now() - C.devCrowdSince > 20000) {
+        C.devCrowdSince = null; const lv = S.playerData.level, alt = lv >= 50 ? [1, 'Arena', 50] : [6, 'Devias 3', 20];
+        ai.cfg.spots = [C.ROUTE[0], alt]; C.planB = { until: lv >= 50 ? C.minLevel : 50 };
+        ai.spot = alt[0]; ai.lastWarp = Date.now(); ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = Date.now();
+        S.warpCommandRequest(alt[0]); L(`Devias 4 lleno (${crowd} jugadores): ${alt[1]}`); return;
+      }
+    }
+    if (C.planB && S.playerData.level >= C.planB.until) C.planB = null;
     // Hasta 100: Lorencia y solo Devias 4 (Arena 1 perdía tiempo; Devias 3/2 y el plan B de Arena los
     // usaba la regla de "hambre" del agente para irse a los segundos de llegar: "se fue para abajo").
     // Ojo: asignar la ruta SOLO si cambió. Una versión vieja la reasignaba cada 0,7 s y borraba el
     // campamento y el último warp en cada vuelta: en Devias cambiaba de campamento sin parar.
     if (ai.cfg.crowdFallback?.length) { C.savedFallback = ai.cfg.crowdFallback; ai.cfg.crowdFallback = []; }
-    if (S.playerData.level < C.minLevel) { if (JSON.stringify(ai.cfg.spots) !== JSON.stringify(C.ROUTE)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
+    if (S.playerData.level < C.minLevel) { if (!C.planB && JSON.stringify(ai.cfg.spots) !== JSON.stringify(C.ROUTE)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
     // Esquina llena: con 3 o más jugadores cerca y el último minuto rindiendo menos que el mejor spot
     // de Arena 3/4, irse ahí 5 min y volver a mirar. 2026-10-11: con LeanLive, Yatsuky,
     // Nancho y Pachegas encima, Horaz sacaba 16M/min (usuario: "estamos molestando bastante").
