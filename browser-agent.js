@@ -29,7 +29,7 @@
   for (const id of window.__mubotTimers ?? []) clearInterval(id);
   window.__mubotTimers = [];
   const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); window.__mubotTimers.push(id); return id; };
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch', 'eventTimer', 'atlasTimer']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch', 'eventTimer', 'atlasTimer', 'rivalTimer']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -859,6 +859,13 @@
   try { ai.cycleLog = old?.cycleLog ?? JSON.parse(localStorage.getItem(CYC_KEY) || '[]'); } catch { ai.cycleLog = []; }
   ai.cur = old?.cur ?? { start: ai.cycleStart ?? Date.now(), marks: {} };
   const MARKS = [20, 50, 100, 200, 300, 350, 400];
+  // Competencia por mapa en cada ciclo (usuario: "no creo, hay más rivales"): promedio de jugadores a
+  // <= 15 tiles, por mapa, para separar "el algoritmo empeoró" de "hay más gente". cycleLog[].rivals.
+  ai.rivalTimer = setInterval(() => {
+    const w = W(), pe = w?.playerEntity; if (!pe || !ai.cur || S.uiState !== 5) return;
+    const P = pe.transform.pos, n = rivalsPos(w).filter((q) => dist(q, P) <= 15).length;
+    const r = ((ai.cur.rivals ??= {})[w.mapIndex] ??= { sum: 0, n: 0 }); r.sum += n; r.n++;
+  }, 5000);
   ai.segTimer = setInterval(() => {
     const lvl = S.playerData?.level ?? 0;
     if (ai.cycleStart && ai.cur.start !== ai.cycleStart) {
@@ -896,7 +903,7 @@
     }
     if (changed) try { localStorage.setItem(EV_KEY, JSON.stringify(ai.events)); } catch {}
   }, 30000);
-  ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks, ...(c.tag ? { tag: c.tag } : {}) }));
+  ai.cycleReport = () => ai.cycleLog.slice(-10).map((c) => ({ min: c.min, perDay: c.min ? Math.round(1440 / c.min) : null, marks: c.marks, rivals: c.rivals ? Object.fromEntries(Object.entries(c.rivals).map(([m, r]) => [m, +(r.sum / r.n).toFixed(1)])) : null, ...(c.tag ? { tag: c.tag } : {}) }));
   ai.soloCycles = () => ai.cycleLog.filter((c) => !c.tag);
   ai.markVisited = setInterval(() => { const pe = W()?.playerEntity; if (!pe) return; const v = (ai.visited[W().mapIndex] ??= {}); const k = cell(pe.transform.pos); v[k] = (v[k] ?? 0) + 1; }, 2000);
   return 'agente instalado';
