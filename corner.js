@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -48,7 +48,28 @@
       // Camino a la esquina: derecho, sin pelear lo que hay en el camino (zigzagueaba con los Elite
       // Skeleton de (50,80) y tardaba minutos). Solo lo que bloquea el paso (<= 1,5 tiles).
       if (d(P, C.home) > C.radius + 3) return mons.find((e) => d(e.transform.pos, P) <= 1.5) ?? null;
-      const local = mons.filter((e) => d(e.transform.pos, C.home) <= C.radius);
+      // Dos lados (medido 2026-10-11): oeste (1-4, 9-11) y este (11-13, 10-12), a ~10 tiles. Elegir
+      // todo el campo hacía ir y venir de un lado al otro. Regla del usuario: "si el enemigo ataca un
+      // lado, nosotros el otro; si cambia, cambiamos". Lado = el que no tiene jugadores a <= 5; si los
+      // dos están igual, quedarse en el actual salvo que el otro tenga el doble de monstruos (+2).
+      const side = (() => {
+        // Posición: esquina (2,10), medio (7,11) o este (12,11). Usuario: "si conviene, foco en la
+        // esquina; si no, en el spot del medio; adaptate". Se queda >= 20 s en cada una y después
+        // elige la de mayor exp/min medida (EMA; la que no probó, optimista para probarla), dividida
+        // por (1 + 0,5 × jugadores a <= 4 tiles de ese punto).
+        const now = Date.now(), cur = C.sides.find((x) => x.name === C.side) ?? C.sides[0];
+        if (now - C.sideAt < 20000) return cur;
+        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity);
+        const known = Object.values(C.sideStats).map((x) => x.rate).filter((x) => x > 0);
+        const best = known.length ? Math.max(...known) : 1;
+        const score = (sd) => { const st = C.sideStats[sd.name]; const r = st?.rate > 0 ? st.rate : best * 1.1; return r / (1 + 0.5 * others.filter((e) => d(e.transform.pos, sd) <= 4).length); };
+        let pick = cur; for (const sd of C.sides) if (score(sd) > score(pick) * 1.15) pick = sd;
+        C.sideAt = now;
+        if (pick !== cur) { C.side = pick.name; C.sideLog.push(`${new Date().toLocaleTimeString()} → ${pick.name} (${C.sides.map((sd) => `${sd.name} ${Math.round(score(sd) / 1e6)}M`).join(', ')})`); if (C.sideLog.length > 50) C.sideLog.shift(); }
+        return pick;
+      })();
+      const sideMons = mons.filter((e) => d(e.transform.pos, side) <= C.sideR);
+      const local = sideMons.length ? sideMons : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius && d(e.transform.pos, P) <= 4);
       const pool = local.length ? local : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius + C.fill);
       let best = null, bs = -1e9;
       for (const e of pool) {
@@ -159,10 +180,14 @@
         return { ...at, next, rivals, score: Math.max(next, -5000) + rivals * 15000 + d(P, at) * 300 };
       }).sort((a, b) => a.score - b.score);
       C.foci = foci.map((f) => ({ x: f.x, z: f.z, nextS: Math.round(f.next / 1000), rivals: f.rivals }));
-      const c = foci[0] ? { x: foci[0].x, z: foci[0].z } : C.home;
+      const sd = C.sides.find((x) => x.name === C.side); const c = sd ? { x: sd.x, z: sd.z } : foci[0] ? { x: foci[0].x, z: foci[0].z } : C.home;
       if (d(P, c) > 0.8 && (ai.explore?.x !== c.x || ai.explore?.z !== c.z)) { ai.explore = { ...c, kind: 'camp-espera' }; ai.arrivedAt = 0; ai.moveTo(pe, c); }
       ai.arrivedAt = 0; // sin "me fui por aburrido": acá se espera la reaparición
     }
+    // Exp por posición (para elegir esquina / medio / este): la exp de este tick se le anota a la
+    // posición elegida si Horaz está a <= 4 tiles de ella.
+    { const sd = C.sides.find((x) => x.name === C.side); const exp = ai.expLog.filter((x) => x.t > (C.statAt ?? now)).reduce((a, x) => a + x.added, 0); const dt = now - (C.statAt ?? now); C.statAt = now;
+      if (sd && dt > 0 && d(P, sd) <= 4) { const st = (C.sideStats[sd.name] ??= { exp: 0, ms: 0, rate: 0 }); st.exp += exp; st.ms += dt; if (st.ms >= 15000) { const r = st.exp / st.ms * 60000; st.rate = st.rate ? st.rate * 0.6 + r * 0.4 : r; st.exp = 0; st.ms = 0; } } }
     // Swell Life en la esquina.
     if (d(P, C.home) <= C.radius + 3 && now - C.swellAt > 55000 && !w.castRequest && (S.skills ?? []).some((k) => k.number === 48)) {
       // El agente vuelve a elegir su skill cada 400 ms: se le cambia el suyo un instante para que no
