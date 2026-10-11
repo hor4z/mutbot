@@ -15,6 +15,8 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
 - **Una sola sesión por cuenta:** no correr `bun run bot` con la misma cuenta que está abierta en el navegador.
 - **`hunter.js` se carga pero con `auto` apagado**: la caza se practica supervisada (`__hunt.start()`)
   hasta que el usuario la dé por pulida y pida meterla en la rutina. **`duo.js` no**: en pausa.
+- **`defense.js`** (defensa propia): solo contesta a un jugador que le pegó en los últimos 10 s, con el
+  skill más fuerte (DK: Death Stab); con vida < 35% se va a otro mapa de la ruta. Nunca ataca primero.
 - **Ritmo humano:** no tocar animaciones, cooldowns ni velocidad de packets.
 
 ## Pasos
@@ -31,10 +33,10 @@ con el agente del navegador. No es el bot sin navegador (`headless-bot.ts`), sal
      personaje si ya está cargado; si no, cargarlo igual: lo hace él).
    - Sin `__store` o en login: pedirle al usuario que entre (no tipear credenciales).
 
-3. **Cargar el agente** (orden: bg-timers → agente → autoajuste → cazador). En la pestaña:
+3. **Cargar el agente** (orden: bg-timers → agente → autoajuste → cazador → defensa). En la pestaña:
    ```js
    window.__mubotOut = 'pending';
-   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
+   (async () => { for (const f of ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js']) { const t = await (await fetch('http://127.0.0.1:8788/' + f + '?' + Date.now())).text(); (0, eval)(t); } window.__mubotOut = 'ok'; })().catch((e) => window.__mubotOut = 'ERR ' + e.message);
    ```
    `javascript_tool` no espera promesas: leer `window.__mubotOut` en la llamada siguiente.
    - Si `__ai.busy` es true (reseteando/repartiendo), esperar a que termine antes de recargar.

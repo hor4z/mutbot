@@ -15,7 +15,7 @@
 // desde la selección de personaje.
 (() => {
   const BASE = 'http://127.0.0.1:8788/';
-  const FILES = ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js'];
+  const FILES = ['bg-timers.js', 'browser-agent.js', 'tuner.js', 'hunter.js', 'defense.js'];
   let loaded = false;
   const tryLoad = async () => {
     if (loaded || !window.__store || !window.__eventBus) return;
