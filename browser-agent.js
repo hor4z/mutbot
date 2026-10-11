@@ -642,7 +642,7 @@
     // Baúl: con menos de vaultMinFree libres (o < vaultAfterResetFree recién reseteado, que ya está en
     // Lorencia), como mucho cada 3 min. No en medio de una cacería.
     if (!window.__hunt?.on && Date.now() - (ai.lastVault ?? 0) > 180000 && (freeSlots() < ai.cfg.vaultMinFree || (pd.level < 15 && W().mapIndex === 0 && freeSlots() < ai.cfg.vaultAfterResetFree))) { ai.lastVault = Date.now(); return ai.depositToVault(`${freeSlots()} lugares libres`); }
-    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0) && !(window.__corner?.dragon?.() || Date.now() < (window.__corner?.dragonUntil ?? 0) || ai.looting)) return ai.doReset(); // el reset espera al dorado y sus cajas
+    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0) && !(window.__hunt?.auto && [47, 48, 49, 50, 51].includes(new Date().getMinutes())) && !(window.__corner?.dragon?.() || Date.now() < (window.__corner?.dragonUntil ?? 0) || ai.looting)) return ai.doReset(); // el reset espera al dorado y sus cajas
     // Prueba del nivel mínimo de reset: 300 y, si lo rechaza, 350. Una vez por nivel, para siempre.
     // Si lo acepta, desde ahí resetea a ese nivel (lo que se mide son resets por día).
     if (ai.resetMin.accepted != null && ai.resetMin.accepted < ai.cfg.resetLevel) ai.cfg.resetLevel = ai.resetMin.accepted;
