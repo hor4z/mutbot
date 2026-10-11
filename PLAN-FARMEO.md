@@ -290,6 +290,19 @@ entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda p
   historial del tuner.
 - El reset exige nivel 400 (lo contestó el server). La mejora sale solo de llegar antes a 400.
 
+## Rutina con invasión y baúl (2026-10-10, objetivo del usuario)
+
+- **Rutina normal de Horaz** (farmeo → reset), y en **cada invasión dorada** práctica de búsqueda para
+  juntar referencias (`mubot-gold:<pj>`, `mubot-hunts:<pj>`), aunque no mejore los tiempos. El ciclo con
+  cacería queda marcado (`tag`) y no cuenta para la medición.
+- **Horaz** (`hunter.js`, `__hunt.auto` guardado en `mubot-hunt-auto:<pj>`): mitad este del mapa y va a
+  lo que avise Melu. **Melu** (bot sin navegador, `--scout --scout-sector 1 --scout-sectors 2`): espera en
+  Lorencia, busca en la mitad oeste sin pelear y avisa por `POST /gold` (servidor local 8788).
+- **Con 5 o menos dorados vivos en el mapa no se busca** (ni se arranca ni se sigue).
+- **Baúl:** con menos de 8 lugares libres (o < 16 recién reseteado, ya en Lorencia), Horaz va a Baz
+  (Storage Guard, NPC 240, Lorencia 147,145) y guarda Box of Luck y joyas (1x1). Probado: 16 ítems
+  guardados. Respeta los ítems grandes del baúl (tamaños de data/items.json); nunca escribe la clave.
+
 ## Roadmap del personaje: caza de la invasión dorada
 
 En práctica supervisada (2026-10-10). `hunter.js` se carga con `auto` apagado y se arranca a mano.
