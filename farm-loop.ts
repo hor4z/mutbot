@@ -20,7 +20,7 @@ import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
 import { SelfReport } from './farming';
-import { journal, panelLog } from './journal';
+import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
 import { lootState, drops, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards } from './loop-ctx';
@@ -70,7 +70,7 @@ function hookAggro() {
       if (id == null) return;
       const now = Date.now();
       if (world.players.has(id)) {
-        if (defense.hit(id, now)) panelLog(`Defensa: un jugador (id ${id}) me pega: le contesto.`);
+        if (defense.hit(id, now)) decide(`Defensa: un jugador (id ${id}) me pega: le contesto.`);
       } else if (world.npcs.has(id)) aggroTarget?.set(id, now);
     });
   }
@@ -225,7 +225,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // monstruo a la vista (ni en zona segura) durante BLIND_RECONNECT_MS, se corta y se vuelve a entrar.
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
     else if (Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
-      panelLog(`Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto (el server dejó de mandar el scope).`);
+      decide(`Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto (el server dejó de mandar el scope).`);
       journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
       bot.kicked = true;
       closeSockets();
@@ -335,7 +335,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
         if (world.map !== 0 && nowD - lastFleeAt > 30_000 && defense.shouldFlee(hpPct, world.map, nowD)) {
           lastFleeAt = nowD;
-          panelLog(`Defensa: vida ${Math.round(hpPct * 100)} % peleando con un jugador: me voy a Lorencia y evito este mapa ${DEFENSE.avoidMapMs / 60_000} min.`);
+          decide(`Defensa: vida ${Math.round(hpPct * 100)} % peleando con un jugador: me voy a Lorencia y evito este mapa ${DEFENSE.avoidMapMs / 60_000} min.`);
           if (world.map === CORNER.map) corner.awayUntil = nowD + DEFENSE.avoidMapMs;
           ctx.target = null;
           journal('travel', 'huyo de un jugador: warp a Lorencia', { warp: 2, reason: 'defense' });
@@ -368,7 +368,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (gold && ctx.target !== gold.id) {
       if (!goldAnnounced.has(gold.id)) {
         goldAnnounced.add(gold.id);
-        panelLog(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
+        decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
       }
       ctx.target = gold.id;
       targetType = gold.type;
@@ -384,7 +384,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         lastAutoHuntKey = invasionKey(bot.invasion!);
         bot.hunting = { hunt: ch.hunt, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
         ctx.target = null;
-        panelLog(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}: salgo a cazar (corto con ${AUTO_HUNT.stopAlive} o menos).`);
+        decide(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}: salgo a cazar (corto con ${AUTO_HUNT.stopAlive} o menos).`);
         journal('travel', `cazador automático: ${ch.hunt.name}`, { map: ch.hunt.map, alive: ch.alive, reason: 'auto-hunt' });
         continue;
       }
@@ -447,7 +447,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (devCrowd) devCrowdSince ??= now0;
     else devCrowdSince = null;
     const devCrowded = devCrowdSince != null && now0 - devCrowdSince > 20_000;
-    if (devCrowded) log(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de spot.`);
+    if (devCrowded) decide(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de entrada.`);
     // En el arranque solo cuenta Devias lleno (el navegador tenía el hambre apagado debajo del 100), con
     // una red: 60 s en el mapa sin NADA de exp (17 jugadores en Devias 4 a las 13 h: 99 skills y 0
     // kills; otra vez, Devias 4 vacío sin un monstruo a la vista) → otra entrada o Arena 1 desde el 50.
@@ -455,7 +455,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const earlyStarving = inEarly && world.map === 2 && now0 - bot.lastArrivalAt > EARLY_STARVE_MS && expLog.perMin(now0, EARLY_STARVE_MS) === 0;
     if (earlyStarving && now0 - starvingLogged > 15_000) {
       starvingLogged = now0;
-      log(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
+      decide(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
     }
     // Sin exp: con jugadores cerca cuenta como lleno (desde el 50 → Arena 1); sin nadie, como mapa
     // vacío (otra entrada de Devias).

@@ -5,11 +5,11 @@
  * está llena (3+ jugadores en el campamento 20 s) o si pasan 60 s en el mapa sin nada de exp (con
  * jugadores cerca cuenta como llena, sin nadie como mapa vacío).
  */
+import { decide } from './journal';
 import { CORNER, type Pos } from './corner';
 import { EARLY, deviasCamp, dist, lorenciaPlan } from './early';
 import { bot, world, type ScopedNpc } from './state';
 import { isWalkable } from './terrain';
-import { log } from './util';
 
 // Entradas de Devias de la ruta (Devias 4, 3, 2): el arranque manda ahí; en Arena 1 (plan B), no.
 const DEVIAS_WARPS = [7, 6, 5];
@@ -70,7 +70,7 @@ export class EarlyPlanner {
       this.lorPlan = null;
       if (world.map === EARLY.lorencia.map) {
         this.lorPlan = lorenciaPlan(Math.random, (q) => isWalkable(0, q.x, q.y));
-        log(`Arranque: salida de Lorencia ${this.lorPlan.via ? `por (${this.lorPlan.via.x},${this.lorPlan.via.y})` : 'directa'} al Lich (${this.lorPlan.camp.x},${this.lorPlan.camp.y}).`);
+        decide(`Arranque: salida de Lorencia ${this.lorPlan.via ? `por (${this.lorPlan.via.x},${this.lorPlan.via.y})` : 'directa'} al Lich (${this.lorPlan.camp.x},${this.lorPlan.camp.y}).`);
       }
     }
     if (world.map === EARLY.lorencia.map && this.lorPlan) {
@@ -81,12 +81,12 @@ export class EarlyPlanner {
       if (this.lichEmptySince != null && now - this.lichEmptySince > LICH_EMPTY_MS) {
         this.lichOffFor = bot.lastArrivalAt;
         this.lichEmptySince = null;
-        log(`Arranque: el Lich está vacío hace ${LICH_EMPTY_MS / 1000} s: busco monstruos por Lorencia.`);
+        decide(`Arranque: el Lich está vacío hace ${LICH_EMPTY_MS / 1000} s: busco monstruos por Lorencia.`);
       }
       return { camp: this.lorPlan.camp, goal: this.lorPlan.via ?? this.lorPlan.camp };
     }
     const r = deviasCamp({ arrival: this.arrival ?? me, monsters: [...npcs], prev: this.camp, poorSince: this.poorSince, now });
-    if (r.why && (!this.camp || r.camp.x !== this.camp.x || r.camp.y !== this.camp.y)) log(`Arranque: campamento (${r.camp.x},${r.camp.y}): ${r.why}.`);
+    if (r.why && (!this.camp || r.camp.x !== this.camp.x || r.camp.y !== this.camp.y)) decide(`Arranque: campamento (${r.camp.x},${r.camp.y}): ${r.why}.`);
     this.camp = r.camp;
     this.poorSince = r.poorSince;
     return { camp: r.camp, goal: r.camp };
