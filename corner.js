@@ -12,7 +12,8 @@
 //    sin pelear salvo lo que bloquea el paso. Directo, el cliente cortaba por el medio de los Elite
 //    Skeleton y zigzagueaba.
 //  - Esquina vacía: esperar en el centro de las últimas apariciones (pega primero cuando reaparecen);
-//    pelear solo lo que esté a <= 8 tiles de la esquina, para no alejarse.
+//    pelear solo dentro de 7 (+2) tiles de la esquina: persiguiendo Deathvim Knights hasta (22,9) perdía
+//    los Drakan que reaparecían (usuario: "al moverte tan lejos pierdes").
 //  - Swell Life (48) cada ~55 s mientras está en la esquina: más vida contra 12-18 Drakan.
 //  - Anota cada aparición en la esquina (posición y hora) en `__corner.spawns`, para pararse donde
 //    reaparecen y medir cada cuánto (`__corner.report()`).
@@ -20,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, radius: 12, spinR: 2.5, fill: 8, swellAt: 0,
+  const C = (window.__corner = { on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, radius: 7, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -70,8 +71,12 @@
     if (d(P, C.home) > C.radius + 3) {
       // Por los puntos de la ruta: el siguiente al más cercano (o el más cercano si todavía no llegó).
       if (!ai.target) {
-        let i = 0, bd = 1e9; C.route.forEach(([x, z], k) => { const dd = d(P, { x, z }); if (dd < bd) { bd = dd; i = k; } });
-        if (bd < 5 && i < C.route.length - 1) i++;
+        // Índice que solo avanza (antes elegía "el más cercano" y oscilaba entre los dos primeros
+        // puntos). Se recalcula al aparecer de nuevo en el mapa (warp o muerte): el más cercano.
+        if (C.routeIdx == null || now - (C.routeAt ?? 0) > 20000) { let bd = 1e9; C.route.forEach(([x, z], k) => { const dd = d(P, { x, z }); if (dd < bd) { bd = dd; C.routeIdx = k; } }); }
+        C.routeAt = now;
+        if (d(P, { x: C.route[C.routeIdx][0], z: C.route[C.routeIdx][1] }) < 4 && C.routeIdx < C.route.length - 1) C.routeIdx++;
+        const i = C.routeIdx;
         const [x, z] = C.route[i];
         if (ai.explore?.x !== x || ai.explore?.z !== z || pe.playerMoveTo.handled) { ai.explore = { x, z, kind: 'camp-ruta' }; ai.arrivedAt = 0; ai.moveTo(pe, { x, z }); }
       }
