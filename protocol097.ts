@@ -70,3 +70,12 @@ export class Backoff {
     return alreadyConnected ? Math.max(ms, this.p.ALREADY_CONNECTED_MS) : ms;
   }
 }
+
+// 0x15 S2C: en el XML (season 6) es ObjectMoved, C1 de 8 bytes (id, x, y). Este server 0.97d manda con
+// el MISMO código el daño de un golpe (ObjectHit, C1 de 10 bytes: id, daño u16 BE, tipo). Leerlo como
+// movimiento ponía al monstruo golpeado en (daño >> 8, daño & 255): Horaz quedaba tirando skills a un
+// lugar vacío sin matar nada (2026-10-11). Solo es movimiento si mide 8.
+export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): boolean {
+  const b = u8(raw);
+  return b.length === 8 && b[0] === 0xc1 && b[2] === 0x15;
+}

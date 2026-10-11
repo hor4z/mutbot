@@ -40,9 +40,9 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'horaz', char: 
 {
   ok('rutina: farm', JSON.stringify(routineCommands({ kind: 'farm' })) === '[{"cmd":"farm"}]');
   ok('rutina: spot = warp fijo', JSON.stringify(routineCommands({ kind: 'spot', warp: 26 })) === '[{"cmd":"warp","warp":26}]');
-  ok('rutina: atlas corta lo anterior con farm', JSON.stringify(routineCommands({ kind: 'atlas' })) === '[{"cmd":"farm"},{"cmd":"atlas"}]');
+  ok('rutina: atlas ya no existe', !isRoutine({ kind: 'atlas' }));
   ok('rutina: todas las órdenes pasan isPanelCommand',
-    [{ kind: 'farm' }, { kind: 'spot', warp: 7 }, { kind: 'atlas' }, { kind: 'pause' }].every((r) => routineCommands(r as never).every(isPanelCommand)));
+    [{ kind: 'farm' }, { kind: 'spot', warp: 7 }, { kind: 'pause' }].every((r) => routineCommands(r as never).every(isPanelCommand)));
   ok('rutina: validación', isRoutine({ kind: 'farm' }) && isRoutine({ kind: 'spot', warp: 24 }) && !isRoutine({ kind: 'spot' })
     && !isRoutine({ kind: 'spot', warp: 300 }) && !isRoutine({ kind: 'farm', x: 1 }) && !isRoutine({ kind: 'hunt' }) && !isRoutine('farm'));
 }

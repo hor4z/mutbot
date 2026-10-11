@@ -73,7 +73,6 @@
     ['farm', 'Farmear (ruta normal)'],
     ['spot:24', 'Farmear fijo en Arena 2'], ['spot:25', 'Farmear fijo en Arena 3'], ['spot:26', 'Farmear fijo en Arena 4'],
     ['spot:7', 'Farmear fijo en Devias 4'], ['spot:6', 'Farmear fijo en Devias 3'], ['spot:2', 'Farmear fijo en Lorencia'],
-    ['atlas', 'Explorar mapas (atlas, sin pelear)'],
     ['pause', 'En pausa'],
   ];
   const toRoutine = (v) => v.startsWith('spot:') ? { kind: 'spot', warp: +v.slice(5) } : { kind: v };

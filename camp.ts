@@ -80,7 +80,10 @@ export const CAMP = {
   // 2M exp/min con un jugador a 1 tile y no se movía.
   HUNGER_WINDOW_MS: 45_000,
   HUNGER_FRAC: 0.25,
-  HUNGER_DEFAULT_RATE: 5e6,   // sin referencia del tramo todavía
+  // Sin referencia del tramo todavía: hambre solo si no ganó NADA. Con un piso fijo (5M/min) Horaz,
+  // recién reseteado en Devias (0,5-2,5M/min), se creía con hambre a los 45 s y saltaba de spot antes
+  // del minuto que hace falta para aprender la referencia: Devias 3 → 4 → 2 sin parar (2026-10-11).
+  HUNGER_DEFAULT_RATE: 1,
   HUNGER_RIVAL_DIST: 12,
   HUNGER_SKIP_AFTER_WARP_MS: 60_000, // la referencia no aprende del primer minuto tras un warp
   HUNGER_MIN_AFTER_WARP_MS: 45_000,

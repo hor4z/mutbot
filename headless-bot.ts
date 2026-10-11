@@ -79,7 +79,7 @@ import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
 import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
 import { isSafeZone } from './terrain';
-import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
+import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, isObjectMovedPacket, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
@@ -761,6 +761,7 @@ function trackWorld() {
   // verificarlo. Conservador: solo actualiza NPCs ya trackeados, nunca al
   // jugador, hasta confirmar el campo/formato con más cuidado.
   EventBus.on('ObjectMoved', (raw: any) => {
+    if (!isObjectMovedPacket(toBytes(raw))) return; // 0.97d: con 10 bytes es el daño de un golpe
     const p = new ObjectMovedPacket(raw);
     const id = p.ObjectId & 0x7fff;
     if (id === playerId) return;
@@ -1169,6 +1170,7 @@ async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promi
 // ---------------------------------------------------------------------------
 const WALK_PACE_MS = 380;
 const ATTACK_PACE_MS = 500;
+const TARGET_NO_KILL_MS = 15_000;
 const SKILL_PACE_MS = 900;
 // El cliente web tiene cooldown de chat; 2.5s entre comandos queda cómodo.
 const CHAT_PACE_MS = 2500;
@@ -2104,51 +2106,11 @@ async function doResetSteps(): Promise<boolean> {
 // estado que se manda cada 1 s. Todo sale de lo que el bot ya trackea de los
 // packets: funciona igual sin navegador.
 // ---------------------------------------------------------------------------
-// Buscador (--scout): el bot espera en Lorencia en pausa y sale a buscar dorados
-// (sin pelear nunca) cuando un 0xFD dice que hay invasión. En toda la corrida no farmea.
-const SCOUT_ONLY = args.has('--scout');
-const SCOUT_SECTORS = Math.min(Math.max(parseInt(args.get('--scout-sectors') ?? '2') || 2, 1), 16);
-const SCOUT_SECTOR = Math.min(Math.max(parseInt(args.get('--scout-sector') ?? '1') || 1, 1), SCOUT_SECTORS);
-// Explorador (--atlas, orden `atlas`): recorre mapas enteros sin pelear y anota qué
-// aparece dónde (atlas.ts, ~/.mubot/atlas.json). Con --atlas en toda la corrida no farmea.
-const ATLAS_ONLY = args.has('--atlas');
-const ATLAS_REQ_MAPS = parseAtlasMaps(args.get('--atlas-maps'));
-const ATLAS_MINUTES = Math.max(1, parseFloat(args.get('--atlas-minutes-per-map') ?? '') || ATLAS_MINUTES_PER_MAP);
 // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
-let paused = SCOUT_ONLY;
+let paused = false;
 // Cacería de dorados (orden `hunt`). null = farmeo normal.
 type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number> };
 let hunting: HuntState | null = null;
-// Buscador (orden `scout`): recorre su franja del mapa sin pelear y avisa los dorados por HTTP.
-type ScoutState = {
-  hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number;
-  explorer: HuntExplorer; reporter: GoldReporter; sector: number; sectors: number;
-};
-let scouting: ScoutState | null = null;
-// --scout: arranca solo con la invasión, una vez por invasión (se rearma cuando el 0xFD deja de decir activa).
-let scoutArmed = true;
-// --scout: intentos de volver a Lorencia a esperar.
-let scoutHomeTries = 0;
-let scoutHomeNextAt = 0;
-type AtlasState = {
-  maps: AtlasMap[]; idx: number; since: number; warpTries: number; nextWarpAt: number; arrived: boolean;
-  /** pasadas del explorador del mapa al llegar (una más = mapa recorrido entero) */
-  passesAtStart: number;
-  restUntil: number; reporter: GoldReporter; potionsTried: boolean;
-  /** no pudo comprar pociones: huye antes y más lejos */
-  cautious: boolean; laps: number;
-};
-let atlasRun: AtlasState | null = null;
-// --atlas: el usuario lo cortó con farm/pause (no rearrancar solo).
-let atlasHeld = false;
-// El atlas en memoria (se carga al primer uso) y un explorador por mapa que dura
-// toda la corrida: cada vuelta sigue por las celdas que faltaban, no vuelve a
-// empezar cerca del warp.
-let atlasBook: Atlas | null = null;
-const atlasSaver = new AtlasSaver();
-const atlasExplorers = new Map<number, HuntExplorer>();
-// Con HP bajo y sin pociones el buscador se aleja del monstruo más cercano a esta distancia.
-const SCOUT_FLEE_RANGE = 6;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
 const HUNT_NORMAL_RANGE = 3;
 // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
@@ -2187,8 +2149,6 @@ function currentMode(): BotMode {
   if (!inGameAt || kicked) return 'connecting';
   if (resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
-  if (scouting) return 'scout';
-  if (atlasRun) return 'atlas';
   if (paused) return 'paused';
   return hunting ? 'hunt' : 'farm';
 }
@@ -2207,36 +2167,6 @@ function publishGold(p: GoldSighting | GoldGone) {
   }
 }
 
-function startScout(hunt: HuntMap, sector: number, sectors: number, why: string) {
-  if (hunting) stopHunt('empieza la búsqueda');
-  if (atlasRun) stopAtlas('empieza la búsqueda');
-  scouting = {
-    hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0,
-    explorer: new HuntExplorer(undefined, undefined, 256, scoutBand(sector, sectors)),
-    reporter: new GoldReporter(charName), sector, sectors,
-  };
-  pinnedSpot = null;
-  pendingWarp = null;
-  paused = false;
-  retarget = true;
-  goalPoint = null;
-  panelLog(`Buscador: ${why}; busco dorados en ${hunt.name} (franja ${sector}/${sectors}) sin pelear, aviso a ${SCOUT_GOLD_URL}.`);
-}
-
-// Termina la búsqueda: queda en pausa (decide el usuario), nunca vuelve a farmear solo.
-function stopScout(reason: string) {
-  if (!scouting) return;
-  const s = scouting;
-  scouting = null;
-  for (const p of s.reporter.clear(Date.now())) publishGold(p);
-  paused = true;
-  retarget = true;
-  goalPoint = null;
-  currentSpot = null;
-  scoutHomeTries = 0;
-  panelLog(`Búsqueda en ${s.hunt.name} terminada (${reason}): quedo en pausa.`);
-}
-
 function stopHunt(reason: string) {
   if (!hunting) return;
   const h = hunting;
@@ -2251,231 +2181,18 @@ function stopHunt(reason: string) {
   panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
 }
 
-// --- Explorador (atlas) -------------------------------------------------------
-function atlasData(): Atlas {
-  return (atlasBook ??= new Atlas(loadAtlas(ATLAS_FILE)));
-}
-
-function saveAtlasNow(why: string) {
-  if (!atlasBook?.dirty) return;
-  try {
-    saveAtlas(atlasBook.data, ATLAS_FILE);
-    atlasBook.dirty = false;
-  } catch (e) {
-    log(`Atlas: no pude guardar ${ATLAS_FILE} (${why}): ${(e as Error).message}`);
-  }
-}
-
-function atlasExplorer(map: number): HuntExplorer {
-  let ex = atlasExplorers.get(map);
-  if (!ex) atlasExplorers.set(map, (ex = new HuntExplorer()));
-  return ex;
-}
-
-function startAtlas(why: string): CommandResult {
-  const { maps, skipped } = atlasMapList(ATLAS_REQ_MAPS, world.level);
-  for (const sk of skipped) panelLog(`Atlas: salteo ${sk.why}.`);
-  if (!maps.length) return { ok: false, msg: 'ningún mapa del atlas al alcance (nivel o warp desconocido)' };
-  if (hunting) stopHunt('empieza el atlas');
-  if (scouting) stopScout('empieza el atlas');
-  atlasData();
-  atlasRun = {
-    maps, idx: 0, since: Date.now(), warpTries: 0, nextWarpAt: 0, arrived: false, passesAtStart: 0,
-    restUntil: 0, reporter: new GoldReporter(charName), potionsTried: false, cautious: false, laps: 0,
-  };
-  atlasHeld = false;
-  pinnedSpot = null;
-  pendingWarp = null;
-  paused = false;
-  retarget = true;
-  goalPoint = null;
-  const names = maps.map((m) => m.name).join(' → ');
-  panelLog(`Atlas: ${why}; exploro sin pelear ${names}, ${ATLAS_MINUTES} min por mapa, anoto en ${ATLAS_FILE}.`);
-  return { ok: true, msg: `exploro sin pelear: ${names} (${ATLAS_MINUTES} min por mapa)` };
-}
-
-// Termina el atlas: guarda y queda en pausa (nunca vuelve a farmear solo).
-function stopAtlas(reason: string) {
-  if (!atlasRun) return;
-  const a = atlasRun;
-  atlasRun = null;
-  for (const p of a.reporter.clear(Date.now())) publishGold(p);
-  saveAtlasNow('fin del atlas');
-  paused = true;
-  retarget = true;
-  goalPoint = null;
-  currentSpot = null;
-  panelLog(`Atlas terminado (${reason}): quedo en pausa.`);
-}
-
-// Pasa al mapa siguiente (al terminar la lista, otra vuelta).
-function advanceAtlas(a: AtlasState, reason: string, now: number) {
-  const cur = a.maps[a.idx];
-  for (const p of a.reporter.clear(now)) publishGold(p);
-  a.idx = nextAtlasIndex(a.idx, a.maps.length);
-  a.since = now;
-  a.warpTries = 0;
-  a.nextWarpAt = 0;
-  a.arrived = false;
-  goalPoint = null;
-  saveAtlasNow('cambio de mapa');
-  if (a.idx === 0) {
-    a.laps++;
-    // Otra vuelta: reponer pociones si se acabaron.
-    if (!haveHealingPotions()) a.potionsTried = false;
-  }
-  panelLog(`Atlas: listo ${cur.name} (${reason}); sigo con ${a.maps[a.idx].name}${a.idx === 0 ? ` (vuelta ${a.laps + 1})` : ''}.`);
-}
-
-// Ítems en la mochila (slots 12-75 del 0.97d: 8x8); sin lugar no se compra.
-const inventoryFull = () => [...world.inventory.keys()].filter((k) => k >= 12 && k < 76).length >= 64;
-const BUY_PACE_MS = 600;
-
-// Comprar pociones (viaje a Lorencia farmeando, merchant en scope, antes del atlas): apagado salvo
-// --buy-potions. El usuario no lo pidió y con los ítems de 5 bytes sin leer solo hacía perder tiempo.
-const BUY_POTIONS = args.has('--buy-potions');
-// Viaje a Lorencia por pociones farmeando: cada cuánto como mucho, y tras un viaje que no compró nada.
-const POTION_TRIP_EVERY_MS = 5 * 60_000;
-const POTION_TRIP_AFTER_FAIL_MS = 60 * 60_000;
-
-/**
- * Antes de salir a explorar: hasta `max` pociones de curación (grandes, si no
- * medianas, si no chicas) en Lorencia. El merchant se busca entre los conocidos
- * y los NPC de pueblo en scope; hace falta el catálogo (StoreItemList) o
- * --buy-slot. Una compra cuenta si llega ItemBought o baja el zen; dos fallos
- * seguidos (NpcItemBuyFailed, sin zen, sin lugar) cortan. Una por vez, a 600 ms.
- */
-async function stockAtlasPotions(max = ATLAS_POTION_TARGET): Promise<{ bought: number; zen: number }> {
-  const none = { bought: 0, zen: 0 };
-  if (world.map !== ATLAS_SAFE_MAP) {
-    const lor = ATLAS_WARPS.find((m) => m.map === ATLAS_SAFE_MAP)!;
-    doing = 'yendo a Lorencia a comprar pociones';
-    const spot: Spot = { index: lor.warp, name: 'Lorencia (pociones)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-    if (!(await decide({ kind: 'travel', what: 'warp a Lorencia a comprar pociones', detail: { warp: lor.warp, map: lor.map, reason: 'atlas' } }))) return none;
-    if (!(await warpAndWait(spot, false))) return none;
-    await sleep(3000); // que lleguen los NPC en scope
-  }
-  const ids = [...new Set([...knownMerchants, ...[...world.townNpcs.values()].filter((n) => !isJunkType(n.type)).map((n) => n.id)])];
-  if (!ids.length) {
-    panelLog('Pociones: no veo ningún NPC de pueblo que las venda.');
-    return none;
-  }
-  for (const id of ids) {
-    if (kicked) return none;
-    closeNpc();
-    shopCatalog.clear();
-    const win = waitFor('NpcWindowResponse', 3000).catch(() => null);
-    talkToNpc(id);
-    const raw = await win;
-    if (!raw || !isMerchantWindow(new NpcWindowResponsePacket(raw).Window)) {
-      closeNpc();
-      await sleep(BUY_PACE_MS);
-      continue;
-    }
-    knownMerchants.add(id);
-    await sleep(800); // StoreItemList
-    let slot: number | undefined;
-    let num = 0;
-    for (const n of [3, 2, 1]) {
-      slot = findShopSlotFor(POTION_GROUP, n);
-      if (slot != null) {
-        num = n;
-        break;
-      }
-    }
-    if (slot == null && shopCatalog.size === 0 && SHOP_POTION_SLOTS.length) slot = SHOP_POTION_SLOTS[0];
-    if (slot == null) {
-      closeNpc();
-      await sleep(BUY_PACE_MS);
-      continue;
-    }
-    const shopSlot = slot;
-    const what = num ? `poción ${POTION_GROUP}/${num}` : `slot ${shopSlot} (--buy-slot)`;
-    const zen0 = lastMoney;
-    if (!(await decide({ kind: 'buy', what: `comprar hasta ${max} × ${what} en Lorencia`, detail: { npcId: id, shopSlot, num, max, money: zen0 }, autoOk: false }))) {
-      closeNpc();
-      return none;
-    }
-    doing = `comprando pociones (${what})`;
-    let bought = 0;
-    let fails = 0;
-    let gotItem = false;
-    let failed = false;
-    const onBought = () => {
-      gotItem = true;
-    };
-    const onFail = () => {
-      failed = true;
-    };
-    EventBus.on('ItemBought', onBought);
-    EventBus.on('NpcItemBuyFailed', onFail);
-    try {
-      while (bought < max && fails < 2 && openedNpcId != null && !kicked) {
-        if (inventoryFull()) {
-          log('Pociones: mochila llena, dejo de comprar.');
-          break;
-        }
-        const before = lastMoney;
-        gotItem = false;
-        failed = false;
-        buyShopSlot(shopSlot);
-        await sleep(BUY_PACE_MS);
-        if (!failed && (gotItem || lastMoney < before)) {
-          bought++;
-          fails = 0;
-        } else fails++;
-      }
-    } finally {
-      EventBus.off('ItemBought', onBought);
-      EventBus.off('NpcItemBuyFailed', onFail);
-      closeNpc();
-    }
-    const zen = Math.max(0, zen0 - lastMoney);
-    panelLog(`Pociones: compré ${bought} × ${what} al NPC ${id}, gasté ${zen} zen (quedan ${lastMoney}).`);
-    return { bought, zen };
-  }
-  panelLog('Pociones: ningún NPC en scope las vende (o no llegó el catálogo).');
-  return none;
-}
-
 function runPanelCommand(c: PanelCommand): CommandResult {
   switch (c.cmd) {
     case 'pause':
-      if (atlasRun) {
-        stopAtlas('orden pause del panel');
-        atlasHeld = true;
-        return { ok: true, msg: 'atlas terminado, en pausa' };
-      }
-      if (scouting) {
-        stopScout('orden pause del panel');
-        return { ok: true, msg: 'búsqueda terminada, en pausa' };
-      }
       if (paused) return { ok: true, msg: 'ya estaba en pausa' };
       paused = true;
       retarget = true;
       return { ok: true, msg: 'en pausa: no camino, no peleo ni warpeo (las pociones siguen)' };
     case 'resume':
       if (!paused) return { ok: true, msg: 'no estaba en pausa' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo: espero la invasión (o mandá scout)' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no farmeo: mandá atlas' };
       paused = false;
       return { ok: true, msg: `sigo: ${hunting ? `cazando en ${hunting.hunt.name}` : 'farmeo normal'}` };
     case 'farm': {
-      if (ATLAS_ONLY) {
-        const had = !!atlasRun;
-        stopAtlas('orden farm del panel');
-        atlasHeld = true;
-        paused = true;
-        return { ok: true, msg: `${had ? 'atlas terminado; ' : ''}con --atlas no farmeo: quedo en pausa (mandá atlas para seguir)` };
-      }
-      if (atlasRun) stopAtlas('orden farm del panel');
-      if (SCOUT_ONLY) {
-        const had = !!scouting;
-        stopScout('orden farm del panel');
-        paused = true;
-        return { ok: true, msg: `${had ? 'búsqueda terminada; ' : ''}con --scout no farmeo: quedo en pausa esperando la invasión` };
-      }
-      if (scouting) stopScout('orden farm del panel');
       const was = [hunting && 'cacería cancelada', pinnedSpot && `spot fijo (${pinnedSpot.name}) liberado`, paused && 'pausa levantada'].filter(Boolean);
       if (hunting) stopHunt('orden del panel');
       pinnedSpot = null;
@@ -2486,12 +2203,7 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'warp': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no farmeo ni fijo spots' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no farmeo ni fijo spots' };
-      if (scouting) stopScout('orden warp del panel');
-      if (atlasRun) stopAtlas('orden warp del panel');
-      const spots = WARP_SPOTS.filter((sp) => !ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index));
-      const v = validateWarp(c.warp, world.level, spots);
+      const v = validateWarp(c.warp, world.level, WARP_SPOTS);
       if (!v.ok) return { ok: false, msg: v.msg };
       if (hunting) stopHunt('orden warp del panel');
       paused = false;
@@ -2502,39 +2214,15 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     case 'hunt': {
       if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (SCOUT_ONLY) return { ok: false, msg: 'con --scout no peleo: mandá scout' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no peleo' };
       const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
       if (!ch.ok) return { ok: false, msg: ch.msg };
       if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      if (scouting) stopScout('orden hunt del panel');
-      if (atlasRun) stopAtlas('orden hunt del panel');
       hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
       pinnedSpot = null;
       pendingWarp = null;
       paused = false;
       retarget = true;
       return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
-    }
-    case 'scout': {
-      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (ATLAS_ONLY) return { ok: false, msg: 'con --atlas no busco por franja: el atlas ya avisa los dorados que ve' };
-      const ch = chooseHuntMap({ invasion, level: world.level, map: c.map });
-      if (!ch.ok) return { ok: false, msg: ch.msg };
-      if (invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      const sectors = c.sectors ?? 2;
-      const sector = c.sector ?? 1;
-      if (scouting) stopScout('nueva orden scout');
-      startScout(ch.hunt, sector, sectors, 'orden del panel');
-      scoutArmed = false;
-      return { ok: true, msg: `busco dorados en ${ch.hunt.name} (franja ${sector}/${sectors}) sin pelear; corto a los 20 min o cuando no queden` };
-    }
-    case 'atlas': {
-      if (!inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (atlasRun) return { ok: true, msg: `ya estoy explorando ${atlasRun.maps[atlasRun.idx].name}` };
-      return startAtlas('orden del panel');
     }
   }
 }
@@ -2604,7 +2292,7 @@ function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: inGameAt ? lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: scouting ? `búsqueda ${scouting.hunt.name}` : atlasRun ? `atlas ${atlasRun.maps[atlasRun.idx].name}` : hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: hunting ? `cacería ${hunting.hunt.name}` : (currentSpot?.name ?? null) },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,
@@ -2802,6 +2490,10 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   loopView = () => ({ kills, deaths, casts: skillsUsed, exp: totalExpGained, target });
   if (!sessionStart.level) sessionStart.level = world.level;
   let stuckCount = 0;
+  // Objetivo a distancia de golpe que no muere: tras TARGET_NO_KILL_MS se abandona (red de seguridad
+  // si la posición que conocemos del monstruo no es la real).
+  let attackTarget: number | null = null;
+  let attackSince = 0;
   let lastX = world.x;
   let lastY = world.y;
   // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
@@ -2880,21 +2572,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await persistLearning();
       logLearningSummary();
     }
-    // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
-    //    compras son caras de confirmar y no queremos spamearlas.
-    if (BUY_POTIONS && !atlasRun && ticks % 25 === 0 && !haveHealingPotions()) {
-      // Sin pociones no se farmea (Melu murió en Arena 4 sin ninguna, 2026-10-11): a Lorencia a comprar
-      // y el cambio de spot la devuelve a su mapa. Como mucho una vez cada 5 min; si el viaje no compró
-      // nada, una vez por hora (Horaz iba y volvía de Arena 2 cada 5 min sin comprar: tiempo perdido).
-      if (Date.now() >= nextPotionTrip) {
-        const r = await stockAtlasPotions(40);
-        nextPotionTrip = Date.now() + (r.bought ? POTION_TRIP_EVERY_MS : POTION_TRIP_AFTER_FAIL_MS);
-        panelLog(r.bought ? `Pociones: compré ${r.bought} en Lorencia.` : `Pociones: no pude comprar; no vuelvo a Lorencia por ${POTION_TRIP_AFTER_FAIL_MS / 60_000} min.`);
-        if (world.map === ATLAS_SAFE_MAP) { currentSpot = null; canAdopt = false; }
-        continue;
-      }
-      await ensurePotions();
-    }
     // 0b) Mago: Soul Barrier (16, escudo de maná) cada ~50 s, como el agente del navegador.
     if (isMage() && world.skills.has(16) && Date.now() - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && Date.now() - lastCastAt > SKILL_PACE_MS) {
       lastBarrierAt = Date.now(); lastCastAt = Date.now();
@@ -2914,38 +2591,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       target = null;
       looting = null;
     }
-    // --atlas: arrancar solo al entrar al mundo (y tras reconectar), salvo que el usuario lo haya cortado.
-    if (ATLAS_ONLY && !atlasRun && !atlasHeld && !resetting && world.maxHp > 0) {
-      const r = startAtlas('--atlas');
-      if (!r.ok) {
-        panelLog(`Atlas: no arranco (${r.msg}); quedo en pausa.`);
-        atlasHeld = true;
-        paused = true;
-      }
-    }
-    // --scout: arrancar sola la búsqueda con la invasión; mientras, esperar en Lorencia.
-    if (SCOUT_ONLY && !scouting && !atlasRun && !resetting) {
-      const nowS = Date.now();
-      if (invasion?.status !== 'active') scoutArmed = true;
-      else if (scoutArmed) {
-        // Solo si vale la pena (usuario: "si quedan pocos vivos no tiene sentido buscar, ej. 5"):
-        // se sigue mirando cada tick hasta que haya más de SCOUT_START_ALIVE en un mapa al alcance.
-        const ch = chooseHuntMap({ invasion, level: world.level });
-        if (ch.ok && (ch.alive ?? 0) > SCOUT_START_ALIVE) { scoutArmed = false; startScout(ch.hunt, SCOUT_SECTOR, SCOUT_SECTORS, `invasión activa (${ch.alive} vivos en ${ch.hunt.name})`); }
-      }
-      if (!scouting && world.map !== 0 && scoutHomeTries < 3 && nowS >= scoutHomeNextAt && world.hp > 0) {
-        scoutHomeTries++;
-        scoutHomeNextAt = nowS + WARP_COOLDOWN_MS;
-        const lor = HUNT_MAPS[0];
-        doing = 'volviendo a Lorencia a esperar la invasión';
-        const spot: Spot = { index: lor.warp, name: 'Lorencia (espera)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-        if (await decide({ kind: 'travel', what: 'warp a Lorencia a esperar la invasión (--scout)', detail: { warp: lor.warp, map: lor.map, reason: 'scout' } })) {
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      if (!scouting) doing = 'esperando la invasión en Lorencia (--scout)';
-    }
     // En pausa no se hace nada más (las pociones de arriba siguen).
     if (paused) {
       phase = 'wait';
@@ -2961,200 +2606,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
       }
       target = null;
-      continue;
-    }
-    // Buscador: nunca pelea (ni golpe ni skill), ni resetea, ni levanta loot.
-    // Corta solo (queda en pausa) con 0 vivos en el mapa, invasión terminada o 20 min.
-    if (scouting) {
-      const sc = scouting;
-      const nowS = Date.now();
-      const stop = shouldStopScout({ invasion, map: sc.hunt.map, since: sc.since, now: nowS });
-      if (stop) {
-        stopScout(stop);
-        target = null;
-        continue;
-      }
-      target = null;
-      looting = null;
-      if (world.map !== sc.hunt.map) {
-        for (const { payload } of sc.reporter.update(world.map, [], nowS)) publishGold(payload);
-        if (nowS < sc.nextWarpAt) {
-          await sleep(500);
-          continue;
-        }
-        if (sc.warpTries >= 3) {
-          stopScout(`no pude llegar a ${sc.hunt.name}`);
-          continue;
-        }
-        sc.warpTries++;
-        sc.nextWarpAt = nowS + WARP_COOLDOWN_MS;
-        doing = `viajando a ${sc.hunt.name} a buscar dorados`;
-        const spot: Spot = { index: sc.hunt.warp, name: `búsqueda ${sc.hunt.name}`, reqLevel: sc.hunt.reqLevel, zen: 0, map: sc.hunt.map };
-        if (await decide({ kind: 'travel', what: `warp a ${sc.hunt.name} para buscar dorados`, detail: { warp: sc.hunt.warp, map: sc.hunt.map, reason: 'scout' } })) {
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      // Avisar los dorados en scope (nuevos, movidos, idos).
-      const golds = [...npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) }));
-      for (const { payload, isNew } of sc.reporter.update(world.map, golds, nowS)) {
-        publishGold(payload);
-        if (isNew && 'x' in payload) panelLog(`Buscador: ${payload.name} en ${sc.hunt.name} (${payload.x},${payload.y}), id ${payload.id}.`);
-      }
-      phase = 'walk';
-      // HP bajo y sin pociones: alejarse del monstruo más cercano (nunca quedarse peleando).
-      if (world.maxHp > 0 && world.hp / world.maxHp < 0.5 && !haveHealingPotions()) {
-        let near: ScopedNpc | null = null;
-        let nd = Infinity;
-        for (const n of npcs.values()) {
-          const d = chebyshev(world.x, world.y, n.x, n.y);
-          if (d < nd) {
-            nd = d;
-            near = n;
-          }
-        }
-        if (near && nd <= SCOUT_FLEE_RANGE) {
-          const dx = world.x - near.x || 1;
-          const dy = world.y - near.y;
-          const fx = Math.min(255, Math.max(0, world.x + Math.sign(dx) * 5));
-          const fy = Math.min(255, Math.max(0, world.y + Math.sign(dy) * 5));
-          doing = `buscando dorados en ${sc.hunt.name}: me alejo de ${monsterName(near.type)} (HP bajo, sin pociones)`;
-          await walkTowards(fx, fy);
-          continue;
-        }
-      }
-      const g = sc.explorer.next(world.x, world.y, nowS);
-      goalPoint = [g.x, g.y];
-      doing = `buscando dorados en ${sc.hunt.name} (franja ${sc.sector}/${sc.sectors})`;
-      await walkTowards(g.x, g.y);
-      continue;
-    }
-    // Explorador (atlas): nunca pelea (ni golpe ni skill), ni resetea, ni levanta loot.
-    // Mapa por mapa (tope de tiempo cada uno), anota lo que ve en scope; al terminar, otra vuelta.
-    if (atlasRun) {
-      const at = atlasRun;
-      const book = atlasData();
-      const nowA = Date.now();
-      target = null;
-      looting = null;
-      if (atlasSaver.due(book, nowA)) saveAtlasNow('cada 30 s');
-      // Muerta: esperar el respawn sin mandar nada (después vuelve a warpear al mapa).
-      if (world.maxHp > 0 && world.hp <= 0) {
-        doing = 'muerta: espero el respawn';
-        await sleep(1000);
-        continue;
-      }
-      // Pociones antes de salir (y al empezar otra vuelta si se acabaron).
-      if (!at.potionsTried) {
-        at.potionsTried = true;
-        if (BUY_POTIONS && !haveHealingPotions()) {
-          doing = 'comprando pociones antes de explorar';
-          const r = await stockAtlasPotions();
-          at.cautious = r.bought === 0 && !haveHealingPotions();
-          if (at.cautious) panelLog(`Atlas: salgo sin pociones; huyo con HP < ${Math.round(ATLAS_FLEE_CAUTIOUS.pct * 100)} % de monstruos a ≤ ${ATLAS_FLEE_CAUTIOUS.range}.`);
-        } else at.cautious = !haveHealingPotions();
-        at.since = Date.now();
-        continue;
-      }
-      const cur = at.maps[at.idx];
-      // Descanso en Lorencia tras volver con HP crítico: el tiempo del mapa siguiente corre después.
-      if (nowA < at.restUntil) {
-        at.since = nowA;
-        doing = `descansando en Lorencia (${Math.ceil((at.restUntil - nowA) / 1000)} s) antes de ${cur.name}`;
-        phase = 'wait';
-        await sleep(1000);
-        continue;
-      }
-      const ex = atlasExplorer(cur.map);
-      const done = atlasMapDone({ since: at.since, now: nowA, minutes: ATLAS_MINUTES, fullPass: at.arrived && ex.passes > at.passesAtStart });
-      if (done) {
-        advanceAtlas(at, done, nowA);
-        continue;
-      }
-      if (world.map !== cur.map) {
-        at.arrived = false;
-        for (const { payload } of at.reporter.update(world.map, [], nowA)) publishGold(payload);
-        if (world.hp <= 0 || nowA < at.nextWarpAt) {
-          await sleep(500);
-          continue;
-        }
-        if (at.warpTries >= 3) {
-          advanceAtlas(at, `no pude llegar en 3 intentos`, nowA);
-          continue;
-        }
-        at.warpTries++;
-        at.nextWarpAt = nowA + WARP_COOLDOWN_MS;
-        doing = `viajando a ${cur.name} a explorar`;
-        const spot: Spot = { index: cur.warp, name: `atlas ${cur.name}`, reqLevel: cur.reqLevel, zen: 0, map: cur.map };
-        if (await decide({ kind: 'travel', what: `warp a ${cur.name} para explorar (atlas)`, detail: { warp: cur.warp, map: cur.map, reason: 'atlas' } })) {
-          // Sin medir: explorar no es farmeo y ensuciaría el aprendizaje del spot.
-          await warpAndWait(spot, false);
-        }
-        continue;
-      }
-      if (!at.arrived) {
-        at.arrived = true;
-        at.warpTries = 0;
-        at.passesAtStart = ex.passes;
-        // El objetivo viejo de este mapa (de otra vuelta) ya venció: elegir de nuevo.
-        ex.goal = null;
-        book.beginVisit(cur.map);
-        panelLog(`Atlas: en ${cur.name}, ${ex.visitedCount()}/${ex.totalCells()} celdas ya vistas en esta vuelta.`);
-      }
-      // Anotar todo lo que hay en scope; los dorados también van a /gold (el cazador de Horaz).
-      // La invasión dura 15 min: un 0xFD "activa" de hace más de 20 min ya no cuenta.
-      const duringInvasion = invasion?.status === 'active' && nowA - invasion.at < 20 * 60_000;
-      const golds: { id: number; x: number; y: number; name: string }[] = [];
-      for (const n of npcs.values()) {
-        const golden = isGolden(n);
-        const name = monsterName(n.type);
-        const g = book.observe({ map: world.map, x: n.x, y: n.y, id: n.id, type: n.type, name, golden, duringInvasion }, nowA);
-        if (g) panelLog(`Atlas: ${g.name} en ${cur.name} (${g.x},${g.y}), id ${g.id}${duringInvasion ? ' (invasión)' : ' (FUERA de la invasión)'}.`);
-        if (golden) golds.push({ id: n.id, x: n.x, y: n.y, name });
-      }
-      for (const { payload } of at.reporter.update(world.map, golds, nowA)) publishGold(payload);
-      phase = 'walk';
-      const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
-      // HP crítico y sin pociones: a Lorencia, 60 s, y el mapa siguiente.
-      if (world.hp > 0 && hpPct < ATLAS_CRITICAL_PCT && !haveHealingPotions()) {
-        panelLog(`Atlas: HP ${world.hp}/${world.maxHp} y sin pociones en ${cur.name}: vuelvo a Lorencia.`);
-        if (world.map !== ATLAS_SAFE_MAP) {
-          const lor = ATLAS_WARPS.find((m) => m.map === ATLAS_SAFE_MAP)!;
-          const spot: Spot = { index: lor.warp, name: 'Lorencia (a salvo)', reqLevel: lor.reqLevel, zen: 0, map: lor.map };
-          if (await decide({ kind: 'travel', what: 'warp a Lorencia: HP crítico sin pociones (atlas)', detail: { warp: lor.warp, map: lor.map, reason: 'atlas-flee' } })) {
-            await warpAndWait(spot, false);
-          }
-        }
-        advanceAtlas(at, 'HP crítico sin pociones', Date.now());
-        at.restUntil = Date.now() + ATLAS_REST_MS;
-        continue;
-      }
-      // HP bajo: alejarse del monstruo más cercano (nunca quedarse peleando).
-      const flee = at.cautious && !haveHealingPotions() ? ATLAS_FLEE_CAUTIOUS : ATLAS_FLEE;
-      if (hpPct < flee.pct) {
-        let near: ScopedNpc | null = null;
-        let nd = Infinity;
-        for (const n of npcs.values()) {
-          const d = chebyshev(world.x, world.y, n.x, n.y);
-          if (d < nd) {
-            nd = d;
-            near = n;
-          }
-        }
-        if (near && nd <= flee.range) {
-          const dx = world.x - near.x || 1;
-          const dy = world.y - near.y;
-          const fx = Math.min(255, Math.max(0, world.x + Math.sign(dx) * 5));
-          const fy = Math.min(255, Math.max(0, world.y + Math.sign(dy) * 5));
-          doing = `explorando ${cur.name}: me alejo de ${monsterName(near.type)} (HP ${Math.round(hpPct * 100)} %)`;
-          await walkTowards(fx, fy);
-          continue;
-        }
-      }
-      const g = ex.next(world.x, world.y, nowA);
-      goalPoint = [g.x, g.y];
-      doing = `explorando ${cur.name} (celda ${Math.min(ex.visitedCount() + 1, ex.totalCells())}/${ex.totalCells()})`;
-      await walkTowards(g.x, g.y);
       continue;
     }
     // Cacería: cortar a tiempo (0xFD dice 0 vivos, derrotada, 15 min) y llegar al mapa.
@@ -3237,13 +2688,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         logCampEvents();
         target = null;
       }
-    }
-
-    // 6) Desviar inventario antes de llenarse.
-    if (inventoryPressure() > SELL_AT_PRESSURE) {
-      doing = 'vendiendo basura';
-      await sellJunkToMerchant();
-      continue;
     }
 
     // 7) Loot valioso (cajas, joyas, excelentes, guantes 10/1), PERO no si ya
@@ -3344,6 +2788,16 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       doing = `${hunting ? 'cazando: ' : ''}peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
       const reachSkill = pickAttackSkill();
       if (dist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
+        if (attackTarget !== target) {
+          attackTarget = target;
+          attackSince = Date.now();
+        } else if (Date.now() - attackSince > TARGET_NO_KILL_MS) {
+          log(`Objetivo ${target} (${monsterName(t.type)}) no muere en ${TARGET_NO_KILL_MS / 1000} s de golpes: lo abandono.`);
+          unreachable.add(target);
+          target = null;
+          attackTarget = null;
+          continue;
+        }
         // A distancia de golpe (o de cast, para un mago): skill si hay (respetando SKILL_PACE_MS desde el
         // último cast, también los del camino), si no el hit normal.
         const sinceCast = Date.now() - lastCastAt;
@@ -3646,7 +3100,6 @@ async function main() {
     await sleep(wait);
   }
 
-  saveAtlasNow('fin de la corrida');
   console.log(`\n=== Resumen ===`);
   console.log(`Duración: ${autoSeconds}s, ${sessions} sesión(es), sin GUI, ritmo humano.`);
   console.log(`Kills: ${total.kills}  Exp: ${total.totalExpGained}  Pociones: ${total.potionsDrunk}`);
@@ -3657,10 +3110,9 @@ async function main() {
   process.exit(0);
 }
 
-// Ctrl+C / kill: guardar el atlas antes de salir (escritura sincrónica).
+// Ctrl+C / kill (la estación desconecta con SIGTERM).
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    saveAtlasNow(sig);
     closeSockets();
     process.exit(0);
   });

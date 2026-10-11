@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, RECONNECT, buildPartyDecline, isExcellentItemData, parseItemDropRemoved, parsePartyRequest } from './protocol097';
+import { Backoff, RECONNECT, buildPartyDecline, isExcellentItemData, isObjectMovedPacket, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -197,6 +197,9 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
 {
   const rem = Uint8Array.from([0xc2, 0x00, 0x09, 0x21, 0x02, 0x80, 0x10, 0x00, 0x22]);
   ok('ItemDropRemoved: count @4, ids BE de a 2 bytes', parseItemDropRemoved(rem).join() === '16,34', parseItemDropRemoved(rem));
+  // 0x15: 8 bytes = movimiento; 10 bytes = daño de un golpe en 0.97d (no mover al monstruo).
+  ok('0x15 de 8 bytes es ObjectMoved', isObjectMovedPacket(Uint8Array.from([0xc1, 8, 0x15, 0x03, 0x8e, 20, 40, 0])));
+  ok('0x15 de 10 bytes es el daño (no movimiento)', !isObjectMovedPacket(Uint8Array.from([0xc1, 10, 0x15, 0x03, 0x8e, 0x14, 0x28, 0, 0, 0])));
   ok('ItemDropRemoved truncado: no lee fuera', parseItemDropRemoved(Uint8Array.from([0xc2, 0, 6, 0x21, 5, 0])).length === 0);
   const item = new Uint8Array(12);
   ok('ítem común: no excelente', !isExcellentItemData(item));

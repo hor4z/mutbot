@@ -60,17 +60,16 @@ export function botArgs(c: CharConfig, wsPort: number, server: GameServer, botFi
 export type Routine =
   | { kind: 'farm' }
   | { kind: 'spot'; warp: number }
-  | { kind: 'atlas' }
   | { kind: 'pause' };
 
-export const ROUTINE_KINDS = ['farm', 'spot', 'atlas', 'pause'] as const;
+export const ROUTINE_KINDS = ['farm', 'spot', 'pause'] as const;
 
 export function isRoutine(v: unknown): v is Routine {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   const keys = Object.keys(r);
   if (r.kind === 'spot') return keys.every((k) => k === 'kind' || k === 'warp') && Number.isInteger(r.warp) && (r.warp as number) >= 0 && (r.warp as number) < 256;
-  return (r.kind === 'farm' || r.kind === 'atlas' || r.kind === 'pause') && keys.length === 1;
+  return (r.kind === 'farm' || r.kind === 'pause') && keys.length === 1;
 }
 
 /** Órdenes del panel que ponen al bot en esa rutina (todas pasan por isPanelCommand). */
@@ -78,8 +77,6 @@ export function routineCommands(r: Routine): PanelCommand[] {
   switch (r.kind) {
     case 'farm': return [{ cmd: 'farm' }];
     case 'spot': return [{ cmd: 'warp', warp: r.warp }];
-    // farm primero: corta una cacería o un spot fijo antes de salir a explorar.
-    case 'atlas': return [{ cmd: 'farm' }, { cmd: 'atlas' }];
     case 'pause': return [{ cmd: 'pause' }];
   }
 }
@@ -88,7 +85,6 @@ export function routineLabel(r: Routine): string {
   switch (r.kind) {
     case 'farm': return 'farmear por la ruta';
     case 'spot': return `farmear fijo en el warp ${r.warp}`;
-    case 'atlas': return 'explorar mapas (atlas)';
     case 'pause': return 'en pausa';
   }
 }
@@ -150,7 +146,7 @@ export function processRunsAccount(cmdline: string[], environ: string[], c: Char
 }
 
 // Sanity: las órdenes de las rutinas tienen que pasar el filtro del bot.
-for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'atlas' }, { kind: 'pause' }] as Routine[])
+for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'pause' }] as Routine[])
   for (const c of routineCommands(r)) if (!isPanelCommand(c)) throw new Error(`rutina ${r.kind}: orden inválida ${JSON.stringify(c)}`);
 
 /** Tras desconectar desde la estación, cuánto se considera que la sesión vieja puede seguir abierta. */

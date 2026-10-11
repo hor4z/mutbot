@@ -69,13 +69,11 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('0x91 CC sin byte 6 → null', parseOpeningState(Uint8Array.from([0xc1, 6, 0x91, 4, 0, 0]), NOW) === null);
 }
 
-// --- isPanelCommand: solo las 7 órdenes con sus campos ----------------------------
+// --- isPanelCommand: solo las 5 órdenes con sus campos ----------------------------
 {
-  ok('PANEL_COMMANDS son 7', PANEL_COMMANDS.length === 7);
+  ok('PANEL_COMMANDS son 5', PANEL_COMMANDS.length === 5);
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
-    { cmd: 'scout' }, { cmd: 'scout', map: 3 }, { cmd: 'scout', sector: 2 }, { cmd: 'scout', map: 2, sector: 3, sectors: 4 }, { cmd: 'scout', sectors: 1 },
-    { cmd: 'atlas' },
   ]) {
     ok(`acepta ${JSON.stringify(c)}`, isPanelCommand(c));
   }
@@ -86,10 +84,8 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'warp' }, { cmd: 'warp', warp: '26' }, { cmd: 'warp', warp: 1.5 }, { cmd: 'warp', warp: -1 }, { cmd: 'warp', warp: 256 },
     { cmd: 'warp', warp: 2, map: 0 },
     { cmd: 'hunt', map: 'Noria' }, { cmd: 'hunt', map: 300 }, { cmd: 'hunt', map: 3, warp: 3 },
-    { cmd: 'scout', sector: 3 }, { cmd: 'scout', sector: 0 }, { cmd: 'scout', sector: 2, sectors: 1 }, { cmd: 'scout', sectors: 0 },
-    { cmd: 'scout', sectors: 17 }, { cmd: 'scout', sector: 1.5 }, { cmd: 'scout', map: 'Noria' }, { cmd: 'scout', attack: true },
     { cmd: 'hunt', sector: 1 },
-    { cmd: 'atlas', map: 3 }, { cmd: 'atlas', maps: [0, 3] }, { cmd: 'ATLAS' }, { cmd: 'atlas', attack: true },
+    { cmd: 'scout' }, { cmd: 'atlas' },
   ];
   for (const c of bad) ok(`rechaza ${JSON.stringify(c) ?? String(c)}`, !isPanelCommand(c));
 }
