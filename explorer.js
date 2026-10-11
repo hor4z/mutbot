@@ -10,8 +10,9 @@
  *
  * Datos: localStorage `mubot-atlas:<pj>` y, cada minuto, POST al servidor local (/atlas) que lo
  * guarda en ~/.mubot/atlas-<pj>.json. Los dorados también van a /gold (el cazador de Horaz los lee).
+ * Pelea (X.fight, por defecto sí): Evil Spirit contra lo que tenga a <= 5 tiles, dorados primero.
  * Seguridad: poción bajo 60 % de vida, se aleja del monstruo más cercano bajo 50 %, y bajo 30 % sin
- * pociones vuelve a Lorencia. Nunca ataca ni levanta nada.
+ * pociones vuelve a Lorencia. No levanta nada.
  */
 (() => {
   const S = __store, W = () => __world, ai = window.__ai;
@@ -29,7 +30,7 @@
   const ROUTE = [[2, 0, 'Lorencia', 10], [3, 3, 'Noria', 10], [6, 2, 'Devias', 20], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
-  const X = (window.__atlas = { on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  const X = (window.__atlas = { fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -67,7 +68,6 @@
   X.tick = () => {
     if (!X.on || S.uiState !== 5 || S.sceneLoading) return;
     const w = W(), pe = w?.playerEntity, pd = S.playerData; if (!pe) return;
-    w.attackTarget = null; w.castRequest = null;
     const now = Date.now(), P = pe.transform.pos, hp = pd.currentHP / pd.maxHP;
     if (hp < 0.6 && now - X.lastPot > 500) { const s = potion(); if (s >= 0) { S.consumeItemRequest(s); X.lastPot = now; } }
     if (hp < 0.3 && potion() < 0) { if (w.mapIndex !== 0 && now - X.lastWarp > 20000) { X.lastWarp = now; S.warpCommandRequest(2); ai.L('ATLAS: poca vida y sin pociones → Lorencia'); } return; }
@@ -76,6 +76,16 @@
     X.mapSince ||= now;
     record(w);
     if (now - X.mapSince > MINUTES_PER_MAP * 60000) return nextMap(`${MINUTES_PER_MAP} min en ${name}`);
+    // Pelear lo que tenga cerca (usuario: "hacé que ataque"): Evil Spirit (área) contra el monstruo más
+    // cercano a <= fightRange, dorados primero. Mientras pelea no camina; después sigue el recorrido.
+    if (X.fight && hp >= 0.5 && pd.currentMP / pd.maxMP > 0.1) {
+      let tgt = null, td = 99;
+      for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos) - (/gold/i.test(String(e.objectNameInWorld ?? '')) ? 3 : 0); if (d < td) { td = d; tgt = e; } }
+      if (tgt && td <= X.fightRange) {
+        if (!w.castRequest) { if (S.currentSkill !== X.skill) S.selectSkill(X.skill); const tp = tgt.transform.pos; w.castRequest = { target: tgt, point: { x: tp.x, y: tp.z }, forced: false }; }
+        return;
+      }
+    }
     // Alejarse si está perdiendo vida con un monstruo encima.
     if (hp < 0.5) { let near = null, nd = 99; for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying) { const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } } if (near && nd <= 6) { const q = near.transform.pos, ax = Math.sign(P.x - q.x) || 1, az = Math.sign(P.z - q.z) || 1; ai.moveTo(pe, { x: Math.round(P.x + ax * 6), z: Math.round(P.z + az * 6) }); return; } }
     if (!X.goal || dist(P, X.goal) < 4 || now - X.goalSince > 45000) {
