@@ -123,7 +123,7 @@ const MIN = 60_000;
   c = go({ level: 40, current: sp(6), crowded: true });
   ok('competencia antes del 50: otra entrada del tramo', c.reason === 'crowd' && c.spot?.index === 7, c);
   c = go({ level: 60, current: sp(7), crowded: true });
-  ok('competencia desde el 50: plan B Arena 1 (como el navegador)', c.reason === 'crowd' && c.spot?.index === 1, c);
+  ok('competencia desde el 50: otra entrada de Devias antes que Arena 1', c.reason === 'crowd' && c.spot?.index === 6, c);
   const crowdedAt = new Map([[7, 9 * MIN], [5, 8 * MIN]]);
   c = go({ level: 60, current: sp(6), crowded: true, crowdedAt });
   ok('todas las Devias llenas hace poco (50-99): plan B Arena 1', c.reason === 'crowd' && c.spot?.index === 1, c);

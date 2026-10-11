@@ -36,7 +36,7 @@ A la derecha se ve el panel del bot (mapa, nivel, exp, log) o su consola. **Desc
 | Nivel | Dónde |
 |---|---|
 | 10 → 20 | Lorencia, grupo de Lich (132,200) |
-| 20 → 100 | Devias 4 (el spot pegado a la llegada). Con 3+ jugadores encima: Arena 1 desde el 50, otra entrada de Devias antes |
+| 20 → 100 | Devias 4 (el spot pegado a la llegada). Lleno o sin exp: otra entrada de Devias (3 o 2); Arena 1 solo si todas están llenas |
 | 100 → 400 | La esquina (7,11) de Arena 2: skill de área al grupo más grande, espera la reaparición. Con la esquina llena: 5 min en la Arena de su nivel |
 | 400 | `/reset`, vuelve a entrar y empieza otra vez |
 
