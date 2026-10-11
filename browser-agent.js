@@ -29,7 +29,7 @@
   for (const id of window.__mubotTimers ?? []) clearInterval(id);
   window.__mubotTimers = [];
   const setInterval = (fn, ms) => { const id = window.setInterval(fn, ms); window.__mubotTimers.push(id); return id; };
-  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch', 'eventTimer']) if (old?.[t]) clearInterval(old[t]);
+  for (const t of ['timer', 'sampler', 'mgr', 'saver', 'markVisited', 'densityTimer', 'caster', 'deathTimer', 'looter', 'campMem', 'segTimer', 'expCompactor', 'castWatch', 'idleWatch', 'eventTimer', 'atlasTimer']) if (old?.[t]) clearInterval(old[t]);
   const S = __store, W = () => __world;
   // Lo aprendido sobrevive a un F5: localStorage por personaje.
   const KEY = `mubot-ai:${S.playerData?.name ?? 'pj'}`;
@@ -797,6 +797,33 @@
   const CAMPS_KEY = `mubot-camps:${S.playerData?.name ?? 'pj'}`;
   try { ai.campHist = old?.campHist ?? JSON.parse(localStorage.getItem(CAMPS_KEY) || '{}'); } catch { ai.campHist = {}; }
   let lastCamp = null;
+  // Pistas del atlas de los exploradores (explorer.js en otra pestaña: localStorage `mubot-atlas:<pj>`,
+  // compartido entre pestañas del mismo sitio). Usuario: "actualizá el algoritmo de Horaz" con lo que
+  // explora Melu. Cada minuto, por mapa de la ruta: los spots marcados y las 3 zonas con más
+  // monstruos entran a la memoria de campamentos como candidatos (rate = lo normal del tramo × 1,1).
+  // Al usarlos, Horaz mide su exp real y esa medición los corrige (campMem, entrada a <= 4 tiles).
+  const WARP_MAP = { 2: 0, 3: 3, 4: 2, 5: 2, 6: 2, 7: 2, 24: 83, 25: 84, 26: 85 };
+  ai.importAtlasHints = () => {
+    let added = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i); if (!k?.startsWith('mubot-atlas:') || k === `mubot-atlas:${S.playerData?.name}`) continue;
+      let a; try { a = JSON.parse(localStorage.getItem(k) || 'null'); } catch { continue; } if (!a) continue;
+      for (const sp of ai.cfg.spots) {
+        const map = WARP_MAP[sp[0]]; if (map == null) continue;
+        const ref = ai.tierRef?.[`t${sp[2]}`] ?? 0; if (!ref) continue;
+        const hints = [];
+        for (const s2 of a.spots ?? []) if (s2.map === map) hints.push({ x: s2.x, z: s2.z, w: 1.5 });
+        const cells = Object.values(a.maps?.[map] ?? {}).map((types) => { const vs = Object.values(types); const tot = vs.reduce((n, v) => n + (v.seen ?? 0), 0); const top = vs.sort((x, y) => (y.seen ?? 0) - (x.seen ?? 0))[0]; return { tot, x: top?.xy?.[0], z: top?.xy?.[1] }; }).filter((c) => c.x != null && c.tot >= 8).sort((x, y) => y.tot - x.tot).slice(0, 3);
+        for (const c of cells) hints.push({ x: c.x, z: c.z, w: 1.1 });
+        const list = (ai.campHist[map] ??= []);
+        for (const h of hints) if (!list.some((e) => dist(e, h) <= 6)) { list.push({ x: h.x, z: h.z, rate: ref * h.w, n: 1, level: null, hint: k.slice(12) }); added++; }
+        list.sort((x, y) => y.rate - x.rate); list.length = Math.min(list.length, 20);
+      }
+    }
+    if (added) { try { localStorage.setItem(CAMPS_KEY, JSON.stringify(ai.campHist)); } catch {} L(`atlas: ${added} spot(s) nuevos de exploradores en la memoria`); }
+    return added;
+  };
+  ai.atlasTimer = setInterval(() => { try { ai.importAtlasHints(); } catch {} }, 60000);
   ai.campMem = setInterval(() => {
     const w = W(); if (!w?.playerEntity || S.sceneLoading || S.uiState !== 5) return;
     const cur = ai.camp;
