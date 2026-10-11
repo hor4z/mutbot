@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, RECONNECT, buildPartyDecline, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -261,6 +261,14 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   const w = buildWhisper('Melu', 'ven');
   ok('mandar: susurro C1 len 02 destino', w[2] === 2 && Buffer.from(w.subarray(3, 7)).toString() === 'Melu' && w.length === 16);
   ok('mandar: corta en CHAT_MAX', buildPublicChat('A', 'x'.repeat(200)).length === 13 + CHAT_MAX);
+}
+
+// --- Aggro ------------------------------------------------------------------------------------
+{
+  ok('aggro: golpe 0x18 a mí → atacante', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2a]), 0x2a) === 0x410);
+  ok('aggro: skill 0x19 a mí → atacante', attackerOf(Uint8Array.from([0xc3, 9, 0x19, 0, 41, 0x84, 0x10, 0x80, 0x2a]), 0x2a) === 0x410);
+  ok('aggro: a otro → null', attackerOf(Uint8Array.from([0xc1, 9, 0x18, 0x04, 0x10, 2, 120, 0x00, 0x2b]), 0x2a) === null);
+  ok('aggro: área 0x1E → null', attackerOf(Uint8Array.from([0xc1, 9, 0x1e, 0, 0, 0, 0, 0, 0x2a]), 0x2a) === null);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);

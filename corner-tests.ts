@@ -3,7 +3,7 @@
  *
  *   bun run corner-tests.ts
  */
-import { CORNER, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -56,6 +56,23 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
     !cornerActive({ level: 99, resetLevel: 400, awayUntil: 0, now }) && !cornerActive({ level: 400, resetLevel: 400, awayUntil: 0, now }));
   ok('afuera: no activa hasta awayUntil', !cornerActive({ level: 200, resetLevel: 400, awayUntil: now + 1, now }));
   ok('parámetros: esquina (7,11) de Arena 2 (83, warp 24)', CORNER.map === 83 && CORNER.warp === 24 && CORNER.home.x === 7);
+}
+
+// --- Lados de la esquina --------------------------------------------------------------------------
+{
+  const cs = new CornerSides();
+  ok('lados: arranca en la esquina', cs.pick(0, []).name === 'esquina');
+  ok('lados: se queda 40 s aunque haya gente', cs.pick(10_000, [{ x: 2, y: 10 }, { x: 3, y: 10 }]).name === 'esquina');
+  // Mide la esquina: 30M en 20 s cerca → 90M/min.
+  cs.record(41_000, { x: 2, y: 10 }, 0);
+  cs.record(61_000, { x: 2, y: 10 }, 30e6);
+  ok('lados: mide exp/min con ventanas de 15 s', Math.round(cs.stats.get('esquina')!.rate / 1e6) === 90, cs.stats.get('esquina'));
+  // A los 40 s: medio y este sin medir valen 90 × 1,1 = 99 > 90 × 1,15? No: se queda.
+  ok('lados: un lado sin medir no gana si no supera el 15 %', cs.pick(61_000, []).name === 'esquina');
+  // Con 3 rivales en la esquina, 90/(1+0,75) = 51 < 99 → se va a otro.
+  ok('lados: con rivales encima prueba otro lado', cs.pick(102_000, [{ x: 2, y: 10 }, { x: 2, y: 11 }, { x: 3, y: 10 }]).name !== 'esquina');
+  ok('lados: lejos del lado no mide', (() => { const c2 = new CornerSides(); c2.record(0, { x: 30, y: 30 }, 0); c2.record(20_000, { x: 30, y: 30 }, 5e6); return !c2.stats.has('esquina'); })());
+  ok('lados: tres posiciones', SIDES.length === 3 && SIDE.dwellMs === 40_000);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE LA ESQUINA PASARON' : `\n${fails} TEST(S) DE LA ESQUINA FALLARON`);

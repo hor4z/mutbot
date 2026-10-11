@@ -199,3 +199,18 @@ export function buildWhisper(to: string, text: string): Uint8Array {
   const t = [...Buffer.from(text.slice(0, CHAT_MAX), 'latin1')];
   return Uint8Array.from([0xc1, 13 + t.length, 0x02, ...nameField(to), ...t]);
 }
+
+// ---------------------------------------------------------------------------
+// Quién me pega (aggro). ObjectAnimation C1 09 18 <atacante u16> <dir> <anim> <objetivo u16> (golpe)
+// y SkillAnimation C3 09 19 <skill u16> <atacante u16> <objetivo u16> (skill dirigido). El área (0x1E)
+// no trae objetivo: daba falsos positivos en el navegador. Devuelve el id del atacante si el objetivo
+// soy yo (`me` sin el bit 0x8000), o null.
+// ---------------------------------------------------------------------------
+export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number): number | null {
+  const b = u8(raw);
+  if (b.length < 9) return null;
+  const u16 = (i: number) => ((b[i] << 8) | b[i + 1]) & 0x7fff;
+  if (b[2] === 0x18 && u16(7) === me) return u16(3);
+  if (b[2] === 0x19 && u16(7) === me) return u16(5);
+  return null;
+}
