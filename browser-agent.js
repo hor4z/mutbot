@@ -783,8 +783,9 @@
     // Usuario 2026-10-11: "las joyas no valen nada en el juego, se compran"; lo que importa es mejorar
     // el set. Se levantan las cajas (14/11: Box of Luck / de Kundun) y cualquier item excelente (armas,
     // escudos y partes de set, grupos 0-11). Antes solo las partes de set con num 1 (un error) y joyas.
-    if (di.group === 14 && di.num === 11) return true;
-    return di.group <= 11 && !!di.item?.isExcellent; // comunes no: juntó 9 pares de guantes +2/+3
+    // Después: "Horaz tiene unos guantes excelentes que no sirven, no tiene sentido juntar eso" (y al
+    // tirarlos el looter los volvía a levantar). Solo cajas.
+    return di.group === 14 && di.num === 11;
   };
   ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {

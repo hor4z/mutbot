@@ -317,12 +317,16 @@
     // que llegue el MapEventState.
     const R = red(), redLive = R?.on && Date.now() - R.at < 12 * 60000 && MAPS[R.map] && lvl >= MAPS[R.map].lvl;
     if (h.on && h.redHunt) {
-      const why = !redLive ? 'terminó el Dragón Rojo' : R.map !== h.map ? null : (Date.now() - h.startedAt) / 60000 > 12 ? '12 min' : null;
+      // Sin un dragón a la vista en 3 min se deja (usuario: "hace minutos buscando dragones, ya estamos
+      // perdiendo tiempo"); antes seguía hasta 12 min. La invasión dura 30 min: no se vuelve a arrancar.
+      { const w = W(); if (w) for (const e of w.byNetId.values()) if (isGold(e) && (e.npcType === 44 || e.npcType === 79)) { h.lastSeenGold = Date.now(); break; } }
+      const why = !redLive ? 'terminó el Dragón Rojo' : R.map !== h.map ? null : Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0) > 3 * 60000 ? '3 min sin ver un dragón' : (Date.now() - h.startedAt) / 60000 > 12 ? '12 min' : null;
+      if (why === '3 min sin ver un dragón') jset('mubot:red-giveup', R.at);
       if (why) { h.stop(why); h.redHunt = false; return; }
       if (R.map !== h.map) { h.stop(`Dragón Rojo en ${MAPS[R.map].name}`); h.start(R.map, false); h.redHunt = true; }
       return;
     }
-    if (h.auto && redLive && (!h.on || h.pre)) { if (h.on) h.stop('Dragón Rojo'); h.start(R.map, false); h.redHunt = true; ai.L(`HUNTER: Dragón Rojo en ${MAPS[R.map].name} → a cazar`); return; }
+    if (h.auto && redLive && jget('mubot:red-giveup', 0) !== R.at && (!h.on || h.pre)) { if (h.on) h.stop('Dragón Rojo'); h.start(R.map, false); h.redHunt = true; ai.L(`HUNTER: Dragón Rojo en ${MAPS[R.map].name} → a cazar`); return; }
     const ann = Number(localStorage.getItem('mubot:red-announced') || 0);
     if (h.auto && !h.on && !redLive && Date.now() - ann < 90000 && Date.now() - (h.redProbeAt ?? 0) > 7000) {
       const order = me === 'Melu' ? RED_MAPS : [...RED_MAPS].reverse(); h.redProbeIdx = ((h.redProbeIdx ?? -1) + 1) % order.length;
