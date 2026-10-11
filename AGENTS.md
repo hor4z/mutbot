@@ -531,6 +531,11 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Espera en el lado (esquina / medio / este) que más exp/min midió.
   - Prioriza a los monstruos que le pegaron (aggro, 0x18/0x19) a ≤ 15 tiles.
   - Compite si rinde (con 2+ jugadores encima no camina, gira con lo que entra). Se va 5 min a la Arena de su nivel si rinde menos que esa Arena medida (piso 60M): llena (3+ jugadores, 60 s) o sin rendir (90 s, aunque no haya nadie).
+- **Dúo en la esquina** (pedido del usuario: Horaz plantado en la esquina y Melu al lado se quedan con el sector):
+  - Los compañeros (`MUBOT_MATES`, que la estación pasa con todos sus personajes; por defecto Horaz y Melu) se reconocen por el nombre, que viene en `AddCharactersToScope`: byte 14 en el formato 075 de 27 bytes, byte 18 en el 095 de 31.
+  - No cuentan como rivales: ni para "esquina llena", ni para la elección de lado, ni para la defensa.
+  - Si un compañero está en la esquina, los lados que ocupa no se eligen y se cambia ya; el DK se planta en la esquina (2,10) si está libre.
+  - **Sin party**: se rechaza toda invitación. Con party la exp se reparte; en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min. `--party-mates` acepta party solo de un compañero.
 - **Dorados** (`golden.ts`): farmeando, un dorado a ≤ 20 tiles es el objetivo, dragones (44/79) primero. A los 2 min sin matarlo se deja. Mientras dura, y 15 s después para las cajas, no resetea, no cambia de spot ni vuelve a la esquina.
 - **Defensa propia** (`defense.ts`):
   - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.

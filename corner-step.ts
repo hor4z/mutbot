@@ -5,13 +5,13 @@
  */
 import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
-import { pickAttackSkill, useSkill } from './combat';
+import { isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, CornerSides, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { journal, panelLog } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 import { WARP_COOLDOWN_MS, WARP_SPOTS, warpAndWait } from './route';
-import { bot, expLog, monsterName, world } from './state';
+import { bot, expLog, isMate, monsterName, world } from './state';
 import { chebyshev, directionTowards, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
@@ -19,6 +19,9 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
   altRates: Map<number, number> };
+
+// Jugadores que cuentan como rivales: todos menos los compañeros (MUBOT_MATES).
+const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
   return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map() };
@@ -59,7 +62,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     corner.expSeen = ctx.expTotal;
     // Llena (3+ jugadores, 60 s) o sin rendir (90 s) y rindiendo menos que la Arena de afuera medida →
     // 5 min a la Arena de su nivel. Si rinde, compite aunque haya gente.
-    const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
+    const rivals = rivalPlayers().filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
     const altRate = corner.altRates.get(altWarp(world.level));
     if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate })) {
@@ -113,12 +116,14 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       bot.doing = 'esquina de Arena 2: levantando loot';
       return;
     }
-    const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
+    const playersNear = rivalPlayers().filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
     // El que me pega primero; si no, el grupo; si no, el lado elegido por exp medida.
     // (el que me pega, solo si está dentro de la esquina: si no, salía de la esquina y volvía sin parar)
     const aggroHere = aggro && Math.hypot(aggro.x - CORNER.home.x, aggro.y - CORNER.home.y) <= CORNER.radius + CORNER.fill ? aggro : null;
     const ct = aggroHere ?? cornerTarget(me, mons, playersNear, r);
-    const goal = ct ?? corner.sides.pick(now, [...world.players.values()]);
+    // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
+    const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
+    const goal = ct ?? corner.sides.pick(now, rivalPlayers(), mates, !isMage());
     // Sin skill hay que llegar pegado para el golpe normal.
     const reach = ct ? (skill ? r : 1) : 0.8;
     bot.goalPoint = [goal.x, goal.y];

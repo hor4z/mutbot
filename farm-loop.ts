@@ -14,7 +14,7 @@ import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
 import { attackerOf } from './protocol097';
-import { GOLDEN_TYPES } from './state';
+import { GOLDEN_TYPES, MATES } from './state';
 import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
@@ -52,7 +52,7 @@ const typeKills: Record<number, number> = {};
 let lastDeathAt = -Infinity;
 let economyWatched = false;
 // Defensa propia (defense.ts) y aggro: quién me pega, de los paquetes 0x18/0x19 (protocol097.ts).
-const defense = new Defense();
+const defense = new Defense(new Set([...MATES]));
 let lastFleeAt = 0;
 // Invasión ya cazada por el cazador automático (una por invasión).
 let lastAutoHuntKey: number | null = null;
@@ -315,7 +315,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //     con vida < 35 % me voy a Lorencia y evito ese mapa 5 min.
     {
       const nowD = Date.now();
-      const foe = defense.target({ x: world.x, y: world.y }, [...world.players].map(([id, q]) => ({ id, x: q.x, y: q.y })), nowD);
+      const foe = defense.target({ x: world.x, y: world.y }, [...world.players].map(([id, q]) => ({ id, x: q.x, y: q.y, name: q.name })), nowD);
       if (foe) {
         const hpPct = world.maxHp > 0 ? world.hp / world.maxHp : 1;
         if (world.map !== 0 && nowD - lastFleeAt > 30_000 && defense.shouldFlee(hpPct, world.map, nowD)) {
