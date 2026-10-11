@@ -41,6 +41,7 @@ import {
 import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './explore';
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
 import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
+import { CORNER, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { isSafeZone } from './terrain';
 import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, isObjectMovedPacket, parseItemDropRemoved, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
@@ -1939,6 +1940,103 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // Objetivo a distancia de golpe que no muere: tras TARGET_NO_KILL_MS se abandona (red de seguridad
   // si la posición que conocemos del monstruo no es la real).
   const goldReporter = new GoldReporter(charName);
+  // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff.
+  let cornerAwayUntil = 0;
+  let cornerSince: number | null = null;
+  let cornerRouteIdx: number | null = null;
+  let cornerRouteAt = 0;
+  let cornerBuffAt = 0;
+  const cornerStep = async () => {
+    const now = Date.now();
+    const arena2 = WARP_SPOTS.find((sp) => sp.index === CORNER.warp)!;
+    if (world.map !== CORNER.map) {
+      cornerSince = null;
+      cornerRouteIdx = null;
+      target = null;
+      if (now - lastWarpAt < WARP_COOLDOWN_MS) {
+        doing = 'esperando para ir a la esquina de Arena 2';
+        await sleep(500);
+        return;
+      }
+      doing = `viajando a la esquina de Arena 2 (nivel ${world.level})`;
+      journal('travel', `warp a Arena 2 para la esquina (nivel ${world.level})`, { warp: CORNER.warp, reason: 'corner' });
+      if (await warpAndWait(arena2)) log(`Esquina: en Arena 2 en nivel ${world.level}.`);
+      return;
+    }
+    currentSpot = arena2;
+    const me = { x: world.x, y: world.y };
+    const skill = pickAttackSkill();
+    const r = spinRange(skill?.number);
+    const mons = [...npcs.values()];
+    // Pegar: lo que deja más monstruos en el giro, a ritmo de skill.
+    const st = spinTarget(me, mons, r);
+    if (st && skill && Date.now() - lastCastAt >= SKILL_PACE_MS) {
+      phase = 'fight';
+      doing = `esquina de Arena 2: giro con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
+      if (useSkill(st.id)) {
+        lastCastAt = Date.now();
+        skillsUsed++;
+      }
+      await sleep(SKILL_PACE_MS);
+      return;
+    }
+    if (inCorner(me)) {
+      cornerSince ??= now;
+      // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
+      const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
+      if (cornerFull({ rivals, inCornerSince: cornerSince, now, rate1m: expLog.perMin(now, 60_000) })) {
+        cornerAwayUntil = now + CORNER.awayMs;
+        cornerSince = null;
+        currentSpot = null;
+        panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(expLog.perMin(now, 60_000) / 1e6)}M/min el último minuto): voy a la Arena de mi nivel (warp ${altWarp(world.level)}) por ${CORNER.awayMs / 60_000} min.`);
+        return;
+      }
+      // Buff propio (Swell Life 48 / Mana Shield 16) cada ~55 s.
+      const buff = [48, 16].map((k) => world.skills.get(k)).find((x) => x != null);
+      if (buff && now - cornerBuffAt > CORNER.buffMs && now - lastCastAt >= SKILL_PACE_MS) {
+        cornerBuffAt = now;
+        lastCastAt = now;
+        sendTargetedSkill(buff.index, playerId);
+        await sleep(SKILL_PACE_MS);
+        return;
+      }
+      // Sin nada a tiro: levantar cajas cerca, o caminar al grupo, o esperar en la esquina.
+      if (await lootStep()) {
+        doing = 'esquina de Arena 2: levantando loot';
+        return;
+      }
+      const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
+      const ct = cornerTarget(me, mons, playersNear, r);
+      const goal = ct ?? CORNER.wait;
+      goalPoint = [goal.x, goal.y];
+      if (Math.hypot(goal.x - world.x, goal.y - world.y) > (ct ? r : 0.8)) {
+        phase = 'walk';
+        doing = ct ? `esquina de Arena 2: voy al grupo de ${monsterName(ct.type)}` : 'esquina de Arena 2: espero la reaparición';
+        await walkTowards(goal.x, goal.y);
+        return;
+      }
+      phase = 'wait';
+      doing = 'esquina de Arena 2: espero la reaparición';
+      await sleep(300);
+      return;
+    }
+    // Viajando por el camino de la llegada a la esquina (sin pelear salvo lo que bloquea).
+    cornerSince = null;
+    if (cornerRouteIdx == null || now - cornerRouteAt > 20_000) cornerRouteIdx = null;
+    const wp = nextRoutePoint(me, cornerRouteIdx);
+    cornerRouteIdx = wp.idx;
+    cornerRouteAt = now;
+    const blocker = cornerTarget(me, mons, 0, r);
+    if (blocker && skill && Date.now() - lastCastAt >= SKILL_PACE_MS) {
+      if (useSkill(blocker.id)) lastCastAt = Date.now();
+      await sleep(SKILL_PACE_MS);
+      return;
+    }
+    phase = 'walk';
+    goalPoint = [wp.x, wp.y];
+    doing = `camino a la esquina de Arena 2 (${wp.idx + 1}/${CORNER.route.length})`;
+    await walkTowards(wp.x, wp.y);
+  };
   let attackTarget: number | null = null;
   let attackSince = 0;
   let lastX = world.x;
@@ -2102,6 +2200,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const spent = await investStatPoints();
     if (spent) {
       statPointsSpent += spent;
+      continue;
+    }
+
+    // 3b) La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, salvo cazando, con un
+    //     spot fijado por el panel o mientras está afuera porque estaba llena.
+    // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.
+    if (cornerAwayUntil && Date.now() >= cornerAwayUntil && world.level >= CORNER.noReturnLevel) cornerAwayUntil = Date.now() + 60_000;
+    if (!hunting && !pinnedSpot && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: cornerAwayUntil, now: Date.now() })) {
+      await cornerStep();
       continue;
     }
 

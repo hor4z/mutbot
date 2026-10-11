@@ -104,14 +104,14 @@ const MIN = 60_000;
   const go = (o: Partial<Parameters<typeof chooseFixedRoute>[0]> & { level: number; current: Spot | null }) => chooseFixedRoute({ ...base, ...o });
 
   ok('tramos: <20 Lorencia, 20-99 Devias, 100/200/300 Arenas 2/3/4',
-     routeTier(5).warps.join() === '2' && routeTier(19).warps.join() === '2' && routeTier(20).warps.join() === '6,7,5' && routeTier(99).warps.join() === '6,7,5' &&
+     routeTier(5).warps.join() === '2' && routeTier(19).warps.join() === '2' && routeTier(20).warps.join() === '7,6,5' && routeTier(99).warps.join() === '7,6,5' &&
      routeTier(100).warps.join() === '24' && routeTier(250).warps.join() === '25' && routeTier(399).warps.join() === '26');
   let c = go({ level: 15, current: null, currentMap: 0 });
   ok('nivel < 20 parado en Lorencia: adopta sin warpear', c.reason === 'adopt' && c.spot?.index === 2 && !c.warp, c);
   c = go({ level: 5, current: null, currentMap: 3 });
   ok('nivel < 10 fuera de Lorencia: no puede warpear, se queda', !c.warp, c);
   c = go({ level: 20, current: sp(2) });
-  ok('cruza el 20: Devias 3 (la preferida), nunca Devias 1', c.reason === 'new-tier' && c.spot?.index === 6 && c.warp, c);
+  ok('cruza el 20: Devias 4 (la preferida), nunca Devias 1', c.reason === 'new-tier' && c.spot?.index === 7 && c.warp, c);
   c = go({ level: 60, current: sp(7) });
   ok('en Devias 4 a nivel 60, sin nada raro: se queda (no prueba otros mapas)', c.reason === 'stay' && !c.warp, c);
   c = go({ level: 60, current: null, currentMap: 2 });

@@ -57,7 +57,8 @@ export function activeDryExclusions(dryAt: ReadonlyMap<number, number>, now: num
 export type RouteTier = { minLevel: number; warps: readonly number[]; map: number };
 export const FIXED_ROUTE: readonly RouteTier[] = [
   { minLevel: 0, warps: [2], map: 0 },
-  { minLevel: 20, warps: [6, 7, 5], map: 2 },
+  // Devias 4 primero (el spot lleno pegado a la llegada, el que usaba el navegador), Devias 3 y 2 si está llena.
+  { minLevel: 20, warps: [7, 6, 5], map: 2 },
   { minLevel: 100, warps: [24], map: 83 },
   { minLevel: 200, warps: [25], map: 84 },
   { minLevel: 300, warps: [26], map: 85 },
