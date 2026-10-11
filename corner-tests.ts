@@ -5,7 +5,7 @@
  */
 import { mageNeedsPower, spotIsTight } from './combat';
 import { world } from './state';
-import { mageCenter, CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { contestTarget, mageCenter, CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -124,6 +124,16 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('mago solo: el centro es el grupo grande (5 a tiro)', c.n >= 5 && Math.hypot(c.at.x - 12, c.at.y - 12.5) <= 1.5, c);
   ok('mago solo sin monstruos: home', mageCenter([], 5).at.x === CORNER.home.x);
   ok('mago solo: ignora monstruos fuera de la esquina', mageCenter([{ x: 60, y: 60 }, { x: 61, y: 60 }], 5).n === 0);
+}
+
+// --- Disputarle el grupo a un rival del top -----------------------------------------------------------
+{
+  const me = { x: 7, y: 11 };
+  const mine = [{ x: 9, y: 12 }, { x: 10, y: 12 }];
+  const his = [{ x: 4, y: 8 }, { x: 5, y: 8 }];
+  const t = contestTarget(me, [...mine, ...his], { x: 3, y: 6 }, 3.5, 5);
+  ok('rival cerca: el mago apunta al grupo del rival', t != null && t.y === 8, t);
+  ok('rival cerca sin monstruos a tiro: null', contestTarget(me, [{ x: 40, y: 40 }], { x: 3, y: 6 }, 3.5, 5) === null);
 }
 
 // --- No irse de la esquina -------------------------------------------------------------------
