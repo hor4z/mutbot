@@ -101,7 +101,7 @@
     });
     window.__redHooked = true;
   }
-  const aliveIn = (map) => window.__invasion?.maps?.find((m) => m.map === map)?.alive ?? 0;
+  const aliveIn = (map) => (h.practicing ? 60 : window.__invasion?.maps?.find((m) => m.map === map)?.alive ?? 0);
   // Qué tan bien rindió cada mapa en cacerías anteriores (dorados por minuto); sin datos, Noria primero.
   const mapScore = (map) => {
     const past = hunts.filter((x) => x.map === map && x.min > 0.5);
@@ -177,9 +177,12 @@
     return { ...best, kind: 'hunter' };
   };
 
-  if (!ai.huntWrapped) {
-    const ip = ai.pickTarget;
-    ai.pickTarget = (w, P, c) => {
+  // Al recargar hunter.js se reemplaza el envoltorio (antes quedaba el viejo, atado al __hunt viejo con
+  // on=false: tras recargar solo este archivo, la cacería no elegía dorados ni metas y el agente
+  // armaba campamentos). Los originales quedan en ai.huntInner / ai.huntInnerGoal.
+  {
+    const ip = (ai.huntInner ??= ai.pickTarget);
+    const wrapped = (w, P, c) => {
       if (h.on && w.mapIndex === h.map) {
         const b = sighting(w, P); if (b) return b;
         // Comunes: no se pelean mientras se busca (quedaba "colgado" matando monstruos). Solo si la vida
@@ -189,7 +192,9 @@
       }
       return ip(w, P, c);
     };
-    const ng = ai.nextGoal;
+    // Con corner.js cargado, el cazador va debajo de la esquina (ai.cornerInner); si no, directo.
+    if (ai.cornerInner) ai.cornerInner = wrapped; else ai.pickTarget = wrapped;
+    const ng = (ai.huntInnerGoal ??= ai.nextGoal);
     ai.nextGoal = (P, w) => (h.on && w.mapIndex === h.map ? reportGoal(P, w) ?? (h.pre && h.waitAt ? { ...h.waitAt, kind: 'hunter:espera' } : nextCell(P, w)) : null) ?? ng(P, w);
     ai.huntWrapped = true;
   }
@@ -221,6 +226,7 @@
     ai.L(`HUNTER: fin (${why}): ${min.toFixed(1)} min, ${kills} dorados vistos, nivel ${h.lvl0} → ${S.playerData.level}`);
   };
   h.history = () => hunts.slice(-10);
+  h.practice = (map = h.prepos ?? 0) => { localStorage.removeItem('mubot:hunt-checked'); Object.assign(h, { practicing: true, practiceDone: false, practiceAt: Date.now(), invStart: Date.now() }); h.start(map); h.invStart = Date.now(); ai.L('HUNTER: ensayo de búsqueda (sin invasión)'); return 'ensayo'; };
   // Mapa de espera, punto exacto (x, z) y gira de dragón (mapas a revisar si en tourSec no aparece
   // nada en el actual). Usuario: "los dragones salen cerca" (Lorencia 149,168 a las 21:50; en Devias
   // junto a la llegada de Devias 3 a las 19:50).
@@ -284,7 +290,10 @@
   h.timer = window.setInterval(() => {
     if (!ai.on || ai.busy || S.uiState !== 5) return;
     if (lootPending()) return;
-    const inv = window.__invasion, active = inv?.status === 1 && Date.now() - inv.at < 120000, lvl = S.playerData.level;
+    // Ensayo (h.practice(), fuera de invasión): corre el mismo recorrido de salidas como si hubiera una,
+    // para medir tiempos y ver dónde se cuelga sin esperar a las :50.
+    const inv = window.__invasion, active = h.practicing || (inv?.status === 1 && Date.now() - inv.at < 120000), lvl = S.playerData.level;
+    if (h.practicing && !h.on && !h.practiceDone) { h.practiceDone = true; h.practicing = false; ai.L(`HUNTER: ensayo terminado en ${((Date.now() - h.practiceAt) / 1000).toFixed(0)} s`); return; }
     // Aviso de un buscador (usuario: "si Melu detecta algo, mandá a Horaz al instante"): con o sin
     // invasión, si el mapa está al alcance. Corta cuando ese dorado ya no aparece (45 s sin avisos ni
     // dorados a la vista) o a los 6 min.
@@ -297,7 +306,7 @@
     if (active && !h.invStart) h.invStart = Date.now(); if (!active) h.invStart = null;
     // Registro por invasión (compartido): conteos por mapa al arrancar + grandes vistos. Sirve para ver si
     // el mapa con dragón se nota en los conteos (0xFD) y para medir cada cambio de la búsqueda.
-    if (active) { const L = jget('mubot:inv-log', []), key = new Date(inv.at).toISOString().slice(0, 13); if (!L.some((x) => x.key === key)) { L.push({ key, at: Date.now(), maps: inv.maps, big: [] }); jset('mubot:inv-log', L.slice(-60)); } }
+    if (active && !h.practicing) { const L = jget('mubot:inv-log', []), key = new Date(inv.at).toISOString().slice(0, 13); if (!L.some((x) => x.key === key)) { L.push({ key, at: Date.now(), maps: inv.maps, big: [] }); jset('mubot:inv-log', L.slice(-60)); } }
     if (h.on && h.pre) { if (active) h.pre = false; else if (![49, 50].includes(nowD.getMinutes())) { h.stop('no hubo invasión'); return; } else return; }
     if (!h.on && h.auto && h.prepos && !active && nowD.getMinutes() === 49 && nowD.getSeconds() >= 20 && lvl >= (MAPS[h.prepos]?.lvl ?? 0)) { h.start(h.prepos, false, true); ai.L(`HUNTER: me paro en ${MAPS[h.prepos].name} a esperar la invasión`); return; }
     // Dragón Rojo: con el mapa conocido, cazar ahí hasta que el server diga que terminó (o 12 min).

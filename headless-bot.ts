@@ -173,10 +173,13 @@ type MonsterRow = {
 //
 // Los dorados de la invasión (Golden Dragon Move 88, Golden Titan 77, ...) se
 // pasan del tope de Move: sin sumarlos aparte el bot no los veía nunca.
+// Sin tope de Move (2026-10-11): con Move <= 50 el bot quedaba ciego en Arena 2/3/4 (Deathvim Knight 220,
+// Phantom Knight 270, Gaint Drakan 305) y en casi todo lo de nivel alto. Los guardias del pueblo ya los
+// excluye isMonsterType (rango 200-299).
 const GOLDEN_TYPES = goldenTypes(monstersData as MonsterRow[]);
 const MONSTER_TYPE_NUMBERS = new Set([
   ...(monstersData as MonsterRow[])
-    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.Move <= 50 && m.HP > 0)
+    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.HP > 0)
     .map((m) => m.Numb),
   ...GOLDEN_TYPES,
 ]);
