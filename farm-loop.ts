@@ -9,6 +9,8 @@ import { CAMP } from './camp';
 import { castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, cornerActive } from './corner';
 import { cornerStep, newCornerState } from './corner-step';
+import { EARLY, dist, leashedTarget } from './early';
+import { EarlyPlanner } from './early-step';
 import { EXPLORE, Explorer } from './explore';
 import { SelfReport } from './farming';
 import { journal, panelLog } from './journal';
@@ -162,6 +164,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // Esquina de Arena 2 (corner-step.ts).
   const corner = newCornerState();
   let devCrowdSince: number | null = null;
+  const early = new EarlyPlanner();
   let attackTarget: number | null = null;
   let attackSince = 0;
   // Explorador (explore.ts): spots calientes, salidas del pueblo y mapa seco.
@@ -317,13 +320,19 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 5) ¿Cambiar de spot? (ruta fija: tramo nuevo, competencia, hambre). Cada
     //    10 ticks, o ya si hay hambre/competencia; respeta WARP_COOLDOWN_MS.
     // Devias lleno (como el navegador): 3+ jugadores a <= 8 del campamento durante 20 s.
-    const devCrowd = world.map === 2 && world.level < CORNER.minLevel && camps.camp != null &&
-      [...world.players.values()].filter((q) => chebyshev(q.x, q.y, camps.camp!.x, camps.camp!.y) <= 8).length >= 3;
+    const inEarly = early.active();
+    const crowdCamp = inEarly ? early.camp : camps.camp;
+    const devCrowd = world.map === 2 && world.level < CORNER.minLevel && crowdCamp != null &&
+      [...world.players.values()].filter((q) => chebyshev(q.x, q.y, crowdCamp.x, crowdCamp.y) <= 8).length >= 3;
     if (devCrowd) devCrowdSince ??= now0;
     else devCrowdSince = null;
     const devCrowded = devCrowdSince != null && now0 - devCrowdSince > 20_000;
     if (devCrowded) log(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de spot.`);
-    const crowded = hungry.starving || camps.crowdedSpot(now0) || devCrowded;
+    // En el arranque solo cuenta Devias lleno (el navegador tenía el hambre apagado debajo del 100), con
+    // una red: 45 s sin NADA de exp con jugadores cerca (17 jugadores en Devias 4 a las 13 h: 99 skills
+    // y 0 kills, los demás matan primero).
+    const earlyStarving = inEarly && hungry.starving && recentRate === 0;
+    const crowded = inEarly ? devCrowded || earlyStarving : hungry.starving || camps.crowdedSpot(now0) || devCrowded;
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
     if (!bot.hunting && (ticks % 10 === 0 || crowded || !bot.currentSpot)) {
@@ -332,7 +341,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         ctx.target = null;
         continue;
       }
-      if (hungry.starving && learned.camps.camp && now0 - learned.camps.camp.since > CAMP.HUNGER_WINDOW_MS) {
+      if (!inEarly && hungry.starving && learned.camps.camp && now0 - learned.camps.camp.since > CAMP.HUNGER_WINDOW_MS) {
         // No hay otra entrada/mapa: al menos cambiar de campamento.
         learned.camps.leave(now0, world.level, 'hambre con jugadores cerca', true, expLog);
         logCampEvents();
@@ -397,6 +406,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           ctx.target = near.id;
           targetType = near.type;
           targetSince = now;
+          stuckCount = 0;
+        }
+      }
+    } else if (early.active()) {
+      // Arranque: objetivo con correa del campamento; uno que se alejó más de 10 se suelta.
+      const { camp } = early.goal(ctx.npcs.values());
+      const cur = ctx.target != null ? ctx.npcs.get(ctx.target) : null;
+      if (cur && dist(cur, camp) > EARLY.dropTargetAt) ctx.target = null;
+      if (ctx.target == null && !early.viaPending()) {
+        const t = leashedTarget({ x: world.x, y: world.y }, camp, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)));
+        if (t) {
+          ctx.target = t.id;
+          targetType = t.type;
+          targetSince = Date.now();
           stuckCount = 0;
         }
       }
@@ -496,6 +519,22 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //  a) Mapa vacío DRY_MAP_MS (90 s): la ruta fija pasa a otra entrada del
     //     tramo (o se queda si no hay); el spot queda excluido un rato.
     const now = Date.now();
+    // Arranque sin objetivo: al campamento (o al punto de paso de Lorencia) y esperar ahí.
+    if (early.active()) {
+      const { goal } = early.goal(ctx.npcs.values());
+      bot.goalPoint = [goal.x, goal.y];
+      if (dist({ x: world.x, y: world.y }, goal) > 2) {
+        ctx.phase = 'walk';
+        bot.doing = `arranque: voy al campamento (${goal.x},${goal.y}) en ${mapName(world.map)}`;
+        castOnTheWay(ctx);
+        await walkTowards(ctx, goal.x, goal.y);
+      } else {
+        ctx.phase = 'wait';
+        bot.doing = `arranque: espero en el campamento (${goal.x},${goal.y}) de ${mapName(world.map)}`;
+        await sleep(300);
+      }
+      continue;
+    }
     //  0) Cacería: recorrer el mapa en celdas de 25 tiles (panel-logic.ts).
     if (bot.hunting) {
       const g = bot.hunting.explorer.next(world.x, world.y, now);
