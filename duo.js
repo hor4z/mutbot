@@ -90,7 +90,9 @@
       // Cooperación (usuario, 2026-10-10: "que cooperen, hacé crecer a Melu"): con window.__coopFight el
       // seguidor pelea de verdad: Evil Spirit al monstruo más cercano a <= 4 tiles cada 0,4 s, con vida
       // > 60 % y maná > 20 %, sin esperar a que el líder esté quieto. Va a <= 2 tiles del líder.
-      if (window.__coopFight && w.mapIndex === h.map && pd.currentHP / pd.maxHP > 0.6 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 400 && !w.castRequest) {
+      // Solo pelea pegada al líder (<= 3 tiles): tirar skills frena la caminata y, si se quedaba atrás,
+      // el líder volvía a buscarla y daban vueltas (Lorencia, 22:30).
+      if (window.__coopFight && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 3 && pd.currentHP / pd.maxHP > 0.6 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 400 && !w.castRequest) {
         // Agrupar (usuario: "agrupando mayor número de atacantes"): con >= 2 monstruos a <= 4 tiles,
         // Evil Spirit (área alrededor); si no, Ice al más lejano a <= 7 tiles que esté lejos del líder,
         // para traerlo al grupo y que el giro del líder lo agarre junto con el resto.
