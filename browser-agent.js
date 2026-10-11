@@ -507,6 +507,9 @@
       if (S.selectSkill && S.currentSkill !== c.skill) S.selectSkill(c.skill);
       if (pd.currentHP > 0 && pd.currentHP / pd.maxHP < c.hpPot && now - ai.lastPotion > 900) { const s = potionSlot(1, 3); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; L(`poción HP (${pd.currentHP}/${pd.maxHP})`); return; } }
       if (pd.currentMP / pd.maxMP < c.mpPot && now - ai.lastPotion > 900) { const s = potionSlot(4, 6); if (s >= 0) { S.consumeItemRequest(s); ai.lastPotion = now; return; } }
+      // Regla fuerte del usuario ("si aparece un dragón o lo que sea dorado lo matás y recogés las
+      // cajas"): con un dorado a la vista o cajas sin levantar (corner.js), no cambiar de mapa.
+      if (window.__corner?.dragon?.() || now < (window.__corner?.dragonUntil ?? 0) || ai.looting) return;
       // Spots: medir exp/min del actual y cambiar si no conviene.
       const run = ai.spotRun;
       const runMin = run ? (now - run.start) / 60000 : 0;
@@ -639,7 +642,7 @@
     // Baúl: con menos de vaultMinFree libres (o < vaultAfterResetFree recién reseteado, que ya está en
     // Lorencia), como mucho cada 3 min. No en medio de una cacería.
     if (!window.__hunt?.on && Date.now() - (ai.lastVault ?? 0) > 180000 && (freeSlots() < ai.cfg.vaultMinFree || (pd.level < 15 && W().mapIndex === 0 && freeSlots() < ai.cfg.vaultAfterResetFree))) { ai.lastVault = Date.now(); return ai.depositToVault(`${freeSlots()} lugares libres`); }
-    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0)) return ai.doReset();
+    if (pd.level >= ai.cfg.resetLevel && Date.now() > (ai.nextResetTry ?? 0) && !(window.__corner?.dragon?.() || Date.now() < (window.__corner?.dragonUntil ?? 0) || ai.looting)) return ai.doReset(); // el reset espera al dorado y sus cajas
     // Prueba del nivel mínimo de reset: 300 y, si lo rechaza, 350. Una vez por nivel, para siempre.
     // Si lo acepta, desde ahí resetea a ese nivel (lo que se mide son resets por día).
     if (ai.resetMin.accepted != null && ai.resetMin.accepted < ai.cfg.resetLevel) ai.cfg.resetLevel = ai.resetMin.accepted;

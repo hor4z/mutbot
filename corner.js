@@ -36,6 +36,31 @@
     setTimeout(() => { if (TEMP.includes(ai.cfg.skill) && C.baseSkill != null) ai.cfg.skill = C.baseSkill; }, 900);
   };
   C.isMage = () => [9, 10, 14, 38].includes(ai.cfg.skill);
+  // Regla fuerte (usuario: "si aparece un dragón o lo que sea dorado lo matás y recogés las cajas"):
+  // dorado vivo a <= 20 tiles mientras farmea, primero Golden Dragon (tipo 79) o Dragón Rojo (44).
+  // Mientras haya uno, la esquina se corre (sin correa, sin campamento) y el agente no cambia de mapa
+  // ni resetea; el objetivo es el dorado. Al morir, 15 s más quieto para que el looter (radio 12)
+  // levante las cajas.
+  C.dragonSeen = C.dragonSeen ?? new Set();
+  C.dragonFirst = C.dragonFirst ?? new Map();
+  C.dragon = () => {
+    const w = W(), pe = w?.playerEntity; if (!pe) return null; const P = pe.transform.pos;
+    let best = null, bd = 21; // los dragones restan 30: van primero aunque haya un dorado chico más cerca
+    for (const e of w.byNetId.values()) {
+      const big = e.npcType === 79 || e.npcType === 44;
+      if (Date.now() - (C.dragonFirst.get(e.netId) ?? Date.now()) > 120000) continue; // 2 min sin matarlo (pared, otro lo tiene): seguir farmeando
+      if (!(big || /^golden /i.test(String(e.objectNameInWorld ?? '').trim())) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 1) <= 0 || !ai.isMonster(e)) continue;
+      const dd = Math.hypot(e.transform.pos.x - P.x, e.transform.pos.z - P.z) - (big ? 30 : 0); if (dd < bd) { bd = dd; best = e; }
+    }
+    if (best && !C.dragonSeen.has(best.netId)) {
+      C.dragonSeen.add(best.netId); C.dragonFirst.set(best.netId, Date.now()); if (C.dragonFirst.size > 200) C.dragonFirst.clear(); const p = best.transform.pos, x = Math.round(p.x), z = Math.round(p.z);
+      ai.L?.(`ESQUINA: ${best.npcType === 44 ? 'Dragón Rojo' : String(best.objectNameInWorld ?? '').trim()} a la vista en (${x},${z}), mapa ${w.mapIndex}: lo ataco`);
+      if (best.npcType === 79) try { const ds = JSON.parse(localStorage.getItem('mubot-dragon-spots') || '{}'); (ds[w.mapIndex] ??= []).push([x, z]); ds[w.mapIndex] = ds[w.mapIndex].slice(-30); localStorage.setItem('mubot-dragon-spots', JSON.stringify(ds)); } catch {}
+      fetch('http://127.0.0.1:8788/gold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: S.playerData.name, map: w.mapIndex, x, y: z, name: String(best.objectNameInWorld ?? '').trim(), id: best.netId, at: Date.now() }) }).catch(() => {});
+    }
+    if (best) C.dragonUntil = Date.now() + 15000; // y 15 s más al morir: quedarse para que el looter levante las cajas
+    return best;
+  };
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
   const hp = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
@@ -53,6 +78,7 @@
       // Modo mago (Evil Spirit / Inferno / Decay / Hellfire pegan en círculo alrededor del mago): no
       // elegir objetivo, así el agente no camina hacia cada monstruo como un DK (usuario: "farmea como
       // DK, se mueve mucho y no usa bien el Spirit"). Los tiros los hace C.fast, desde donde está.
+      if (C?.on && !window.__hunt?.on) { const dg = C.dragon(); if (dg) return dg; }
       if (C?.on && C.isMage() && !window.__hunt?.on) return null;
       if (C?.on && !window.__hunt?.on) {
         const now = Date.now(); let ag = null, ad = 1e9;
@@ -121,6 +147,7 @@
 
   C.timer = setInterval(() => {
     if (!C.on || !ai.on || ai.busy || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on) return;
+    if (C.dragon() || Date.now() < (C.dragonUntil ?? 0)) return;
     const w = W(), pe = w?.playerEntity; if (!pe) return;
     // El warp a Arena 2 pide nivel 100 ("You need to be level 100 in order to warp", probado en nivel
     // 10 a 14) y el reset manda a Lorencia (MoveHome de OpenMU). Hasta 100, la ruta normal.
@@ -318,6 +345,7 @@
   if (window.__corner?.fast) clearInterval(window.__corner.fast);
   C.fast = setInterval(() => {
     if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (!C.isMage() && C.awayUntil && Date.now() < C.awayUntil)) return;
+    if (C.dragon()) return;
     if (C.isMage() && ai.cfg.castRange !== C.spinR) ai.cfg.castRange = C.spinR; // el caster del agente tampoco apunta más lejos (el cliente caminaba hasta el objetivo)
     const w = W(), pe = w?.playerEntity; if (!pe || w.castRequest) return;
     const P = pe.transform.pos;
