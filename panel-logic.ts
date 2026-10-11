@@ -270,8 +270,10 @@ export function scoutBand(sector: number, sectors: number, size = 256): ScoutBan
 }
 
 /** Corte del buscador: igual que la cacería (0 vivos en el mapa, invasión terminada) pero a los 20 min. */
-/** Con 5 o menos vivos en el mapa no se busca ni se sigue buscando (usuario, 2026-10-10). */
-export const SCOUT_MIN_ALIVE = 5;
+/** Se deja de buscar con 20 o menos vivos en el mapa y se arranca solo con más de SCOUT_START_ALIVE
+ * (usuario, 2026-10-10: "seguir buscando tanto tiempo no es bueno"). */
+export const SCOUT_MIN_ALIVE = 20;
+export const SCOUT_START_ALIVE = 25;
 export function shouldStopScout(inp: { invasion: Invasion | null; map: number; since: number; now: number }): string | null {
   const why = shouldStopHunt({ ...inp, maxMs: SCOUT_MAX_MS });
   if (why) return why;

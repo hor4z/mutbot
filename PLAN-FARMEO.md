@@ -298,7 +298,8 @@ entre pestañas. Hoy el bot sin navegador juega una sola cuenta y rechaza toda p
 - **Horaz** (`hunter.js`, `__hunt.auto` guardado en `mubot-hunt-auto:<pj>`): mitad este del mapa y va a
   lo que avise Melu. **Melu** (bot sin navegador, `--scout --scout-sector 1 --scout-sectors 2`): espera en
   Lorencia, busca en la mitad oeste sin pelear y avisa por `POST /gold` (servidor local 8788).
-- **Con 5 o menos dorados vivos en el mapa no se busca** (ni se arranca ni se sigue).
+- **Se corta con 20 o menos dorados vivos en el mapa** y se arranca solo con más de 25 (usuario: buscar
+  mucho tiempo no conviene; salen más de 100 por invasión).
 - **Baúl:** con menos de 8 lugares libres (o < 16 recién reseteado, ya en Lorencia), Horaz va a Baz
   (Storage Guard, NPC 240, Lorencia 147,145) y guarda Box of Luck y joyas (1x1). Probado: 16 ítems
   guardados. Respeta los ítems grandes del baúl (tamaños de data/items.json); nunca escribe la clave.

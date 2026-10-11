@@ -35,10 +35,11 @@
   // Mapa → warp y nivel mínimo: los de la invasión que Horaz puede entrar a nivel bajo.
   const MAPS = { 0: { warp: 2, lvl: 0, name: 'Lorencia' }, 3: { warp: 3, lvl: 10, name: 'Noria' }, 2: { warp: 6, lvl: 20, name: 'Devias' } };
   // Práctica de búsqueda en cada invasión, a cualquier nivel (usuario: "entrenar la búsqueda para ir
-  // teniendo referencias, aunque no mejore los tiempos"). Con 5 o menos vivos no se busca.
+  // teniendo referencias, aunque no mejore los tiempos"). Se corta con 20 o menos vivos en el mapa
+  // (usuario: "seguir buscando tanto tiempo no es bueno") y se arranca solo con más de 25.
   // huntBand: Horaz barre la mitad este (x >= 128); la oeste la barre Melu (headless --scout, franja 1/2)
   // y avisa por /gold. Los dorados avisados se persiguen en cualquier mitad.
-  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 6, huntStopAlive: 5, huntMaxMin: 15, huntBand: [128, 256] };
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntBand: [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
