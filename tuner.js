@@ -42,6 +42,10 @@
   // Aplicar lo aprendido en sesiones anteriores.
   if (saved.best) Object.assign(ai.cfg, saved.best);
   const t = (ai.tuner = { history: saved.history ?? [], exp: saved.exp ?? null, timer: null });
+  // Congelado (2026-10-10): con ventanas de 90 s el autoajuste adoptaba cambios por ruido (excursiones
+  // 2,5 s → 1 s → 2,5 s en una hora; maxKillSec 8 → 4; skillMinMp 0,05 → 0,15) y Horaz empeoró en las
+  // Arenas. Mientras `mubot-tuner-frozen:<pj>` sea true solo aplica `best`, no experimenta.
+  if (localStorage.getItem(`mubot-tuner-frozen:${S.playerData?.name ?? 'pj'}`) === 'true') { t.exp = null; return 'tuner congelado: aplicó la mejor config, sin experimentos'; }
   const expSince = (a, b) => ai.expLog.filter((x) => x.t >= a && x.t < b).reduce((s, x) => s + x.added, 0);
   const pick = (o) => Object.fromEntries(Object.keys(SPACE).map((k) => [k, o[k]]));
   // best = lo adoptado: si hay un experimento a medias, su parámetro se guarda con el valor de

@@ -312,3 +312,13 @@ Cuando el usuario la dé por pulida, se activa sola (`__hunt.auto = true`) al pr
 - dorados por minuto y niveles ganados por mapa (Noria / Lorencia / Devias),
 - si a nivel ~200 todavía conviene o solo al arranque,
 - si la memoria de dónde aparecen (`mubot-gold:<pj>`) acorta la búsqueda.
+
+## Autoajuste congelado (2026-10-10, 22:20)
+
+Horaz no mejoraba: ciclos limpios de 12-14 min contra 10,4 del mejor (19:37). El arranque mejoró
+(0→100 2,6 vs 3,6) pero las tres Arenas empeoraron (100→200 2,0 vs 1,0; 200→300 2,6 vs 1,8;
+300→400 4,7 vs 3,9) y caminaba 19 % del tiempo (antes 8 %). El autoajuste había movido por ruido
+`maxKillSec` 8 → 4 (descarta los monstruos más duros, que son los que más exp dan en Arenas) y
+`skillMinMp` 0,05 → 0,15. Se congeló (`mubot-tuner-frozen:Horaz`) con la config del mejor ciclo:
+ancla radio 7, roam 0, skillMinMp 0,05, maxKillSec 8. Próximo paso: 3 ciclos limpios; si siguen
+en 12+, probar el código de las 19:37 contra el actual.
