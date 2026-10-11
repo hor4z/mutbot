@@ -128,3 +128,17 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
    Prioridad: los mapas con poca gente (Noria). **Cortar apenas el 0xFD diga que en ese mapa no
    quedan vivos** (o la invasión pase a "derrotada"): Horaz siguió barriendo las esquinas de Noria
    con 1 dorado vivo en todo el server. Primera cacería real: nivel 18 → 90 en 5 min y 2 Box of Luck.
+
+## Lecciones de las prácticas de caza (2026-10-10)
+
+- **21:50:** Melu vio un Golden Dragon en Lorencia (149,168) en el primer segundo, pero Horaz solo
+  seguía avisos de su mapa (estaba en Devias) y llegó un minuto tarde: ya no estaba. Arreglado:
+  un aviso de dragón en otro mapa al alcance lo hace cambiar de mapa al instante.
+- **Los grandes duran menos de un minuto;** a los 2-3 min cada mapa está casi limpio. Hay que estar
+  parado en el mapa antes de que arranque (hh:49:20) y buscar solo los primeros 3 min.
+- **Los últimos ~20 no se buscan:** quedan en rincones o lugares a los que no se llega caminando.
+  Melu barrió Noria entera con 7-8 vivos y no vio ninguno.
+- **Plan de las invasiones:** Horaz espera en Devias (225,225) y salta entre las 4 entradas; Melu
+  espera en Lorencia (149,168) y, si en 12 s no ve nada, pasa a Noria y después a Devias.
+- **Hipótesis del usuario: los dragones salen cerca** (de las llegadas o de lugares fijos). Se
+  confirma o descarta con la memoria de dorados (`mubot-gold:<pj>`) después de 2-3 invasiones.
