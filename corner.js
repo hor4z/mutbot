@@ -81,14 +81,26 @@
         if (ai.explore?.x !== x || ai.explore?.z !== z || pe.playerMoveTo.handled) { ai.explore = { x, z, kind: 'camp-ruta' }; ai.arrivedAt = 0; ai.moveTo(pe, { x, z }); }
       }
     } else if (!ai.target) {
-      // Esquina vacía: esperar en el foco con más apariciones de los últimos 3 min (celdas de 3x3).
-      // El promedio de todas caía entre los dos focos medidos ((12,12) y (1-3,10-12)) y el giro no
-      // alcanzaba a ninguno.
-      const sp = C.spawns.filter((x) => now - x.t < 180000), cells = {};
-      for (const x of sp) { const k = `${Math.round(x.x / 3) * 3},${Math.round(x.z / 3) * 3}`; (cells[k] ??= { n: 0, x: 0, z: 0 }); cells[k].n++; cells[k].x += x.x; cells[k].z += x.z; }
-      const top = Object.values(cells).sort((a, b) => b.n - a.n)[0];
-      const c = top && top.n >= 3 ? { x: Math.round(top.x / top.n), z: Math.round(top.z / top.n) } : C.home;
-      if (d(P, c) > 2 && (ai.explore?.x !== c.x || ai.explore?.z !== c.z)) { ai.explore = { ...c, kind: 'camp-espera' }; ai.arrivedAt = 0; ai.moveTo(pe, c); }
+      // Esquina vacía: elegir entre los focos de reaparición (celdas de 3x3 con >= 3 apariciones en los
+      // últimos 5 min). Medido 2026-10-11: dos focos, (12,12) y (1-3,10-12), y un jugador pegando fijo
+      // en uno (usuario: "primero ganarle a ese los monstruos y luego subir, o viceversa"). Puntaje:
+      // el foco cuya próxima tanda se espera antes (última aparición + intervalo medio), con castigo
+      // por cada otro jugador parado a <= 3 tiles (ese foco lo pelea alguien que ya está encima).
+      const sp = C.spawns.filter((x) => now - x.t < 300000), cells = {};
+      for (const x of sp) { const k = `${Math.round(x.x / 3) * 3},${Math.round(x.z / 3) * 3}`; const c = (cells[k] ??= { n: 0, x: 0, z: 0, ts: [] }); c.n++; c.x += x.x; c.z += x.z; c.ts.push(x.t); }
+      const players = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe);
+      const foci = Object.values(cells).filter((c) => c.n >= 3).map((c) => {
+        const at = { x: Math.round(c.x / c.n), z: Math.round(c.z / c.n) };
+        // tandas: apariciones separadas por > 3 s
+        const waves = []; for (const t of c.ts.sort((a, b) => a - b)) if (!waves.length || t - waves[waves.length - 1] > 3000) waves.push(t);
+        const gap = waves.length >= 2 ? (waves[waves.length - 1] - waves[0]) / (waves.length - 1) : 30000;
+        const next = waves[waves.length - 1] + gap - now;
+        const rivals = players.filter((e) => d(e.transform.pos, at) <= 3).length;
+        return { ...at, next, rivals, score: Math.max(next, -5000) + rivals * 15000 + d(P, at) * 300 };
+      }).sort((a, b) => a.score - b.score);
+      C.foci = foci.map((f) => ({ x: f.x, z: f.z, nextS: Math.round(f.next / 1000), rivals: f.rivals }));
+      const c = foci[0] ? { x: foci[0].x, z: foci[0].z } : C.home;
+      if (d(P, c) > 0.8 && (ai.explore?.x !== c.x || ai.explore?.z !== c.z)) { ai.explore = { ...c, kind: 'camp-espera' }; ai.arrivedAt = 0; ai.moveTo(pe, c); }
       ai.arrivedAt = 0; // sin "me fui por aburrido": acá se espera la reaparición
     }
     // Swell Life en la esquina.
@@ -109,6 +121,19 @@
     if (C.seen.size > 3000) C.seen = new Map([...C.seen].slice(-1500));
     if (C.spawns.length > 1000) C.spawns.splice(0, 500);
   }, 700);
+  // Primer golpe: cada 100 ms, si hay un monstruo dentro del giro y no hay un skill pendiente, tirarlo
+  // ya (el agente revisa cada 400 ms y el mago de al lado borra la tanda en ~1 s).
+  if (window.__corner?.fast) clearInterval(window.__corner.fast);
+  C.fast = setInterval(() => {
+    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged) return;
+    const w = W(), pe = w?.playerEntity; if (!pe || w.mapIndex !== C.map || w.castRequest) return;
+    const P = pe.transform.pos; if (d(P, C.home) > C.radius + C.fill) return;
+    let best = null, bn = 0;
+    for (const e of w.byNetId.values()) { if (!alive(e) || d(e.transform.pos, P) > C.spinR + 0.5) continue; const n = [...w.byNetId.values()].filter((o) => alive(o) && d(o.transform.pos, e.transform.pos) <= C.spinR).length; if (n > bn) { bn = n; best = e; } }
+    if (!best) return;
+    if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
+    const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false }; C.fastCasts = (C.fastCasts ?? 0) + 1;
+  }, 100);
   C.report = (min = 10) => {
     const since = Date.now() - min * 60000, sp = C.spawns.filter((s) => s.t >= since);
     const cells = {}; for (const s of sp) { const k = `${Math.round(s.x / 3) * 3},${Math.round(s.z / 3) * 3}`; cells[k] = (cells[k] ?? 0) + 1; }
