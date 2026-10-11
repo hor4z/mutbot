@@ -128,6 +128,7 @@
       // Punto exacto de cada Golden Dragon (tipo 79), compartido entre pestañas: el buscador los revisa primero.
       if (b.npcType === 79) { const ds = jget('mubot-dragon-spots', {}); (ds[w.mapIndex] ??= []).push([Math.round(p.x), Math.round(p.z)]); ds[w.mapIndex] = ds[w.mapIndex].slice(-30); jset('mubot-dragon-spots', ds); }
       ai.L(`HUNTER: ${String(b.objectNameInWorld).trim()} en (${Math.round(p.x)},${Math.round(p.z)})${b.npcType === 44 ? ' (Dragón Rojo, tipo 44)' : ''}`);
+      if (prio(String(b.objectNameInWorld ?? '')) >= 2) { const L = jget('mubot:inv-log', []), last = L[L.length - 1]; if (last && Date.now() - last.at < 30 * 60000) { last.big.push({ by: me, map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), name: String(b.objectNameInWorld).trim(), type: b.npcType, t: Math.round((Date.now() - last.at) / 1000) }); jset('mubot:inv-log', L); } }
     }
     // Un dragón a la vista se avisa al compañero (antes solo avisaba el explorador de Melu).
     if (b && prio(String(b.objectNameInWorld ?? '')) === 3 && Date.now() - (h.lastPost ?? 0) > 3000) {
@@ -283,6 +284,9 @@
     //    avisado o a la vista); los grandes duran menos de un minuto y a los 2-3 min no queda casi nada.
     const nowD = new Date();
     if (active && !h.invStart) h.invStart = Date.now(); if (!active) h.invStart = null;
+    // Registro por invasión (compartido): conteos por mapa al arrancar + grandes vistos. Sirve para ver si
+    // el mapa con dragón se nota en los conteos (0xFD) y para medir cada cambio de la búsqueda.
+    if (active) { const L = jget('mubot:inv-log', []), key = new Date(inv.at).toISOString().slice(0, 13); if (!L.some((x) => x.key === key)) { L.push({ key, at: Date.now(), maps: inv.maps, big: [] }); jset('mubot:inv-log', L.slice(-60)); } }
     if (h.on && h.pre) { if (active) h.pre = false; else if (![49, 50].includes(nowD.getMinutes())) { h.stop('no hubo invasión'); return; } else return; }
     if (!h.on && h.auto && h.prepos && !active && nowD.getMinutes() === 49 && nowD.getSeconds() >= 20 && lvl >= (MAPS[h.prepos]?.lvl ?? 0)) { h.start(h.prepos, false, true); ai.L(`HUNTER: me paro en ${MAPS[h.prepos].name} a esperar la invasión`); return; }
     // Dragón Rojo: con el mapa conocido, cazar ahí hasta que el server diga que terminó (o 12 min).
