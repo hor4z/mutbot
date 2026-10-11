@@ -142,3 +142,7 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
   espera en Lorencia (149,168) y, si en 12 s no ve nada, pasa a Noria y después a Devias.
 - **Hipótesis del usuario: los dragones salen cerca** (de las llegadas o de lugares fijos). Se
   confirma o descarta con la memoria de dorados (`mubot-gold:<pj>`) después de 2-3 invasiones.
+- **22:50, primera invasión con el plan:** Melu vio 2 Golden Budge Dragons en Lorencia (153,192) a
+  los 50 s y avisó; Horaz (nivel 17, en Noria) cambió solo de mapa, los mató y levantó 2 Box of Luck
+  (y subió 17 → 34). La coordinación por avisos funciona. El Golden Dragon grande no apareció en las
+  zonas recorridas.

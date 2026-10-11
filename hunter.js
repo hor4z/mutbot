@@ -178,7 +178,8 @@
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
       if (inView) h.lastSeenGold = Date.now();
       if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
-        const next = h.tour.shift(); if (MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
+        let next = h.tour.shift(); while (next === h.map && h.tour.length) next = h.tour.shift(); // no "saltar" al mismo mapa
+        if (next !== h.map && MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
     // Devias: saltar entre sus 4 entradas (warps 6, 7, 5, 4) mira 4 zonas lejanas en segundos;
     // en cada una se queda 6 s si no hay dorados a la vista.
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
