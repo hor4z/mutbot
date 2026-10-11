@@ -31,6 +31,9 @@ const HEADERS = new Set<number>([0xc1, 0xc2, 0xc3, 0xc4]);
 const DEBUG_LOG = false;
 const INFO_LOG = true;
 
+const DUMP_CODES = new Set((process.env.DUMP_CODES ?? '').split(',').filter(Boolean).map((h) => parseInt(h, 16)));
+const dumped = new Map<number, number>();
+
 export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
   const LOG_PREFIX = `[${tcpIP}:${tcpPort}]`;
 
@@ -77,6 +80,13 @@ export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
     const subCode = packet.getUint8(codeIndex + 1);
 
     const pDef = routesByCode[packetCode]?.find(p => p.SubCode == null || p.SubCode === subCode);
+
+    // Diagnóstico: DUMP_CODES=11,f6 vuelca en hex los primeros 40 paquetes de esos codes (por code).
+    if (DUMP_CODES.has(packetCode) && (dumped.get(packetCode) ?? 0) < 40) {
+      dumped.set(packetCode, (dumped.get(packetCode) ?? 0) + 1);
+      const u = new Uint8Array(packet.buffer, packet.byteOffset, Math.min(packet.byteLength, length));
+      console.log(`${LOG_PREFIX}DUMP 0x${byteToString(packetCode)}: ${[...u].map((b) => b.toString(16).padStart(2, '0')).join(' ')}`);
+    }
 
     if (!pDef) {
       // Packets propios del server que la tabla no conoce (ej. 0xFD, invasión
