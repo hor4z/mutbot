@@ -65,7 +65,8 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     const rivals = rivalPlayers().filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
     const altRate = corner.altRates.get(altWarp(world.level));
-    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate })) {
+    const mateHere = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
+    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level, mateHere })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;
       ctx.target = null;

@@ -92,5 +92,13 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('solo (sin compañero): elige normal y respeta los 40 s', new CornerSides().pick(0, [], [], true).name === 'esquina');
 }
 
+// --- No irse de la esquina -------------------------------------------------------------------
+{
+  const now = 1_000_000;
+  ok('nivel < 200: no se va (afuera es Arena 2 misma)', !cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 124 }));
+  ok('nivel >= 200: sí se va si está llena y no rinde', cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 250 }));
+  ok('con un compañero en la esquina: no se va', !cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 250, mateHere: true }));
+}
+
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE LA ESQUINA PASARON' : `\n${fails} TEST(S) DE LA ESQUINA FALLARON`);
 process.exit(fails ? 1 : 0);
