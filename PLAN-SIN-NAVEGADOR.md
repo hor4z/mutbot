@@ -63,6 +63,7 @@ mismo que en el navegador), 0 paquetes perdidos.
    (leer ChatMessage/ServerMessage y susurros, mandar desde el panel).
 4. ~~**Partir `headless-bot.ts`** en módulos~~: hecho (ver "Estructura" en `AGENTS.md`).
 5. **Caza** y cooperación entre bots (después).
+6. **Ranking y ELO** (pedido del usuario, 2026-10-11): por definir con el usuario (ranking del server, ELO de PvP, o un ranking propio de los personajes).
 
 ## Lo que aprendimos del agente del navegador (para no repetirlo)
 

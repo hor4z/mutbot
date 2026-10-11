@@ -120,3 +120,58 @@ export function cornerFull(inp: { rivals: number; inCornerSince: number | null; 
 export function cornerActive(inp: { level: number; resetLevel: number; awayUntil: number; now: number }): boolean {
   return inp.level >= CORNER.minLevel && inp.level < inp.resetLevel && inp.now >= inp.awayUntil;
 }
+
+// ---------------------------------------------------------------------------
+// Lados de la esquina (corner.js): esquina (2,10), medio (7,11) o este (12,11). Usuario: "si
+// conviene, foco en la esquina; si no, en el spot del medio; adaptate". Se queda >= 40 s en cada uno
+// y después elige el de mayor exp/min medida (promedio móvil 0,6/0,4 en ventanas de >= 15 s, solo
+// mientras está a <= 4 del lado). Uno sin medir cuenta como el mejor × 1,2 (supera el 15 %: se prueba). Cada
+// jugador a <= 4 del lado divide por (1 + 0,25): un rival encima pesa poco, se compite. Cambia solo
+// si el otro rinde > 15 % más.
+// ---------------------------------------------------------------------------
+export type Side = { name: string } & Pos;
+export const SIDES: readonly Side[] = [{ name: 'esquina', x: 2, y: 10 }, { name: 'medio', x: 7, y: 11 }, { name: 'este', x: 12, y: 11 }];
+export const SIDE = { dwellMs: 40_000, near: 4, windowMs: 15_000, emaOld: 0.6, untried: 1.2, rivalPenalty: 0.25, switchAt: 1.15 } as const;
+
+export class CornerSides {
+  side: Side = SIDES[0];
+  private since = -Infinity;
+  readonly stats = new Map<string, { exp: number; ms: number; rate: number; windows: number }>();
+  private statAt: number | null = null;
+
+  /** El lado donde esperar ahora (puede cambiar si pasaron SIDE.dwellMs). */
+  pick(now: number, players: readonly Pos[]): Side {
+    if (now - this.since < SIDE.dwellMs) return this.side;
+    this.since = now;
+    const known = [...this.stats.values()].map((s) => s.rate).filter((r) => r > 0);
+    const best = known.length ? Math.max(...known) : 1;
+    const score = (s: Side) => {
+      const st = this.stats.get(s.name);
+      // Medido (aunque haya dado 0): su exp/min; sin medir, optimista para probarlo.
+      const r = st?.windows ? st.rate : best * SIDE.untried;
+      return r / (1 + SIDE.rivalPenalty * players.filter((p) => dist(p, s) <= SIDE.near).length);
+    };
+    let pick = this.side;
+    for (const s of SIDES) if (score(s) > score(pick) * SIDE.switchAt) pick = s;
+    this.side = pick;
+    return pick;
+  }
+
+  /** Anota la exp ganada desde la última llamada al lado actual, si está a <= SIDE.near de él. */
+  record(now: number, me: Pos, exp: number) {
+    const dt = this.statAt == null ? 0 : now - this.statAt;
+    this.statAt = now;
+    if (dt <= 0 || dist(me, this.side) > SIDE.near) return;
+    const st = this.stats.get(this.side.name) ?? { exp: 0, ms: 0, rate: 0, windows: 0 };
+    st.exp += exp;
+    st.ms += dt;
+    if (st.ms >= SIDE.windowMs) {
+      const r = (st.exp / st.ms) * 60_000;
+      st.rate = st.windows ? st.rate * SIDE.emaOld + r * (1 - SIDE.emaOld) : r;
+      st.windows++;
+      st.exp = 0;
+      st.ms = 0;
+    }
+    this.stats.set(this.side.name, st);
+  }
+}

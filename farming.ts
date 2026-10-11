@@ -420,6 +420,30 @@ export function planStats(points: number, str: number, ene: number, p = STATS_PL
   return { ene: toEne + half, str: left - half, vit };
 }
 
+// Tope del server: 65535 por stat ("Se ha alcanzado el máximo de 65535 Base Energy"). Con fuerza y
+// energía al tope /add las rechaza y los puntos no bajan. Cada stat recibe como mucho lo que le falta
+// para el tope; lo que no entra va a agilidad (velocidad de ataque del DK) y después a vitalidad, como
+// el agente del navegador.
+export const STAT_CAP = 65535;
+export type StatValues = { str: number; agi: number; vit: number; ene: number };
+
+export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_CAP): StatValues {
+  const out: StatValues = { str: 0, agi: 0, vit: 0, ene: 0 };
+  let spill = 0;
+  for (const k of ['ene', 'str', 'vit', 'agi'] as const) {
+    const n = Math.max(0, Math.floor(plan[k] ?? 0));
+    const fit = Math.min(n, Math.max(0, cap - cur[k]));
+    out[k] += fit;
+    spill += n - fit;
+  }
+  for (const k of ['agi', 'vit'] as const) {
+    const n = Math.min(spill, Math.max(0, cap - cur[k] - out[k]));
+    out[k] += n;
+    spill -= n;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Loot valioso (agente web, isValuable): cajas (Box of Kundun 14/11), joyas
 // (Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31, Chaos
