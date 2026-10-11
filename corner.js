@@ -79,6 +79,7 @@
       // Modo mago (Evil Spirit / Inferno / Decay / Hellfire pegan en círculo alrededor del mago): no
       // elegir objetivo, así el agente no camina hacia cada monstruo como un DK (usuario: "farmea como
       // DK, se mueve mucho y no usa bien el Spirit"). Los tiros los hace C.fast, desde donde está.
+      if (window.__hunt?.on) return inner(w, P, c); // cazando manda el cazador (solo dorados), nada de correa ni campamento
       if (C?.on && !window.__hunt?.on) { const dg = C.dragon(); if (dg) return dg; }
       if (C?.on && C.isMage() && !window.__hunt?.on) return null;
       if (C?.on && !window.__hunt?.on) {

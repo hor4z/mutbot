@@ -728,7 +728,9 @@
     if (!ai.on || ai.busy || !pe || w.castRequest || S.sceneLoading || S.uiState !== 5 || pd.currentMP / pd.maxMP < ai.cfg.skillMinMp) return;
     const P = pe.transform.pos; let best = null, bd = 1e9;
     const t = ai.target; if (alive(t) && dist(P, t.transform.pos) <= ai.cfg.castRange) best = t;
-    if (!best) for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || !alive(e)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.castRange && d < bd) { bd = d; best = e; } }
+    // Cazando dorados no se gira contra monstruos comunes al pasar (usuario: "se ponen a pegar y matar
+    // monstruos mientras buscan o quedan colgados"): solo contra el objetivo (el dorado).
+    if (!best && !window.__hunt?.on) for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || !alive(e)) continue; const d = dist(P, e.transform.pos); if (d <= ai.cfg.castRange && d < bd) { bd = d; best = e; } }
     if (!best) return;
     if (S.currentSkill !== ai.cfg.skill) S.selectSkill(ai.cfg.skill);
     const tp = best.transform.pos; w.castRequest = { target: best, point: { x: tp.x, y: tp.z }, forced: false };

@@ -182,7 +182,10 @@
     ai.pickTarget = (w, P, c) => {
       if (h.on && w.mapIndex === h.map) {
         const b = sighting(w, P); if (b) return b;
-        const t = ip(w, P, c); return t && dist(P, t.transform.pos) <= 3 ? t : null;
+        // Comunes: no se pelean mientras se busca (quedaba "colgado" matando monstruos). Solo si la vida
+        // baja de la mitad, el más cercano a <= 2 tiles, para abrirse paso.
+        const pd = S.playerData; if (pd.currentHP / pd.maxHP >= 0.5) return null;
+        const t = ip(w, P, c); return t && dist(P, t.transform.pos) <= 2 ? t : null;
       }
       return ip(w, P, c);
     };
@@ -233,6 +236,8 @@
   // Al llegar a una zona del barrido sin dorados, seguir YA: el agente espera 20 s en cada destino
   // (sirve en un campamento para el respawn; cazando, Horaz "se movía y paraba").
   h.lingerTimer = window.setInterval(() => {
+    // Cazando no hay campamento: el agente armaba uno ("campamento en", "voy a camp") y caminaba ahí.
+    if (h.on && ai.camp) ai.camp = null;
     const pe = W()?.playerEntity; if (!h.on || !pe || !ai.explore?.kind?.startsWith('hunter') || ai.target) return;
     if (dist(pe.transform.pos, ai.explore) < 4) { ai.explore = null; ai.arrivedAt = 0; }
   }, 500);
