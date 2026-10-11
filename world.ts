@@ -1,0 +1,457 @@
+/**
+ * El mundo según el server: los parsers de los layouts 0.97d que el XML de packets rompe, el
+ * tracker que mantiene `world` al día con los packets S2C (vida, skills, inventario, scope de
+ * monstruos y jugadores, posición, cambio de mapa, party) y la entrada al mundo (login + elegir
+ * personaje). Ver AGENTS.md, "Protocolo: trampas encontradas".
+ */
+import {
+  CharacterLevelUpdatePacket,
+  ClientReadyAfterMapChangePacket,
+  CurrentHealthAndShieldPacket,
+  CurrentManaAndAbilityPacket,
+  InventoryMoneyUpdatePacket,
+  LoginResponseLoginResultEnum,
+  LoginResponsePacket,
+  MapChanged075Packet,
+  MapObjectOutOfScopePacket,
+  ObjectMovedPacket,
+  ObjectWalked075Packet,
+  SelectCharacterPacket,
+} from './packets';
+import { CHAR_NAME, PASSWORD, USERNAME } from './config';
+import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
+import { scheduleEventPolls } from './events';
+import { isMonsterType, isTownNpcType } from './explore';
+import { drops } from './loot';
+import { EventBus } from './net/eventBus';
+import { PARTY_DECLINE_DELAY_MS, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
+import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo } from './state';
+import { log, toBytes } from './util';
+
+// ---------------------------------------------------------------------------
+// Parsers a mano (layouts 0.97d, no los del XML). Los de ítems (5 bytes) están en protocol097.ts.
+// ---------------------------------------------------------------------------
+
+// El XML de packets define el CharacterList "Extended" (34 bytes por personaje y
+// flags extra), pero un server 0.95/0.97 manda el layout chico: CharacterCount en
+// el índice 4, sin UnlockFlags/MoveCnt/IsVaultExtended, y cada CharacterData con
+// 26 bytes. Con el parser del XML el acceso desborda, así que lo parseamos a mano.
+const CHAR_DATA_097_LENGTH = 26;
+const CHAR_LIST_097_HEADER = 5;
+
+function parseCharacterList097(raw: any) {
+  const bytes = toBytes(raw);
+  const count = bytes[4];
+  const out: Array<{ SlotIndex: number; Name: string; Level: number; ClassId: number | null }> = [];
+
+  for (let i = 0; i < count; i++) {
+    const base = CHAR_LIST_097_HEADER + i * CHAR_DATA_097_LENGTH;
+    if (base + CHAR_DATA_097_LENGTH > bytes.length) break;
+    const nameBytes = bytes.subarray(base + 1, base + 11);
+    const nul = nameBytes.indexOf(0);
+    out.push({
+      SlotIndex: bytes[base],
+      Name: new TextDecoder().decode(nul === -1 ? nameBytes : nameBytes.subarray(0, nul)),
+      Level: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(base + 12, true),
+      // Apariencia desde [15] (slot 1 + nombre 10 + 1 + nivel 2 + estado 1): la
+      // clase va en los 5 bits altos del primer byte, como deserializeAppearance
+      // del cliente (GetByteValue(b, 5, 3)). SIN VERIFICAR en 0.97d: es solo para el panel.
+      ClassId: (bytes[base + 15] >> 3) & 0x1f,
+    });
+  }
+  return out;
+}
+
+// CharacterInformation del XML es el layout Extended. El server 0.95/0.97 manda el
+// layout chico (52 bytes, X/Y en 4/5), así que leemos ese a mano.
+function parseCharacterInformation097(raw: any) {
+  const bytes = toBytes(raw);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return {
+    x: bytes[4],
+    y: bytes[5],
+    map: bytes[6],
+    exp: view.getUint32(8, true),
+    expForNext: view.getUint32(12, true),
+    levelUpPoints: view.getUint16(16, true),
+    str: view.getUint16(18, true),
+    agi: view.getUint16(20, true),
+    vit: view.getUint16(22, true),
+    ene: view.getUint16(24, true),
+    hp: view.getUint16(26, true),
+    maxHp: view.getUint16(28, true),
+    mana: view.getUint16(30, true),
+    maxMana: view.getUint16(32, true),
+    money: view.getUint32(40, true),
+  };
+}
+
+// SkillListUpdate (F3/11): count en byte 4 (0xFE = agregó una, 0xFF = quitó una).
+// Los entries empiezan en el offset 6 (el byte 5 es reservado en 0.97d) y son
+// de 4 bytes: SkillIndex(1) + SkillNumber(2 LE) + SkillLevel(1).
+//
+// OJO: createSocket resuelve por code con `find(p => p.SubCode == null ||
+// p.SubCode === subCode)`, así que para F3/11 gana el PRIMERO de la lista, que
+// es 'SkillAdded'. El evento 'SkillListUpdate' nunca se emite contra este
+// server: hay que escucharlo por 'SkillAdded' y deducir el caso del byte Count.
+// Bug real encontrado probando un personaje de nivel 1 (pocas/ninguna
+// skill): para ese caso el packet llega más corto de lo que getSkills()
+// asume (offset 6 + 4 bytes/entry), y Count puede no caer en 0xfe/0xff ni
+// matchear cuántas entries realmente caben en el buffer — getSkills()
+// intentaba leer fuera de rango y tiraba abajo el proceso entero. Por eso
+// clampeamos Count al tamaño real del buffer: fail-safe (mejor una lista de
+// skills incompleta que un bot caído), no un fix del protocolo en sí
+// (todavía no sabemos cuál es el layout correcto para este caso corto).
+// Layout 0.97d (verificado contra el server real, personaje Horaz): Count en
+// [4] (0xfe = agregar una, 0xff = quitar una, otro = lista completa) y desde
+// [5] entradas de 3 bytes {index, number, level}. El parser generado asume 4
+// bytes/entry (layout 1.xs) y leía basura: "skill 259", world.skills vacío.
+function readSkillsUpdate(raw: any): { added: SkillInfo[]; removed: SkillInfo[]; full: SkillInfo[] } {
+  const b = toBytes(raw);
+  if (process.env.MUBOT_DEBUG_SKILLS) log(`SkillAdded raw: ${Buffer.from(b).toString('hex')}`);
+  const count = b[4];
+  const entry = (i: number): SkillInfo => ({ index: b[i], number: b[i + 1], level: b[i + 2] });
+  if (count === 0xfe && b.length >= 8) return { added: [entry(5)], removed: [], full: [] };
+  if (count === 0xff && b.length >= 8) return { added: [], removed: [entry(5)], full: [] };
+  const safe = Math.min(count, Math.floor((b.length - 5) / 3));
+  return { added: [], removed: [], full: Array.from({ length: safe }, (_, k) => entry(5 + k * 3)) };
+}
+
+// AddNpcsToScope del XML es el layout Extended; el server 0.95/0.97 manda el
+// layout chico (NpcData de 12 bytes, Id BigEndian). Con el parser del XML el
+// TypeNumber cae en otro offset y nunca matchea un monstruo, así que el bot
+// exploraba sin ver objetivos.
+const NPC_DATA_095_LENGTH = 12;
+
+function parseNpcs095(raw: any): Array<{ Id: number; TypeNumber: number; CurrentPositionX: number; CurrentPositionY: number }> {
+  const bytes = toBytes(raw);
+  const count = bytes[4];
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const base = 5 + i * NPC_DATA_095_LENGTH;
+    if (base + NPC_DATA_095_LENGTH > bytes.length) break;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    out.push({
+      Id: view.getUint16(base, false), // BigEndian
+      TypeNumber: bytes[base + 2],
+      CurrentPositionX: bytes[base + 6],
+      CurrentPositionY: bytes[base + 7],
+    });
+  }
+  return out;
+}
+
+// AddCharactersToScope (C2 12): otros jugadores que entran al scope. El
+// evento se emite con el nombre 'AddCharactersToScope' (gana el primero de la
+// tabla para el code 0x12), pero el layout es el de 0.95d (el server corre el
+// inicializador Version095d, igual que AddNpcsToScope095): count en [4] y
+// desde [5] CharacterData de 31 bytes (075: 27) con Id BE@0, X@2, Y@3
+// (ServerToClientPackets.xml de OpenMU). Solo leemos id y posición: es para
+// penalizar objetivos con jugadores cerca. El stride se deduce del largo
+// (31 o 27); si no cierra con ninguno, se ignora el packet entero en vez de
+// leer basura. SIN VERIFICAR contra el server real.
+const CHAR_DATA_095_LENGTH = 31;
+const CHAR_DATA_075_LENGTH = 27;
+function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number }> {
+  const bytes = toBytes(raw);
+  const count = bytes[4];
+  if (!count) return [];
+  const body = bytes.length - 5;
+  const stride = body === count * CHAR_DATA_095_LENGTH ? CHAR_DATA_095_LENGTH : body === count * CHAR_DATA_075_LENGTH ? CHAR_DATA_075_LENGTH : 0;
+  if (!stride) {
+    if (process.env.MUBOT_DEBUG_NPCS) log(`AddCharactersToScope con layout inesperado (${bytes.length} bytes, count=${count}), lo ignoro.`);
+    return [];
+  }
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const base = 5 + i * stride;
+    out.push({ id: ((bytes[base] << 8) | bytes[base + 1]) & 0x7fff, x: bytes[base + 2], y: bytes[base + 3] });
+  }
+  return out;
+}
+
+// Llegada a un mapa (entrada al mundo o MapChanged): punto de llegada (correa de Devias) y primer
+// campamento (camp.ts).
+export function onMapArrival() {
+  bot.lastArrivalAt = Date.now();
+  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level);
+  const lz = learned.camps.leashFor(world.map);
+  log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
+  for (const e of learned.camps.events) log(`Campamento: ${e}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Tracker de estado: mantiene `world` al día con todo lo que manda el server.
+// Es lo que permite que el bot decida solo (pocarse, subir stats, etc.).
+// Se engancha una sola vez: los handlers del EventBus sobreviven a la reconexión.
+// ---------------------------------------------------------------------------
+export function trackWorld() {
+  EventBus.on('CharacterLevelUpdate', (raw: any) => {
+    const p = new CharacterLevelUpdatePacket(raw);
+    world.level = p.Level;
+    world.levelUpPoints = p.LevelUpPoints;
+    if (p.MaximumHealth) world.maxHp = p.MaximumHealth;
+    if (p.MaximumMana) world.maxMana = p.MaximumMana;
+  });
+
+  EventBus.on('CurrentHealthAndShield', (raw: any) => {
+    const p = new CurrentHealthAndShieldPacket(raw);
+    world.hp = p.Health;
+  });
+
+  EventBus.on('CurrentManaAndAbility', (raw: any) => {
+    const p = new CurrentManaAndAbilityPacket(raw);
+    world.mana = p.Mana;
+  });
+
+  // F3/11 trae la lista completa, un alta (Count=0xFE) o una baja (0xFF).
+  // Según la tabla de rutas se emite con uno u otro nombre; el cliente web
+  // engancha el mismo handler a los tres, así que hacemos lo mismo.
+  const onSkills = (raw: any) => {
+    const { added, removed, full } = readSkillsUpdate(raw);
+    if (full.length || (!added.length && !removed.length)) {
+      world.skills.clear();
+      for (const s of full) world.skills.set(s.number, s);
+    }
+    for (const s of added) world.skills.set(s.number, s);
+    for (const s of removed) world.skills.delete(s.number);
+    log(`Skills: ${[...world.skills.values()].map((s) => `${s.number}@${s.index}`).join(', ') || 'ninguno'}`);
+  };
+  for (const ev of ['SkillListUpdate', 'SkillAdded', 'SkillRemoved']) EventBus.on(ev, onSkills);
+
+  EventBus.on('CharacterInventory', (raw: any) => {
+    const items = parseInventory(toBytes(raw));
+    if (!items) {
+      log(`AVISO: inventario con layout inesperado (${toBytes(raw).length} bytes), lo ignoro.`);
+      return;
+    }
+    world.inventory.clear();
+    for (const it of items) world.inventory.set(it.slot, it);
+    log(`Inventario: ${world.inventory.size} item(s).`);
+  });
+
+  EventBus.on('ItemAddedToInventory', (raw: any) => {
+    const it = parseItemAdded(toBytes(raw));
+    if (it) world.inventory.set(it.slot, it);
+  });
+
+  // El server re-sincroniza nuestra posición acá (rubber-band) cuando rechaza
+  // un movimiento. Sin esto el dead-reckoning queda desfasado para siempre.
+  //
+  // OJO con el nombre del evento: createSocket resuelve el packet por code y
+  // emite pDef.Name. El code 0x10 de 0.97d es ObjectWalked075; ObjectWalked es
+  // el 0xD4 de seasons modernas y NUNCA se emite contra este server. Escuchar
+  // 'ObjectWalked' dejaba al bot sin resync para siempre.
+  EventBus.on('ObjectWalked075', (raw: any) => {
+    const p = new ObjectWalked075Packet(raw);
+    const id = p.ObjectId & 0x7fff;
+    if (id === bot.playerId) {
+      if (p.TargetX !== world.x || p.TargetY !== world.y) {
+        log(`Resync del server: creía (${world.x},${world.y}), real (${p.TargetX},${p.TargetY})`);
+      }
+      world.x = p.TargetX;
+      world.y = p.TargetY;
+      return;
+    }
+    // Bug real encontrado jugando (cuenta horaz, nivel 48): un monstruo
+    // detectado por AddNpcsToScope quedaba con su posición CONGELADA para
+    // siempre, porque este handler solo actualizaba la posición del jugador.
+    // El bot entonces perseguía la última posición conocida del monstruo,
+    // que ya se había movido — 0 kills a pesar de "ver" monstruos todo el
+    // tiempo. Se arregla actualizando también la posición de cualquier NPC
+    // ya trackeado en world.npcs.
+    const npc = world.npcs.get(id);
+    if (npc) {
+      npc.x = p.TargetX;
+      npc.y = p.TargetY;
+      expTracker.see(id, { type: npc.type, x: npc.x, y: npc.y, map: world.map });
+    }
+    const pl = world.players.get(id);
+    if (pl) {
+      pl.x = p.TargetX;
+      pl.y = p.TargetY;
+    }
+  });
+
+  // ObjectMoved (0x15): "un objeto se movió instantáneamente" (teleport/salto,
+  // no caminata) — mismo problema de posición congelada que ObjectWalked075 si
+  // no se trackea para NPCs ya vistos.
+  //
+  // OJO: a diferencia de ObjectWalked075 (verificado a fondo, es la única
+  // fuente de la posición del JUGADOR), este packet NO se usa para actualizar
+  // world.x/y del jugador — apareció 367 veces en una corrida de 130s (mucho
+  // más que los pasos propios) y una corrida terminó con "posición final
+  // (0,0)", probablemente por confiar en este packet para el jugador sin
+  // verificarlo. Conservador: solo actualiza NPCs ya trackeados, nunca al
+  // jugador, hasta confirmar el campo/formato con más cuidado.
+  EventBus.on('ObjectMoved', (raw: any) => {
+    if (!isObjectMovedPacket(toBytes(raw))) return; // 0.97d: con 10 bytes es el daño de un golpe
+    const p = new ObjectMovedPacket(raw);
+    const id = p.ObjectId & 0x7fff;
+    if (id === bot.playerId) return;
+    const npc = world.npcs.get(id);
+    if (npc) {
+      npc.x = p.PositionX;
+      npc.y = p.PositionY;
+    }
+    const pl = world.players.get(id);
+    if (pl) {
+      pl.x = p.PositionX;
+      pl.y = p.PositionY;
+    }
+  });
+
+  // Scope de NPCs: se registra al entrar al mundo, NO al arrancar el loop. El
+  // server manda el scope inicial (y el del mapa nuevo tras /move) antes de que
+  // el loop exista; enganchar tarde = bot ciego a los monstruos.
+  const npcs = world.npcs;
+  const onAdd = (raw: any) => {
+    for (const n of parseNpcs095(raw)) {
+      // MUBOT_DEBUG_NPCS=1: loguea todo tipo que aparezca, pase o no el filtro
+      // (así se vieron los custom 690/692 que monsters.json no conoce).
+      const isMonster = isMonsterType(n.TypeNumber, MONSTER_TYPE_NUMBERS);
+      if (process.env.MUBOT_DEBUG_NPCS) {
+        log(`NPC en scope (debug): Id=${n.Id} tipo=${n.TypeNumber} monstruo=${isMonster} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+      }
+      if (!isMonster) {
+        if (isTownNpcType(n.TypeNumber)) {
+          const tid = n.Id & 0x7fff;
+          world.townNpcs.set(tid, { id: tid, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
+        }
+        continue;
+      }
+      // Bug real (cuenta horaz, nivel 48, 22 monstruos detectados, 0 kills):
+      // n.Id viene CRUDO (con el bit alto de "vivo" puesto, ej. 33356), pero
+      // HitRequest.TargetId necesita el id real sin ese bit — el server hace
+      // `currentMap.GetObject(message.TargetId)` con el id exacto (confirmado
+      // en HitHandlerPlugInBase.cs de OpenMU) y no lo encuentra si mandamos el
+      // crudo, así que el golpe no hace nada (ni error ni log del lado
+      // server, falla en silencio). El resto del código SIEMPRE enmascara con
+      // `& 0x7fff` (onRemove, onKilled, ObjectWalked075) — acá faltaba, y
+      // además por eso `onRemove` nunca lograba borrar estos NPCs del mapa
+      // (comparaba contra una clave que nunca existía).
+      const id = n.Id & 0x7fff;
+      const isNew = !npcs.has(id);
+      npcs.set(id, { id, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
+      // El tipo de cada id visto: cuando llega ExperienceGained el monstruo ya
+      // salió del scope (ver farming.ts, ExpSplitTracker).
+      expTracker.see(id, { type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY, map: world.map });
+      if (isNew) log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+    }
+  };
+  const onRemove = (raw: any) => {
+    const p = new MapObjectOutOfScopePacket(raw);
+    for (const o of p.getObjects()) {
+      npcs.delete(o.Id & 0x7fff);
+      world.townNpcs.delete(o.Id & 0x7fff);
+      world.players.delete(o.Id & 0x7fff);
+    }
+  };
+  EventBus.on('AddNpcsToScope', onAdd);
+  // Otros jugadores: solo id y posición (ver parseCharacters095).
+  EventBus.on('AddCharactersToScope', (raw: any) => {
+    for (const c of parseCharacters095(raw)) {
+      if (c.id === bot.playerId) continue;
+      world.players.set(c.id, { x: c.x, y: c.y });
+    }
+  });
+  EventBus.on('MapObjectOutOfScope', onRemove);
+
+  // Cambiar de mapa: hay que confirmarlo con ClientReadyAfterMapChange (F3/12)
+  // o el server nos cuelga en el limbo. El evento que se emite es
+  // 'MapChanged075' (code 0x1C sin subcode), no 'MapChanged' (que espera 0x1C/0x15).
+  EventBus.on('MapChanged075', (raw: any) => {
+    const p = new MapChanged075Packet(raw);
+    world.map = p.MapNumber;
+    world.x = p.PositionX;
+    world.y = p.PositionY;
+    log(`Cambio de mapa → map=${world.map} pos=(${world.x},${world.y})`);
+    // Lo que había en scope era del mapa viejo: si no se limpia, el bot
+    // persigue NPCs y drops que ya no existen (el server no manda el remove).
+    world.npcs.clear();
+    world.townNpcs.clear();
+    world.players.clear();
+    drops.clear();
+    sendToGS(ClientReadyAfterMapChangePacket.createPacket().buffer);
+    // Punto de llegada (correa de Devias) y primer campamento (camp.ts).
+    onMapArrival();
+  });
+
+  // Invitaciones a party: rechazar siempre (pedido del usuario), con un
+  // respiro humano antes de contestar (ver protocol097.ts).
+  EventBus.on('PartyRequest', (raw: any) => {
+    const id = parsePartyRequest(toBytes(raw));
+    if (id == null) return;
+    const [lo, hi] = PARTY_DECLINE_DELAY_MS;
+    setTimeout(() => {
+      sendToGS(new DataView(buildPartyDecline(id).buffer));
+      log(`Party rechazada (de #${id}).`);
+    }, lo + Math.random() * (hi - lo));
+  });
+}
+
+// --- Zen -----------------------------------------------------------
+// El bot no compra ni vende (pedido del usuario): solo lleva el zen para el panel.
+export function watchMoney() {
+  EventBus.on('InventoryMoneyUpdate', (raw: any) => {
+    bot.lastMoney = new InventoryMoneyUpdatePacket(raw).Money;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Entrada al mundo: login -> lista de personajes -> elegir -> CharacterInformation.
+// ---------------------------------------------------------------------------
+export async function loginAndSelectCharacter() {
+  login(USERNAME, PASSWORD);
+  const loginBytes = await waitFor('LoginResponse');
+  const loginResp = new LoginResponsePacket(loginBytes);
+  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
+  log('Login OK');
+
+  const listWaiter = waitFor('CharacterList');
+  requestCharacterList();
+  return selectCharacter(await listWaiter);
+}
+
+export async function selectCharacter(charListBytes: any) {
+  const characters = parseCharacterList097(charListBytes);
+  log(
+    `Personajes: ${characters.map((c: any) => `${c.Name}(lv.${c.Level})`).join(', ')}`,
+  );
+
+  const target = characters.find((c: any) => c.Name === CHAR_NAME) ?? characters[0];
+  if (!target) throw new Error('La cuenta no tiene personajes');
+
+  const selP = SelectCharacterPacket.createPacket();
+  selP.setName(target.Name);
+  sendToGS(selP.buffer);
+
+  const infoBytes = await waitFor('CharacterInformation');
+  const info = parseCharacterInformation097(infoBytes);
+  Object.assign(world, {
+    x: info.x,
+    y: info.y,
+    map: info.map,
+    hp: info.hp,
+    maxHp: info.maxHp,
+    mana: info.mana,
+    maxMana: info.maxMana,
+    level: target.Level ?? world.level,
+    classId: target.ClassId ?? null,
+    levelUpPoints: info.levelUpPoints,
+    stats: { str: info.str, agi: info.agi, vit: info.vit, ene: info.ene },
+  });
+  log(
+    `Entré al mundo con ${target.Name}: pos=(${info.x},${info.y}) map=${info.map} nivel=${world.level} puntos=${info.levelUpPoints} exp=${info.exp} HP=${info.hp}/${info.maxHp}`,
+  );
+  // Retomar desde el estado real: si ya está en el mapa del tramo, la ruta lo
+  // adopta sin warpear (chooseFixedRoute, 'adopt').
+  bot.canAdopt = true;
+  bot.lastMoney = info.money;
+  bot.inGameAt = Date.now();
+  bot.charName = target.Name;
+  // El panel pregunta las aperturas de eventos (0x91) apenas entra al mundo.
+  scheduleEventPolls(bot.inGameAt);
+  onMapArrival();
+  return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
+}
