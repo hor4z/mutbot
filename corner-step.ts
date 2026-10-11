@@ -140,8 +140,30 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
         : `${top.name} (#${top.rank} del ranking) cerca: compito por las kills; si se va, tomo su lugar.`);
     }
   }
-  const contested = here && isMage() && top && skill ? contestTarget(me, mons, top, r, castReach(skill.number)) : null;
-  const st = here ? (contested ?? spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
+  // Mago: le disputa el grupo al rival (cualquiera, no solo del top) que esté más cerca del compañero
+  // prioritario, a <= 10 de él. Usuario: "que Melu moleste donde pegue él o cualquiera que esté cerca de
+  // Horaz". Sin compañero a la vista, al rival más cercano a ella.
+  let foe: { x: number; y: number; name?: string } | null = null;
+  if (here && isMage()) {
+    const prio = [...world.players.values()].find((q) => q.name != null && isMate(q.name) && isPriorityChar(q.name));
+    const anchor = prio ?? me;
+    let best = Infinity;
+    for (const q of rivalPlayers()) {
+      const d = Math.hypot(q.x - anchor.x, q.y - anchor.y);
+      if (d <= 10 && d < best) { best = d; foe = q; }
+    }
+    if (foe?.name && now - (corner.rivalSaidAt.get(foe.name) ?? 0) > 5 * 60_000 && !(top && top.name === foe.name)) {
+      corner.rivalSaidAt.set(foe.name, now);
+      decide(`${foe.name} cerca de ${prio?.name ?? 'mí'}: le disputo su grupo con Decay.`);
+    }
+  }
+  // Nunca le saca monstruos a Horaz: el mago no apunta a los que están a <= 4 de él (su giro) ni a un
+  // grupo cuyo Decay los alcance (usuario: "sacándole los monstruos [a los rivales] pero nunca a Horaz").
+  const prioMate = isMage() ? [...world.players.values()].find((q) => q.name != null && isMate(q.name) && isPriorityChar(q.name)) : undefined;
+  const PRIO_KEEP = 4;
+  const forMe = prioMate ? mons.filter((m) => Math.hypot(m.x - prioMate.x, m.y - prioMate.y) > PRIO_KEEP + r) : mons;
+  const contested = foe && skill ? contestTarget(me, forMe, foe, r, castReach(skill.number)) : null;
+  const st = here ? (contested ?? spinTarget(me, forMe, r, planted ? castReach(skill!.number) : undefined) ?? (aggroInReach && forMe.includes(aggroInReach) ? aggroInReach : null)) : cornerTarget(me, mons, 0, r);
   // Mago solo (sin rivales ni compañero cerca): al centro del grupo más grande, para que Evil Spirit
   // agarre la mayor cantidad. Se mueve solo si allá agarra 2+ más que acá.
   if (here && isMage() && !mageNeedsPower()) {
