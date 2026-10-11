@@ -28,6 +28,7 @@
   const atlas = (() => { try { return JSON.parse(localStorage.getItem(KEY) || 'null') ?? { maps: {}, goldens: [] }; } catch { return { maps: {}, goldens: [] }; } })();
   // Limpiar lo anotado antes del filtro de NPCs.
   for (const cells of Object.values(atlas.maps)) for (const c of Object.values(cells)) for (const [t, v] of Object.entries(c)) if (/VIP Seller|Battle Royale|Alquimista/i.test(v.name)) delete c[t];
+  atlas.spots = (atlas.spots ?? []).filter((sp) => !/kills en 60 s/.test(sp.note ?? ''));
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(atlas)); } catch {} };
   // Mapas a recorrer: [warp, índice de mapa, nombre, nivel]. Lista de warps del cliente.
   // Primero los mapas de la ruta de Horaz (usuario: "que explore primero los mapas que usa Horaz para
@@ -38,7 +39,7 @@
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
   if (window.__atlas?.statTimer) window.clearInterval(window.__atlas.statTimer);
-  const X = (window.__atlas = { statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  const X = (window.__atlas = { clusterMin: 6, clusterRadius: 5, statShares: { ene: 0.5, vit: 0.35, agi: 0.15 }, invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -67,14 +68,21 @@
     const pd = S.playerData, exp = Math.max(0, (pd.exp ?? 0) - f.exp0), lost = Math.max(0, f.hp0 - pd.currentHP);
     const r = ((atlas.fights ??= {})[f.map] ??= {})[f.type] ??= { name: f.name, kills: 0, secs: 0, exp: 0, hpLost: 0 };
     r.kills++; r.secs += secs; r.exp += exp; r.hpLost += lost;
-    // Spot automático: >= 10 kills en la misma zona (25x25) en menos de 60 s → se marca (Horaz lo toma
-    // de atlas.spots con prioridad). Se ignora si ya hay un spot marcado a <= 10 tiles en ese mapa.
-    const p = f.e.transform.pos, k = `${f.map}:${cellOf(p.x, p.z)}`, now = Date.now();
-    const ks = ((X.cellKills ??= {})[k] ??= []).filter((t) => now - t < 60000); ks.push(now); X.cellKills[k] = ks;
-    if (ks.length >= 10 && !(atlas.spots ??= []).some((sp) => sp.map === f.map && dist(sp, { x: p.x, z: p.z }) <= 10)) {
-      atlas.spots.push({ map: f.map, x: Math.round(p.x), z: Math.round(p.z), at: now, note: `auto: ${ks.length} kills en 60 s (${f.name})` });
-      save(); ai.L(`ATLAS: spot marcado en (${Math.round(p.x)},${Math.round(p.z)}): ${ks.length} kills en 60 s de ${f.name}`);
-    }
+  };
+  // Spot automático = grupo denso (usuario: "no debe matar tandas repetidas y deben surgir de lugares
+  // muy cercanos"): >= clusterMin monstruos DISTINTOS vivos a la vez dentro de clusterRadius tiles.
+  // Se anota el centro del grupo, el tamaño y los tipos; no se repite a <= 10 tiles de otro spot.
+  const markCluster = (w, P) => {
+    const ms = []; for (const e of w.byNetId.values()) if (ai.isMonster(e) && !e.dying && (e.attributeSystem?.getValue?.('currentHealth') ?? 0) > 0 && dist(P, e.transform.pos) <= 15) ms.push(e);
+    let best = null;
+    for (const c of ms) { const g = ms.filter((o) => dist(o.transform.pos, c.transform.pos) <= X.clusterRadius); if (!best || g.length > best.length) best = g; }
+    if (!best || best.length < X.clusterMin) return;
+    const cx = Math.round(best.reduce((a, e) => a + e.transform.pos.x, 0) / best.length), cz = Math.round(best.reduce((a, e) => a + e.transform.pos.z, 0) / best.length);
+    const spots = (atlas.spots ??= []); const near = spots.find((sp) => sp.map === w.mapIndex && dist(sp, { x: cx, z: cz }) <= 10);
+    if (near) { if (best.length > (near.size ?? 0)) { near.size = best.length; near.at = Date.now(); } return; }
+    const types = {}; for (const e of best) { const n = String(e.objectNameInWorld ?? '').trim(); types[n] = (types[n] ?? 0) + 1; }
+    spots.push({ map: w.mapIndex, x: cx, z: cz, size: best.length, types, at: Date.now(), note: `auto: ${best.length} juntos` });
+    save(); ai.L(`ATLAS: spot en (${cx},${cz}): ${best.length} monstruos juntos (${Object.entries(types).map(([n, k]) => `${n}×${k}`).join(', ')})`);
   };
   const nextCell = (w, P) => {
     X.visited.add(cellOf(P.x, P.z));
@@ -141,6 +149,7 @@
     if (w.mapIndex !== map) { if (now - X.lastWarp > 15000) { X.lastWarp = now; S.warpCommandRequest(warp); ai.L(`ATLAS: voy a ${name}`); } return; }
     X.mapSince ||= now;
     record(w);
+    markCluster(w, P);
     if (!X.invMode && now - X.mapSince > MINUTES_PER_MAP * 60000) return nextMap(`${MINUTES_PER_MAP} min en ${name}`);
     // Pelear lo que tenga cerca (usuario: "hacé que ataque"): Evil Spirit (área) contra el monstruo más
     // cercano a <= fightRange, dorados primero. Mientras pelea no camina; después sigue el recorrido.
