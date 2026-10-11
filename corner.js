@@ -26,6 +26,15 @@
   // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
   // misma clase que los magos que lideran la esquina).
   C.spinR = ({ 9: 5, 14: 3, 38: 3.5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
+  // Skill de un instante (buff, teleport): se guarda el skill de ataque aparte. Antes cada uno
+  // guardaba "el skill actual" y lo restauraba a los 900 ms; si un buff y un teleport se pisaban,
+  // el segundo guardaba el del primero y Melu quedó "atacando" con Mana Shield (16) sin ganar exp.
+  const TEMP = [6, 16, 18, 48];
+  C.tempSkill = (k) => {
+    if (!TEMP.includes(ai.cfg.skill)) C.baseSkill = ai.cfg.skill;
+    ai.cfg.skill = k; S.selectSkill(k);
+    setTimeout(() => { if (TEMP.includes(ai.cfg.skill) && C.baseSkill != null) ai.cfg.skill = C.baseSkill; }, 900);
+  };
   C.isMage = () => [9, 10, 14, 38].includes(ai.cfg.skill);
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -277,8 +286,7 @@
     if (d(P, C.home) <= C.radius + 3 && now - C.swellAt > 55000 && !w.castRequest && buffSkill != null) {
       // El agente vuelve a elegir su skill cada 400 ms: se le cambia el suyo un instante para que no
       // pise a Swell Life antes de que el cliente lo tire.
-      C.swellAt = now; const sk = ai.cfg.skill; ai.cfg.skill = buffSkill; S.selectSkill(buffSkill); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
-      setTimeout(() => { if (ai.cfg.skill === buffSkill) ai.cfg.skill = sk; }, 900);
+      C.swellAt = now; C.tempSkill(buffSkill); w.castRequest = { target: pe, point: { x: P.x, y: P.z }, forced: false };
     }
     ai.camp.lastSeen = Date.now();
     // Apariciones: netId nuevo, con la vida llena, cerca de la esquina.
@@ -325,8 +333,7 @@
     const k = 7 / dd, x = Math.round(P.x + (dst.x - P.x) * k), z = Math.round(P.z + (dst.z - P.z) * k);
     if (w.isWalkable?.(x, z) === false) return;
     if ([...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, { x, z }) <= 3).length >= 3) return; // no caer en medio de un grupo
-    C.tpAt = Date.now(); const sk = ai.cfg.skill; ai.cfg.skill = 6; S.selectSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
-    setTimeout(() => { if (ai.cfg.skill === 6) ai.cfg.skill = sk; }, 900);
+    C.tpAt = Date.now(); C.tempSkill(6); w.castRequest = { target: null, point: { x, y: z }, forced: false }; C.tps = (C.tps ?? 0) + 1;
   }, 300);
   // Quién le pega a Horaz: ObjectAnimation (C1 09 18 [atacante] [dir] [anim] [objetivo]) y
   // SkillAnimation (C3 09 19 [skill] [atacante] [objetivo]) con objetivo = este personaje.
