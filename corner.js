@@ -120,6 +120,13 @@
     // pasar al mejor spot medido de ese mapa sin nadie a <= 8 (2026-10-11: un DK en el spot de Horaz en
     // Arena 4; usuario: "no lo dejes ganarme"). Competencia limpia: no se le roban los monstruos.
     if (C.awayUntil && nowA < C.awayUntil) {
+      // Al cruzar 200/300 estando afuera, subir de Arena: se fue a Arena 3 en nivel 2xx y en 305 seguía
+      // ahí con 103M/min (Arena 4 rindió hasta 881M).
+      const want = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24;
+      if (ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] !== want && want > ai.cfg.spots[0][0]) {
+        ai.cfg.spots = C.ROUTE.filter((x) => x[0] === want); ai.spot = want; ai.lastWarp = nowA; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = nowA;
+        S.warpCommandRequest(want); L(`nivel ${S.playerData.level}: paso a ${want === 26 ? 'Arena 4' : 'Arena 3'}`); return;
+      }
       if (nowA - (C.freeAt ?? 0) > 15000 && ai.camp && ai.camp.map === w.mapIndex) {
         C.freeAt = nowA;
         const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe);
