@@ -24,7 +24,7 @@
   if (role === 'lider') {
     F.timers.push(setInterval(() => {
       const w = W(), p = w?.playerEntity?.transform?.pos; if (!p || S.uiState !== 5) return;
-      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), level: S.playerData.level, at: Date.now() })); } catch {}
+      try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(p.x), z: Math.round(p.z), level: S.playerData.level, resets: S.playerData.resets ?? 0, at: Date.now() })); } catch {}
       // Invitar al seguidor a la party si está a <= 10 tiles (cada 30 s como mucho).
       const name = window.__followMate; if (!name || window.__inParty || Date.now() - (F.invAt ?? 0) < 30000) return;
       for (const e of w.byNetId.values()) if (e.objectNameInWorld === name && d(e.transform.pos, p) <= 10) { F.invAt = Date.now(); const id = e.netId & 0x7fff; send([0xc1, 0x05, 0x40, id >> 8, id & 0xff]); L(`invito a ${name} a la party`); break; }
