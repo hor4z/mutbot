@@ -12,6 +12,8 @@ import { log } from './util';
 
 // Entradas de Devias de la ruta (Devias 4, 3, 2): el arranque manda ahí; en Arena 1 (plan B), no.
 const DEVIAS_WARPS = [7, 6, 5];
+// Donde deja el warp a Devias 4.
+const DEVIAS4_ARRIVAL: Pos = { x: 70, y: 180 };
 
 export class EarlyPlanner {
   private arrivalAt = -1;
@@ -38,7 +40,9 @@ export class EarlyPlanner {
     const me = { x: world.x, y: world.y };
     if (this.arrivalAt !== bot.lastArrivalAt) {
       this.arrivalAt = bot.lastArrivalAt;
-      this.arrival = { ...me };
+      // Reconectando el bot aparece donde quedó (Horaz entró en (181,72)): si eso está lejos de la
+      // llegada de Devias 4, los grupos se buscan alrededor de la llegada, no de ahí.
+      this.arrival = world.map === EARLY.devias.map && dist(me, DEVIAS4_ARRIVAL) > 30 ? { ...DEVIAS4_ARRIVAL } : { ...me };
       this.camp = null;
       this.poorSince = null;
       this.lorPlan = null;

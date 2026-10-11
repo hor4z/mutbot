@@ -32,6 +32,8 @@ import { watchMoney } from './world';
 const REPORT_EVERY_MS = 5 * 60_000;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
 const HUNT_NORMAL_RANGE = 3;
+// Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
+const EARLY_STARVE_MS = 60_000;
 
 // Totales de todas las sesiones (el loop corre una vez por conexión).
 export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
@@ -329,9 +331,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const devCrowded = devCrowdSince != null && now0 - devCrowdSince > 20_000;
     if (devCrowded) log(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de spot.`);
     // En el arranque solo cuenta Devias lleno (el navegador tenía el hambre apagado debajo del 100), con
-    // una red: 45 s sin NADA de exp con jugadores cerca (17 jugadores en Devias 4 a las 13 h: 99 skills
-    // y 0 kills, los demás matan primero).
-    const earlyStarving = inEarly && hungry.starving && recentRate === 0;
+    // una red: 60 s en el mapa sin NADA de exp (17 jugadores en Devias 4 a las 13 h: 99 skills y 0
+    // kills; otra vez, Devias 4 vacío sin un monstruo a la vista) → otra entrada o Arena 1 desde el 50.
+    const earlyStarving = inEarly && now0 - bot.lastArrivalAt > EARLY_STARVE_MS && expLog.perMin(now0, EARLY_STARVE_MS) === 0;
+    if (earlyStarving) log(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
     const crowded = inEarly ? devCrowded || earlyStarving : hungry.starving || camps.crowdedSpot(now0) || devCrowded;
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
