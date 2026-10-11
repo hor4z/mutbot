@@ -9,14 +9,14 @@ import { closeSockets } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
-import { castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
+import { SKILL_TABLE, castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, cornerActive, inCorner } from './corner';
 import { cornerStep, newCornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
-import { attackerOf } from './protocol097';
+import { attackerOf, ownAreaSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
@@ -73,6 +73,16 @@ let aggroTarget: Map<number, number> | null = null;
 function hookAggro() {
   if (aggroHooked) return;
   aggroHooked = true;
+  // Qué skill de área tiro de verdad (lo confirma el server): se anota cuando cambia.
+  let lastOwnSkill: number | null = null;
+  for (const ev of ['AreaSkillAnimation', 'AreaSkillAnimation075', 'AreaSkillAnimation095']) {
+    EventBus.on(ev, (raw: any) => {
+      const n = ownAreaSkill(toBytes(raw), bot.playerId & 0x7fff);
+      if (n == null || n === lastOwnSkill) return;
+      lastOwnSkill = n;
+      log(`Tiro ${SKILL_TABLE.get(n)?.name ?? 'skill ' + n} (${n}).`);
+    });
+  }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
     EventBus.on(ev, (raw: any) => {
       const id = attackerOf(toBytes(raw), bot.playerId & 0x7fff);

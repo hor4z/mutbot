@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, ownAreaSkill, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -282,6 +282,9 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
 }
 
 ok('PartyInviteRequest: C1 05 40 + id big-endian', buildPartyInvite(0x1234).join(',') === [0xc1, 5, 0x40, 0x12, 0x34].join(','));
+
+ok('0x1E de 9 bytes: Decay (38) mío', ownAreaSkill(Uint8Array.from([0xc3, 9, 0x1e, 38, 0x01, 0x23, 10, 11, 0]), 0x123) === 38);
+ok('0x1E de 9 bytes de otro → null', ownAreaSkill(Uint8Array.from([0xc3, 9, 0x1e, 38, 0x01, 0x24, 10, 11, 0]), 0x123) === null);
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);
 process.exit(fails ? 1 : 0);
