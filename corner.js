@@ -81,9 +81,13 @@
         if (ai.explore?.x !== x || ai.explore?.z !== z || pe.playerMoveTo.handled) { ai.explore = { x, z, kind: 'camp-ruta' }; ai.arrivedAt = 0; ai.moveTo(pe, { x, z }); }
       }
     } else if (!ai.target) {
-      // Esquina vacía: al centro de las apariciones de los últimos 3 min (o la esquina).
-      const sp = C.spawns.filter((x) => now - x.t < 180000);
-      const c = sp.length >= 3 ? { x: Math.round(sp.reduce((a, x) => a + x.x, 0) / sp.length), z: Math.round(sp.reduce((a, x) => a + x.z, 0) / sp.length) } : C.home;
+      // Esquina vacía: esperar en el foco con más apariciones de los últimos 3 min (celdas de 3x3).
+      // El promedio de todas caía entre los dos focos medidos ((12,12) y (1-3,10-12)) y el giro no
+      // alcanzaba a ninguno.
+      const sp = C.spawns.filter((x) => now - x.t < 180000), cells = {};
+      for (const x of sp) { const k = `${Math.round(x.x / 3) * 3},${Math.round(x.z / 3) * 3}`; (cells[k] ??= { n: 0, x: 0, z: 0 }); cells[k].n++; cells[k].x += x.x; cells[k].z += x.z; }
+      const top = Object.values(cells).sort((a, b) => b.n - a.n)[0];
+      const c = top && top.n >= 3 ? { x: Math.round(top.x / top.n), z: Math.round(top.z / top.n) } : C.home;
       if (d(P, c) > 2 && (ai.explore?.x !== c.x || ai.explore?.z !== c.z)) { ai.explore = { ...c, kind: 'camp-espera' }; ai.arrivedAt = 0; ai.moveTo(pe, c); }
       ai.arrivedAt = 0; // sin "me fui por aburrido": acá se espera la reaparición
     }
