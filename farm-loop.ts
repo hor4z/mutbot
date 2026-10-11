@@ -334,7 +334,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // una red: 60 s en el mapa sin NADA de exp (17 jugadores en Devias 4 a las 13 h: 99 skills y 0
     // kills; otra vez, Devias 4 vacío sin un monstruo a la vista) → otra entrada o Arena 1 desde el 50.
     const earlyStarving = inEarly && now0 - bot.lastArrivalAt > EARLY_STARVE_MS && expLog.perMin(now0, EARLY_STARVE_MS) === 0;
-    if (earlyStarving) log(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
+    if (earlyStarving && now0 - starvingLogged > 15_000) {
+      starvingLogged = now0;
+      log(`Arranque: ${EARLY_STARVE_MS / 1000} s sin exp en ${bot.currentSpot?.name ?? mapName(world.map)}: cambio de spot.`);
+    }
     const crowded = inEarly ? devCrowded || earlyStarving : hungry.starving || camps.crowdedSpot(now0) || devCrowded;
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
