@@ -114,7 +114,9 @@
   const alive = (e) => e && !e.dying && !e.objOutOfScope && W().getByNetId(e.netId) === e && hpOf(e) > 0;
   // Invocaciones de otros jugadores ("Elite Yeti of AltoElfo", elfo): no se les puede pegar.
   // Horaz quedó 2 min en Lorencia golpeando una y reiniciando el vigilante.
-  ai.isMonster = (e) => e.npcType !== undefined && !e.localPlayer && !(e.npcType >= 200 && e.npcType < 300) && !/ of \S+$/.test(String(e.objectNameInWorld ?? ''));
+  // Fantasmas en (0,0): el cliente deja entidades sin posición real (en Arena 2 "Gold Warrior" y
+  // "Assassin" en 0,0). Horaz se quedaba pegado contra la esquina 1 min atacándolas.
+  ai.isMonster = (e) => e.npcType !== undefined && !e.localPlayer && !(e.npcType >= 200 && e.npcType < 300) && !/ of \S+$/.test(String(e.objectNameInWorld ?? '')) && !(e.transform?.pos && e.transform.pos.x <= 1.5 && e.transform.pos.z <= 1.5);
   const dist = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.z - b.z));
   const potionSlot = (lo, hi) => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= lo && x.num <= hi && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const walkable = (w, x, z) => x > 3 && z > 3 && x < 252 && z < 252 && w.isWalkable(x, z);

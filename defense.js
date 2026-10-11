@@ -7,8 +7,7 @@
 // De dónde sale "me atacó" (paquetes del server, ver los formatos medidos en 0.97d):
 //   0x18 ObjectAnimation  C1 09 18 [atacante u16] [dir] [anim] [objetivo u16]   golpe normal
 //   0x19 SkillAnimation   C3 09 19 [skill u16] [atacante u16] [objetivo u16|0x8000]
-//   0x1E AreaSkillAnimation C3 0a 1e [skill u16] [atacante u16] [x] [y] [rot]    sin objetivo: cuenta
-//        solo si el que lo tiró es un jugador a <= 5 tiles y en el segundo siguiente nos bajó la vida.
+//   (0x1E AreaSkillAnimation no tiene objetivo: no se usa, daba falsos positivos)
 (() => {
   const S = window.__store, W = () => window.__world;
   for (const t of window.__defense?.timers ?? []) clearInterval(t);
@@ -27,18 +26,12 @@
     D.attackers.set(id, Date.now());
   };
   const u16 = (u, i) => (u[i] << 8) | u[i + 1];
-  let areaCasts = [], lastHp = S.playerData.currentHP;
   const on = (name, fn) => __eventBus.on(name, (raw) => { if (D !== window.__defense) return; try { const u = bytes(raw); if (u) fn(u); } catch {} });
   on('ObjectAnimation', (u) => { if (u[2] === 0x18 && u.length >= 9 && (u16(u, 7) & 0x7fff) === myId()) mark(u16(u, 3) & 0x7fff, 'golpe'); });
   for (const n of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) on(n, (u) => { if (u[2] === 0x19 && u.length >= 9 && (u16(u, 7) & 0x7fff) === myId()) mark(u16(u, 5) & 0x7fff, 'skill ' + u16(u, 3)); });
-  for (const n of ['AreaSkillAnimation', 'AreaSkillAnimation075', 'AreaSkillAnimation095']) on(n, (u) => { if (u[2] === 0x1e && u.length >= 9) areaCasts.push({ id: u16(u, 5) & 0x7fff, t: Date.now() }); });
-  // Vida que baja con un jugador que acaba de tirar un skill de área cerca = ataque.
-  D.timers.push(setInterval(() => {
-    const hp = S.playerData.currentHP, now = Date.now(), w = W(), P = w?.playerEntity?.transform?.pos;
-    areaCasts = areaCasts.filter((a) => now - a.t < 1200);
-    if (P && hp < lastHp) for (const a of areaCasts) { const e = ent(a.id); if (isPlayer(e) && dist(e.transform.pos, P) <= cfg.areaTiles) mark(a.id, 'área'); }
-    lastHp = hp;
-  }, 200));
+  // Sin regla de "área + me bajó la vida": daba falsos positivos. En Arena 2 (esquina de los Drakan)
+  // Yatsuky tiraba área contra los monstruos mientras los Drakan le pegaban a Horaz, y Horaz se
+  // "defendía" de él. Solo cuenta un golpe o skill dirigido a este personaje.
 
   const bestSkill = () => { const have = new Set((S.skills ?? []).map((s) => s.number)); for (const k of [43, 42, 41, 19]) if (have.has(k)) return k; return window.__ai?.cfg?.skill ?? null; };
   const potion = () => {
