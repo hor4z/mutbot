@@ -778,9 +778,11 @@
   // de armas que un DK no usa (usuario: "lleno de cosas que son basura").
   ai.isValuable = (di) => {
     if (!di || di.isMoney) return false;
-    if (di.group === 14 && [11, 13, 14, 16, 22, 31].includes(di.num)) return true;
-    if (di.group === 12 && di.num === 15) return true;
-    return [7, 8, 9, 10, 11].includes(di.group) && di.num === 1 && !!di.item?.isExcellent; // comunes no: juntó 9 pares de guantes +2/+3
+    // Usuario 2026-10-11: "las joyas no valen nada en el juego, se compran"; lo que importa es mejorar
+    // el set. Se levantan las cajas (14/11: Box of Luck / de Kundun) y cualquier item excelente (armas,
+    // escudos y partes de set, grupos 0-11). Antes solo las partes de set con num 1 (un error) y joyas.
+    if (di.group === 14 && di.num === 11) return true;
+    return di.group <= 11 && !!di.item?.isExcellent; // comunes no: juntó 9 pares de guantes +2/+3
   };
   ai.lootCount = old?.lootCount ?? 0; ai.lootSkip = new Set(); ai.lootFails = 0; ai.lootOffUntil = old?.lootOffUntil ?? 0;
   ai.looter = setInterval(() => {

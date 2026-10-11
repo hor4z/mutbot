@@ -366,6 +366,7 @@
     if (!C.on || !ai.on || ai.busy || ai.looting || ai.target || S.uiState !== 5 || S.sceneLoading || window.__defense?.engaged) return;
     if (!(S.skills ?? []).some((k) => k.number === 6)) return;
     const w = W(), pe = w?.playerEntity, dst = ai.explore; if (!pe || !dst || w.castRequest) return;
+    if (!C.teleport) return; // usuario 2026-10-11: "el teleport no sirve, quedó parado, no lo uses" (se prende con __corner.teleport = true)
     const P = pe.transform.pos, dd = d(P, dst); if (dd <= 8 || Date.now() - (C.tpAt ?? 0) < 2000) return;
     if (w.mapIndex === C.map && d(P, C.home) <= C.radius + 5) return; // en la esquina no (pegada al borde del mapa, "veía" paredes)
     // Solo para entrar o salir de los corrales (usuario: "si no, es más lento que volar"): teleport
@@ -413,6 +414,7 @@
     const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || !me) return;
     const P = pe.transform.pos, now = Date.now();
     try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(P.x), z: Math.round(P.z), level: S.playerData.level, resets: S.playerData.resets ?? 0, at: now })); } catch {}
+    if (window.__hunt?.on || C.dragon() || ai.busy) return; // cazando, con un dorado a la vista o reseteando no se cede (Melu se fue a Devias en plena invasión)
     const inCorner = (q) => q && q.map === C.map && d(q, C.home) <= 20;
     // Prioridad (usuario: "por ningún spot puede luchar Melu con Horaz; Horaz por cantidad de resets
     // tiene prioridad"): el de menos resets cede. Si el otro está en su mapa a <= 20 tiles, se va 3 min

@@ -37,6 +37,7 @@
   // Atlans Vepar/Lizard King, Tarkan Wheel/Tantallos, y Golden Dragon al azar en Lorencia/Noria/Devias.
   // Icarus no entra. Warps y niveles: lista del cliente (Atlans 11 nivel 70, Tarkan 21 nivel 140).
   const MAPS = { 0: { warp: 2, lvl: 0, name: 'Lorencia' }, 3: { warp: 3, lvl: 10, name: 'Noria' }, 2: { warp: 6, lvl: 20, name: 'Devias' }, 7: { warp: 11, lvl: 70, name: 'Atlans' }, 8: { warp: 21, lvl: 140, name: 'Tarkan' } };
+  const LAND = { 2: 0, 3: 3, 6: 2, 7: 2, 5: 2, 4: 2 }; // warp → mapa (las salidas que se revisan en la cacería)
   // Práctica de búsqueda en cada invasión, a cualquier nivel (usuario: "entrenar la búsqueda para ir
   // teniendo referencias, aunque no mejore los tiempos"). Se corta con 20 o menos vivos en el mapa
   // (usuario: "seguir buscando tanto tiempo no es bueno") y se arranca solo con más de 25.
@@ -47,7 +48,7 @@
   // y gira por Lorencia y Noria si en tourSec no ve dorados (el Golden Dragon sale al azar en esos 3).
   // En las demás pestañas el cazador queda apagado salvo que se prenda a mano (__hunt.setAuto(true)).
   const SOLO = { Horaz: { map: 2, tour: [0, 3] } };
-  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, bigOnly: true, huntBand: SOLO[S.playerData?.name] ? [0, 256] : [128, 256] };
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 15, tourSec: 12, bigOnly: false, huntBand: SOLO[S.playerData?.name] ? [0, 256] : [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
@@ -117,6 +118,9 @@
   // prioridad es buscar dragones o cosas grandes"): un dorado chico a la vista se mata (sighting usa
   // isGold, con los grandes primero), pero no se persigue por aviso ni alarga la búsqueda; sin un
   // grande a la vista ni avisado, la gira sigue y la cacería corta a los huntWindowMin.
+  // Después (mismo día): "matar todo lo que se pueda" (las cajas de cualquier dorado sirven para el set):
+  // bigOnly en false y la ventana a 15 min; se corta con <= huntStopAlive vivos en el mapa. Los dragones
+  // siguen primero (prio en sighting y en los avisos).
   const isTarget = (e) => isGold(e) && (!CFG.bigOnly || prio(String(e.objectNameInWorld ?? '')) >= 2);
   // Dorado a la vista: atacarlo primero y recordar dónde estaba.
   const sighting = (w, P) => {
@@ -199,6 +203,7 @@
     ai.cfg.leashMaps = ai.cfg.leashMaps.filter((m) => m !== map);
     ai.camp = null; ai.explore = null; ai.target = null; W().attackTarget = null;
     if (W().mapIndex !== map) { S.warpCommandRequest(MAPS[map].warp); ai.spot = MAPS[map].warp; ai.lastWarp = Date.now(); ai.arrival = null; }
+    h.landing = W().mapIndex !== map ? MAPS[map].warp : null; h.lastHop = Date.now();
     if (ai.cur) ai.cur.tag = 'cacería dorada';
     ai.L(byReport ? `HUNTER: aviso de un buscador en ${MAPS[map].name} → voy ya (nivel ${S.playerData.level})` : `HUNTER: invasión con ${aliveIn(map)} dorados en ${MAPS[map].name} → a cazar (nivel ${S.playerData.level})`);
     return true;
@@ -245,22 +250,23 @@
   h.pollTimer = window.setInterval(() => {
     if (!h.on && !h.auto) return; pollGold(); if (!h.on) return;
     if (lootPending()) return;
-    // Gira de dragón: arrancada la invasión, si en CFG.tourSec no hay dorados a la vista, saltar al
-    // siguiente mapa de h.tour (Melu: Lorencia → Noria). Se vuelve a medir en cada mapa.
+    // Salto entre salidas (usuario 2026-10-11: "exploró una salida, no encontró nada, debería buscar
+    // rápido en otra y así"; los dorados grandes salen cerca de las entradas): cada llegada de warp
+    // (Lorencia 2, Noria 3, Devias 6/7/5/4) se mira; sin dorados a la vista ni objetivo por 6 s en Devias
+    // (se llega al campo) o 20 s en Lorencia/Noria (se llega al pueblo: camina a los puntos conocidos), se
+    // anota como revisada (`mubot:hunt-checked`, compartido: el otro la saltea) y se salta a la próxima.
+    // Con dorados a la vista se queda matando. Sin salidas por revisar, vuelve a farmear.
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
-      if (inView) h.lastSeenGold = Date.now();
-      if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && !(h.map === 2 && h.hops?.length) && Date.now() - (h.lastHop ?? 0) > 6000 && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
-        // Coordinación entre pestañas: el mapa que uno ya revisó sin ver nada grande queda anotado en
-        // `mubot:hunt-checked` (localStorage compartido) y el otro lo saltea en esta invasión.
-        const chk = jget('mubot:hunt-checked', {}); chk[h.map] = Date.now(); jset('mubot:hunt-checked', chk);
-        const done = (m) => m === h.map || Date.now() - (chk[m] ?? 0) < 3 * 60000;
-        let next = h.tour.shift(); while (next != null && done(next)) next = h.tour.shift();
-        if (next == null) { ai.L('HUNTER: los 3 mapas revisados sin nada grande → vuelvo a farmear'); h.stop('todo revisado'); return; }
-        if (next !== h.map && MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
-    // Devias: saltar entre sus 4 entradas (warps 6, 7, 5, 4) mira 4 zonas lejanas en segundos;
-    // en cada una se queda 6 s si no hay dorados a la vista.
-    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
-      if (!h.pre && h.map === 2 && w?.mapIndex === 2 && h.hops?.length && !inView && !ai.target && Date.now() - h.lastHop > 6000) { const wp = h.hops.shift(); h.lastHop = Date.now(); S.warpCommandRequest(wp); ai.explore = null; ai.L(`HUNTER: salto a la entrada ${wp} de Devias`); return; } }
+      if (inView || ai.target) h.lastSeenGold = Date.now();
+      if (!h.pre && !h.byReport && !h.redHunt && h.invStart && w && Date.now() - Math.max(h.lastHop ?? 0, h.lastSeenGold ?? 0, h.startedAt, h.invStart) > (h.map === 2 ? 6000 : 20000)) {
+        const chk = jget('mubot:hunt-checked', {}); if (h.landing != null) chk[h.landing] = Date.now(); jset('mubot:hunt-checked', chk);
+        const order = (me === 'Melu' ? [2, 3, 6, 7, 5, 4] : [6, 7, 5, 4, 2, 3]).filter((wp) => S.playerData.level >= MAPS[LAND[wp]].lvl && Date.now() - (chk[wp] ?? 0) > 3 * 60000);
+        const wp = order[0];
+        if (wp == null) { h.stop('todas las salidas revisadas'); return; }
+        h.landing = wp; h.lastHop = Date.now(); h.map = LAND[wp];
+        ai.cfg.spots = [[wp, `cacería ${MAPS[h.map].name}`, 0]]; ai.spot = wp; ai.lastWarp = Date.now(); ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; h.visited.clear();
+        S.warpCommandRequest(wp); ai.L(`HUNTER: nada a la vista → salto a la salida ${wp} (${MAPS[h.map].name})`); return;
+      } }
     const w = W(), pe = w?.playerEntity; if (!pe) return;
     const g = reportGoal(pe.transform.pos, w);
     // Peleando un dorado: solo se cambia si el aviso es de mayor prioridad (un dragón).
