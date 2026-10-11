@@ -27,9 +27,9 @@ import { log } from './util';
 export const WARP_SPOTS: Spot[] = [
   { index: 2, name: 'Lorencia', reqLevel: 10, zen: 1000, map: 0 },
   // Orden = preferencia entre spots del mismo nivel: Devias 3/4 antes que la 2.
-  { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500, map: 2 },
-  { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500, map: 2 },
-  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000, map: 2 },
+  { index: 6, name: 'Devias 3', reqLevel: 20, zen: 2500, map: 2, arrival: { x: 226, y: 228 } },
+  { index: 7, name: 'Devias 4', reqLevel: 20, zen: 2500, map: 2, arrival: { x: 70, y: 179 } },
+  { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000, map: 2, arrival: { x: 24, y: 25 } },
   // Arena 1 (warp 1): monstruos flojos y dispersos, ~0 exp/min medido jugando.
   // Solo como plan B si todas las Devias están llenas de gente (nivel 50-99).
   { index: CROWD_FALLBACK.warp, name: 'Arena', reqLevel: 50, zen: 0 },
@@ -125,6 +125,7 @@ export async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
     allowed: ALLOWED_SPOTS,
     current: currentSpot,
     currentMap: bot.canAdopt ? world.map : -1,
+    pos: { x: world.x, y: world.y },
     mapDead: !!sig.mapDead,
     crowded: !!sig.crowded,
     crowdedAt,
