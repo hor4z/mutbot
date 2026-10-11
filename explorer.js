@@ -22,6 +22,8 @@
   const cellOf = (x, z) => `${Math.floor(x / 25)},${Math.floor(z / 25)}`;
   const KEY = `mubot-atlas:${me}`;
   const atlas = (() => { try { return JSON.parse(localStorage.getItem(KEY) || 'null') ?? { maps: {}, goldens: [] }; } catch { return { maps: {}, goldens: [] }; } })();
+  // Limpiar lo anotado antes del filtro de NPCs.
+  for (const cells of Object.values(atlas.maps)) for (const c of Object.values(cells)) for (const [t, v] of Object.entries(c)) if (/VIP Seller|Battle Royale|Alquimista/i.test(v.name)) delete c[t];
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(atlas)); } catch {} };
   // Mapas a recorrer: [warp, índice de mapa, nombre, nivel]. Lista de warps del cliente.
   const ROUTE = [[2, 0, 'Lorencia', 10], [3, 3, 'Noria', 10], [6, 2, 'Devias', 20], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
@@ -33,7 +35,8 @@
   const record = (w) => {
     const m = (atlas.maps[w.mapIndex] ??= {});
     for (const e of w.byNetId.values()) {
-      if (!ai.isMonster(e) || e.dying) continue;
+      // Los NPCs propios del server (VIP Seller, Battle Royale Guard, Alquimista: tipo 692…) tienen 0 de vida.
+      if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue;
       const id = `${w.mapIndex}:${e.netId}`, p = e.transform.pos, name = String(e.objectNameInWorld ?? '').trim();
       const c = (m[cellOf(p.x, p.z)] ??= {}), t = (c[e.npcType] ??= { name, seen: 0, last: 0, xy: [Math.round(p.x), Math.round(p.z)] });
       t.last = Date.now();
