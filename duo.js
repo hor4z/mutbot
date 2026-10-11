@@ -148,6 +148,16 @@
     if (ai && !ai.duoWait) { const inner = ai.nextGoal; ai.nextGoal = (P, w) => { const f = read(name); if (f && f.map === w.mapIndex && dist(P, f) > (window.__duoWaitDist ?? 8)) return { x: f.x, z: f.z, kind: 'compañero' }; return inner(P, w); }; ai.duoWait = true; }
     // nextGoal solo se consulta al llegar: cortar el viaje en curso si el compañero quedó atrás.
     if (ai) every(() => { const w = W(), pe = w?.playerEntity, f = read(name); if (pe && f && f.map === w.mapIndex && dist(pe.transform.pos, f) > (window.__duoWaitDist ?? 8) && ai.explore && ai.explore.kind !== 'compañero') ai.explore = null; }, 500);
+    // Ciclo completo juntos (usuario: "los dos llegan a 400, resetean juntos y hacen el ciclo completo"):
+    // con window.__duoTogether, el líder solo usa mapas que el compañero puede entrar (su último nivel
+    // conocido), como leader(); así nunca queda el compañero esperando en Lorencia.
+    if (ai && window.__duoTogether && !ai.duoTogetherInstalled) {
+      const all = ai.cfg.allSpots ?? ai.cfg.spots; ai.cfg.allSpots = all; let lastLvl = null;
+      Object.defineProperty(ai.cfg, 'spots', { configurable: true, enumerable: true, set(v) { ai.cfg.allSpots = v; }, get() {
+        try { const v = JSON.parse(localStorage.getItem('mubot:follow:' + name) || 'null'); if (v?.level) lastLvl = v.level; } catch {}
+        const cap = lastLvl ?? 999; return ai.cfg.allSpots.filter((sp) => sp[2] <= cap && !(sp[0] === 2 && cap >= 20)); } });
+      ai.duoTogetherInstalled = true;
+    }
     if (!window.__partyListHooked) { __eventBus.on('PartyList', () => { window.__inParty = true; }); __eventBus.on('RemovePartyMember', () => { window.__inParty = false; }); window.__partyListHooked = true; }
     let last = 0;
     every(() => {
