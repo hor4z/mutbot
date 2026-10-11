@@ -613,11 +613,12 @@ cacería), `command-result` y `decision` (el diario).
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 6 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`) **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 7 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `ranking`) **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
 - `say {text, to?, channel?}`: chat del personaje. Con `to`, susurro; si no, `channel` normal (default), party (`~`) o guild (`@`). Texto de 1 a 60 caracteres imprimibles, sin comandos (`/...`), un mensaje cada 2 s. Lo recibido (y lo mandado, con `mine`) llega al panel como `{type:'chat', at, kind, from, text}`, incluidos susurros y avisos del server; al conectar se mandan los últimos 100.
+- `ranking`: manda `/ranking` (top de resets y ELO de Arena del server); la respuesta llega como avisos por `chat`.
 - `pause` / `resume`: en pausa el loop no camina, no pelea, no warpea ni
   resetea; las pociones siguen.
 - `farm`: vuelve a la ruta normal (cancela la cacería, suelta el spot fijo y la pausa).

@@ -32,6 +32,18 @@ export function watchChat() {
   });
 }
 
+/** Orden `ranking`: manda /ranking por el chat; el server contesta con avisos que llegan por `chat`. */
+export function rankingFromPanel(): { ok: boolean; msg: string } {
+  if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+  const now = Date.now();
+  if (now - lastSentAt < CHAT_SEND_GAP_MS) return { ok: false, msg: 'despacio: un mensaje cada 2 s' };
+  lastSentAt = now;
+  const bytes = buildPublicChat(bot.charName, '/ranking');
+  sendToGS(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  log('Chat (panel): /ranking');
+  return { ok: true, msg: 'pedí el ranking: la respuesta llega por el chat' };
+}
+
 /** Orden `say` del panel (ya validada por isPanelCommand). */
 export function sayFromPanel(c: Extract<PanelCommand, { cmd: 'say' }>): { ok: boolean; msg: string } {
   if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };

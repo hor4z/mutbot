@@ -1,3 +1,4 @@
+import { serveRadarAsset } from './radar-assets';
 /**
  * Estación: un panel para conectar y desconectar a los personajes sin navegador y ponerlos en una
  * rutina (farmear, spot fijo, explorar, pausa). Cada personaje es un bot `headless-bot.ts` aparte,
@@ -294,6 +295,8 @@ Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
   async fetch(req) {
+    const visualAsset = await serveRadarAsset(req);
+    if (visualAsset) return visualAsset;
     const url = new URL(req.url);
     if (req.method === 'GET') {
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {

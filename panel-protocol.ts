@@ -101,10 +101,12 @@ export type PanelCommand =
    * guild. Texto de 1 a 60 caracteres imprimibles; los comandos ("/...") no se aceptan.
    */
   | { cmd: 'say'; text: string; to?: string; channel?: 'normal' | 'party' | 'guild' }
+  /** manda /ranking (el top de resets y ELO de Arena del server); la respuesta llega por el chat */
+  | { cmd: 'ranking' }
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
   | { cmd: 'warp'; warp: number };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'ranking'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -120,7 +122,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], ranking: ['cmd'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {
