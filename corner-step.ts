@@ -51,9 +51,9 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   }
   bot.currentSpot = arena2;
   const me = { x: world.x, y: world.y };
-  // Mago en la esquina: Decay (38, el meteoro verde: 95 de daño contra 45 de Evil Spirit). Usuario:
-  // "Melu molesta muchísimo en el segundo spot con Decay, eso es lo que tiene que lograrse casi siempre".
-  const skill = pickAttackSkill(isMage() ? 38 : undefined);
+  // Mago: Decay (38) en Arena 2, por defecto en pickAttackSkill (combat.ts). Usuario: "Melu molesta
+  // muchísimo en el segundo spot con Decay"; "en el spot debe tirar Decay con todo".
+  const skill = pickAttackSkill();
   const r = spinRange(skill?.number);
   const mons = [...ctx.npcs.values()];
   const here = inCorner(me);
