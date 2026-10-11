@@ -61,6 +61,22 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
 - **Prueba (Noria, nivel 18):** 2 Golden Goblin = de 18 a 55 en un minuto, más una Box of Luck (14/11).
   En Devias los matan rápido (mucha gente). En Noria quedaban 27 sin tocar.
 
+### Qué sale en cada mapa (GoldenInvasionPlugIn de OpenMU)
+
+| Mapa | Dorados |
+|---|---|
+| Lorencia | Golden Budge Dragon |
+| Noria | Golden Goblin |
+| Devias | Golden Soldier, Golden Titan |
+| Atlans (warp 11, nivel 70) | Golden Vepar, Golden Lizard King |
+| Tarkan (warp 21, nivel 140) | Golden Wheel, Golden Tantallos |
+| Lorencia / Noria / Devias, al azar | **Golden Dragon** (los "dragones") |
+
+- Icarus no entra en la invasión.
+- Este server la corre cada hora (:50) y con más de 200 dorados; los valores por defecto de OpenMU son cada 4 h y 20/10 por tipo.
+- Otras invasiones de OpenMU, si están activas: Red Dragon (cada 6 h desde las 2:00, 5 dragones en
+  Lorencia/Noria/Devias) y White Wizard (cada 2 h, de 12 a 23).
+
 ## Devil Square
 
 | | |

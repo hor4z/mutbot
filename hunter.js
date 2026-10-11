@@ -33,7 +33,10 @@
   const jget = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch { return d; } };
   const jset = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   // Mapa → warp y nivel mínimo: los de la invasión que Horaz puede entrar a nivel bajo.
-  const MAPS = { 0: { warp: 2, lvl: 0, name: 'Lorencia' }, 3: { warp: 3, lvl: 10, name: 'Noria' }, 2: { warp: 6, lvl: 20, name: 'Devias' } };
+  // Según GoldenInvasionPlugIn (OpenMU): Lorencia Budge Dragon, Noria Goblin, Devias Soldier/Titan,
+  // Atlans Vepar/Lizard King, Tarkan Wheel/Tantallos, y Golden Dragon al azar en Lorencia/Noria/Devias.
+  // Icarus no entra. Warps y niveles: lista del cliente (Atlans 11 nivel 70, Tarkan 21 nivel 140).
+  const MAPS = { 0: { warp: 2, lvl: 0, name: 'Lorencia' }, 3: { warp: 3, lvl: 10, name: 'Noria' }, 2: { warp: 6, lvl: 20, name: 'Devias' }, 7: { warp: 11, lvl: 70, name: 'Atlans' }, 8: { warp: 21, lvl: 140, name: 'Tarkan' } };
   // Práctica de búsqueda en cada invasión, a cualquier nivel (usuario: "entrenar la búsqueda para ir
   // teniendo referencias, aunque no mejore los tiempos"). Se corta con 20 o menos vivos en el mapa
   // (usuario: "seguir buscando tanto tiempo no es bueno") y se arranca solo con más de 25.
