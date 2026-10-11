@@ -18,6 +18,18 @@ const DB_PASSWORD = process.env.MUBOT_DB_PASSWORD ?? '';
 const FLUSH_MS = 5_000;
 export const MAX_ROWS = 5_000;
 
+/** Commit del bot (para comparar versiones contra la línea base). */
+export const VERSION = (() => {
+  try {
+    const r = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: import.meta.dir });
+    return r.success ? r.stdout.toString().trim() : 'desconocida';
+  } catch { return 'desconocida'; }
+})();
+
+/** Política activa (perillas o experimento), la pone knowledge.ts. */
+let policy = '';
+export const setPolicy = (p: string) => { policy = p; };
+
 /** Una sesión = un proceso del bot. */
 export const SESSION = `${Date.now().toString(36)}-${process.pid}`;
 
@@ -66,7 +78,7 @@ export const chTime = (ms: number) => new Date(ms).toISOString().replace('T', ' 
 /** Anotar una fila (con ts, personaje y sesión). */
 export function track(t: Table, row: Row, now = Date.now()) {
   if (!telemetryOn()) return;
-  buffer.push(t, { ts: chTime(now), char: bot.charName, ...(t === 'players_seen' ? {} : { session: SESSION }), ...row });
+  buffer.push(t, { ts: chTime(now), char: bot.charName, ...(t === 'players_seen' ? {} : { session: SESSION, version: VERSION, policy }), ...row });
   timer ??= setInterval(() => void flush(), FLUSH_MS);
 }
 

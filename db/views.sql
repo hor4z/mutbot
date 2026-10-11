@@ -71,3 +71,21 @@ SELECT char, replaceRegexpAll(text, '[0-9]+', '#') AS decision, count() AS n,
 -- (sin las que cruzan un reset: el nivel cae y compara la esquina con el arranque)
 FROM v_outcome WHERE (before > 0 OR after > 0) AND NOT crosses_reset
 GROUP BY char, decision;
+
+-- Pelea por el spot: por personaje, mapa, celda de 8x8 y dónde está el compañero (0 no se ve, 1 mismo
+-- spot, 2 otro spot): exp/min y qué parte de las kills del sector son nuestras.
+CREATE OR REPLACE VIEW v_spot_fight AS
+SELECT char, map, intDiv(x, 8) * 8 AS cx, intDiv(y, 8) * 8 AS cy, mate_spot,
+       count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
+       sum(kills_me) AS mine, sum(kills_mate) AS mate, sum(kills_rival) AS rivals,
+       round(100 * sum(kills_me + kills_mate) / greatest(1, sum(kills_me + kills_mate + kills_rival))) AS pct_ours,
+       topKIf(3)(top_rival, top_rival != '') AS main_rivals
+FROM ticks WHERE mode = 'farm'
+GROUP BY char, map, cx, cy, mate_spot;
+
+-- Ritmo de resets de cada jugador del ranking (resets por hora entre la primera y la última foto del día).
+CREATE OR REPLACE VIEW v_rival_pace AS
+SELECT name, toDate(ts) AS day, max(resets) - min(resets) AS resets_gained,
+       round((max(resets) - min(resets)) / greatest(1, dateDiff('minute', min(ts), max(ts)) / 60), 2) AS per_hour,
+       argMax(pos, ts) AS pos
+FROM ranking GROUP BY name, day;

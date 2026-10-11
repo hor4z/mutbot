@@ -58,6 +58,8 @@ const TICK_MS = 5_000;
 const PLAYERS_EVERY_MS = 10_000;
 let lastTickAt = 0;
 let lastPlayersAt = 0;
+// Kills en scope desde el último tick: nuestras, del compañero y de rivales (por nombre).
+const killsSeen = { me: 0, mate: 0, rival: 0, rivals: new Map<string, number>() };
 
 function dataTick(ctx: LoopCtx, corner: CornerState) {
   const now = Date.now();
@@ -73,7 +75,12 @@ function dataTick(ctx: LoopCtx, corner: CornerState) {
     rivals_near: players.filter((q) => !mates.includes(q) && near(q, 8)).length, mates_near: mates.filter((q) => near(q, 15)).length,
     monsters_near: [...ctx.npcs.values()].filter((m) => near(m, 8)).length,
     in_party: bot.inParty ? 1 : 0, skill: castSkill, doing: bot.doing,
+    kills_me: killsSeen.me, kills_mate: killsSeen.mate, kills_rival: killsSeen.rival,
+    top_rival: [...killsSeen.rivals].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '',
+    mate_spot: mates.some((q) => near(q, 8)) ? 1 : mates.length ? 2 : 0,
   }, now);
+  killsSeen.me = killsSeen.mate = killsSeen.rival = 0;
+  killsSeen.rivals.clear();
   if (now - lastPlayersAt >= PLAYERS_EVERY_MS) {
     lastPlayersAt = now;
     // En el pueblo (zona segura) nadie compite: no se guarda.
@@ -195,6 +202,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       trackEvent('death', killer?.name ?? by, kid, killer ? 1 : 0, { killer: killer?.name ?? null, kx: killer?.x, ky: killer?.y, npc: killer ? null : world.npcs.get(kid)?.type ?? null });
       onDeath('ObjectGotKilled');
       return;
+    }
+    {
+      // Para los datos: quién mata en nuestro sector.
+      const kid = p.KillerId & 0x7fff;
+      const who = world.players.get(kid);
+      if (kid === bot.playerId) killsSeen.me++;
+      else if (who?.name && isMate(who.name)) killsSeen.mate++;
+      else if (who) {
+        killsSeen.rival++;
+        if (who.name) killsSeen.rivals.set(who.name, (killsSeen.rivals.get(who.name) ?? 0) + 1);
+      }
     }
     if ((p.KillerId & 0x7fff) === bot.playerId) {
       kills++;
