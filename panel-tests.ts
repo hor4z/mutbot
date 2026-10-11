@@ -12,7 +12,7 @@ import {
   goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt,
   toPanelCycle, validateWarp,
 } from './panel-logic';
-import { parseClientMessage, originAllowed, resolveAssetPath, assetContentType, MAX_CLIENT_MESSAGE_BYTES } from './ws-server';
+import { parseClientMessage, originAllowed, MAX_CLIENT_MESSAGE_BYTES } from './ws-server';
 import monstersData from './data/monsters.json';
 
 let fails = 0;
@@ -90,7 +90,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   for (const c of bad) ok(`rechaza ${JSON.stringify(c) ?? String(c)}`, !isPanelCommand(c));
 }
 
-// --- ws-server: mensajes del panel, origen y assets ------------------------------
+// --- ws-server: mensajes del panel y origen ------------------------------
 {
   const good = parseClientMessage(JSON.stringify({ type: 'command', id: 7, command: { cmd: 'warp', warp: 6 } }));
   ok('ws: orden válida pasa con su id', 'command' in good && good.id === 7 && good.command.cmd === 'warp', good);
@@ -109,15 +109,6 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('origen: el propio panel ok', originAllowed('http://127.0.0.1:8787', 8787) && originAllowed('http://localhost:8787', 8787));
   ok('origen: otra página no', !originAllowed('https://evil.example', 8787) && !originAllowed('http://127.0.0.1:9999', 8787));
 
-  const base = '/srv/assets';
-  ok('assets: glb adentro del base', resolveAssetPath(base, '/models/dk.glb') === '/srv/assets/models/dk.glb');
-  ok('assets: extensión en mayúsculas (.OZT)', resolveAssetPath(base, '/tex/a.OZT') === '/srv/assets/tex/a.OZT');
-  ok('assets: .tga como octet-stream', assetContentType('/x/a.TGA') === 'application/octet-stream' && assetContentType('/x/a.glb') === 'model/gltf-binary');
-  ok('assets: path traversal con ..', resolveAssetPath(base, '/../secret.png') === null);
-  ok('assets: path traversal codificado', resolveAssetPath(base, '/%2e%2e/%2e%2e/etc/x.png') === null);
-  ok('assets: prefijo hermano (/srv/assets2)', resolveAssetPath(base, '/../assets2/a.png') === null);
-  ok('assets: extensión fuera de la lista', resolveAssetPath(base, '/a.js') === null && resolveAssetPath(base, '/a.html') === null);
-  ok('assets: byte nulo', resolveAssetPath(base, '/a%00.png') === null);
 }
 
 // --- Cacería: elegir mapa y regla de corte ----------------------------------------

@@ -1,79 +1,42 @@
 /**
- * Bot headless de MU — autonomous farming + progression, SIN GUI.
+ * Bot de MU sin navegador: hace progresar a un personaje solo (pelea, sube nivel, reparte puntos,
+ * resetea en 400, levanta cajas) hablando el protocolo real del cliente 0.97d, a ritmo humano.
+ * Lo normal es lanzarlo desde la estación (`bun run estacion`), que le pasa todo esto.
  *
- * Juega usando el protocolo real del cliente (mismos packets y cifrado que
- * src/store.ts), pero sin interfaz ni eventos de mouse/teclado. Corre un
- * personaje que progresa solo: pelea, sube exp y stats, recoge loot, vende la
- * basura y repone pociones, siempre a ritmo humano.
+ * Solo contra infraestructura propia o con permiso (--allow-remote para hosts no locales).
  *
- * Solo para TU propio OpenMU de prueba, con una cuenta de prueba.
- *
- *   bun run headless-bot.ts [opciones]
+ *   bun run headless-bot.ts [opciones]      (credenciales en .env: MUBOT_USER/PASS/CHAR)
  *
  * Conexión:
- *   --proxy ws://127.0.0.1:3000        proxy WebSocket (WS -> TCP)
+ *   --proxy ws://127.0.0.1:3000          proxy WebSocket (WS -> TCP)
  *   --cs-host 127.0.0.1 --cs-port 44405  connect server
- *   --user test1 --pass test1 --char test1Dk
- *   --allow-remote       permite apuntar a hosts no locales
+ *   --user u --pass p --char c           (mejor por .env)
+ *   --allow-remote                       permite apuntar a hosts no locales
+ *   --exit-if-in-use                     si la cuenta ya está conectada al entrar, sale con código 3
  *
- * Loop autónomo (juega solo, sin GUI, sin flood):
- *   --auto-seconds 600  cuánto tiempo corre el loop autónomo (0 = sin límite:
- *                       farmea y encadena resets indefinidamente, reconectando
- *                       con backoff si se corta la conexión)
- *   --reset-level 400   nivel al que hace /reset (default 400)
- *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: el del agente
- *                       web, planStats: energía hasta fuerza − 2000, después
- *                       mitad/mitad, 5% vitalidad)
- *   --max-stat 300      tope por atributo (default 10000 = sin tope)
- *   --heal-at 60        usa potion cuando HP% <= este valor
- *   --skills 41,42      números de skill de ataque, en orden de preferencia
- *                       (default: los conocidos de DEFAULT_ATTACK_SKILLS)
+ * Farmeo:
+ *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea, resetea y reconecta con backoff)
+ *   --reset-level 400    nivel del /reset
+ *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: planStats)
+ *   --max-stat 300       tope por atributo con --build
+ *   --stat-batch 200     puntos mínimos para frenar a repartir
+ *   --heal-at 60         usa poción con HP% <= esto
+ *   --skills 41,42       skills de ataque, en orden de preferencia
+ *   --spots 2,6,24       limita la ruta a esos warps
+ *   --explore-dir 1      primera dirección a explorar desde el pueblo en mapas sin salida conocida
+ *   --learn-file p.json  dónde guarda lo aprendido (default ~/.mubot/learning.json)
  *
- * Economía (ver AGENTS.md para el detalle del flujo):
- *   --merchant 500,510  Ids de NPC merchant conocidos. Si no se pasan, el bot
- *                       los descubre probando los NPCs que ve en scope.
- *   --buy-slot 12,13    índices de pociones DENTRO de la lista del merchant.
- *                       El server valida el índice; si está mal contesta
- *                       NpcItemBuyFailed y no cobra nada.
- *   --warp 26           antes de arrancar, viaja con el menú de warp (índice de
- *                       la lista de movimiento del cliente; valida nivel y cobra zen)
- *   --explore-dir 1     en mapas sin salida conocida, primera dirección a
- *                       explorar desde el pueblo (0..7, 1=norte; ver explore.ts)
- *   --move dungeon      antes de arrancar, manda "/move <mapa>" por chat
- *                       (warp del server: valida nivel y cobra zen)
- *   --spots 2,5,1       limita a qué warps de la ruta puede ir el bot (default:
- *                       toda la ruta, ver WARP_SPOTS)
- *   --free-route        en vez de la ruta fija por tramo (chooseFixedRoute),
- *                       la regla vieja que prueba mapas por exp/min (chooseRouteSpot)
- *
- * Aprendizaje (ver AGENTS.md, "Aprendizaje"):
- *   --learn-file p.json  dónde guarda exp/min por spot, exp/segundos por tipo
- *                        de monstruo y spots calientes, por personaje
- *                        (default ~/.mubot/learning.json)
- *   --no-learn           no mide ni aprende: vuelve a la regla fija
- *                        (spot de mayor nivel requerido)
- *
- * Explorador / atlas (ver AGENTS.md, "Explorador (atlas)"):
- *   --atlas              recorre mapas enteros SIN pelear y anota qué aparece
- *                        dónde (~/.mubot/atlas.json); compra pociones antes
- *   --atlas-maps 0,3,2   índices de mapa (default: Lorencia, Noria, Devias,
- *                        Dungeon, Lost Tower, Atlans, Tarkan, según el nivel)
- *   --atlas-minutes-per-map 12  tope de tiempo por mapa
- *
- * Control / UI:
- *   --decision-log r.jsonl  appendea cada decisión como JSONL (una por línea)
- *                           para que una UI pueda tail-earla.
- *   --ws-port 8787          panel en http://127.0.0.1:8787/panel (ver
- *                           ws-server.ts y AGENTS.md, "Panel externo"): estado
- *                           cada 1 s, decisiones y órdenes de lista cerrada.
+ * Panel:
+ *   --ws-port 8791       panel en http://127.0.0.1:<puerto>/panel (ws-server.ts)
+ *   --decision-log r.jsonl  diario de acciones en JSONL
  */
 import { appendFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  SpotMeter, chooseRouteSpot, chooseFixedRoute, routeScores, routeTier, aggregate, formatSpotTable, loadLearning, saveLearningChar, activeDryExclusions,
+  LEARN, chooseFixedRoute, routeTier, loadLearning, saveLearningChar, activeDryExclusions,
   CROWD_FALLBACK,
-  type Spot, type SpotSample, type CharLearning,
+  type Spot, type CharLearning,
 } from './learning';
 import { EXPLORE, Explorer, HotSpotGrid, isMonsterType, isTownNpcType } from './explore';
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLoot, planStats, type TimeKind } from './farming';
@@ -196,6 +159,18 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+// Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
+const KNOWN_FLAGS = new Set([
+  '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
+  '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
+  '--explore-dir', '--learn-file', '--ws-port', '--decision-log',
+]);
+const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
+if (unknownFlags.length) {
+  console.error(`Flag desconocido: ${unknownFlags.join(', ')}. Los válidos: ${[...KNOWN_FLAGS].join(' ')}`);
+  process.exit(2);
+}
+
 const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
 const CS_HOST = args.get('--cs-host') ?? '127.0.0.1';
 const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
@@ -308,22 +283,6 @@ const world = {
 // Servidor de telemetría opcional (--ws-port). Solo lectura: ver ws-server.ts.
 let statusServer: StatusServer | undefined;
 
-function snapshotWorld() {
-  return {
-    x: world.x,
-    y: world.y,
-    map: world.map,
-    hp: world.hp,
-    maxHp: world.maxHp,
-    mana: world.mana,
-    maxMana: world.maxMana,
-    level: world.level,
-    levelUpPoints: world.levelUpPoints,
-    stats: world.stats,
-    inventoryCount: world.inventory.size,
-    inventory: [...world.inventory.values()],
-  };
-}
 
 // Las pociones del set clásico están en el Group 14 (curación 1-3, mana 4-6,
 // SD 35-37) y el Group 13 (Potion of Illusion). Salen de data/items.json.
@@ -441,21 +400,6 @@ function login(username: string, password: string) {
   Xor3Byte(usernameBytes);
   Xor3Byte(passwordBytes);
 
-  if (process.env.MUBOT_LONGLOGIN) {
-    // Experimento: OpenMU trata como LoginLongPassword todo packet >= 42 bytes
-    // (LogInHandlerPlugIn.cs), y el corto de 50 bytes cae ahí con otro layout.
-    const long = new Uint8Array(60);
-    long.set([0xc3, 60, 0xf1, 0x01], 0);
-    const lp = stringToBytes(password, 20);
-    Xor3Byte(lp);
-    long.set(usernameBytes, 4);
-    long.set(lp, 14);
-    new DataView(long.buffer).setUint32(34, Math.floor(performance.now()) >>> 0, false);
-    long.set(CLIENT_VERSION, 38);
-    long.set(stringToBytes(CLIENT_SERIAL, 16), 43);
-    sendToGS(new DataView(long.buffer));
-    return;
-  }
   const p = LoginShortPasswordPacket.createPacket();
   // Los setters generados están tipados como number[] pero reciben Uint8Array.
   p.setUsername(usernameBytes as unknown as number[], usernameBytes.length);
@@ -1055,74 +999,19 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number 
 }
 
 // ---------------------------------------------------------------------------
-// Capa de decisión — el punto de control para una UI futura.
-//
-// El bot NO ejecuta nada sin pasar por acá. Cada acción de alto nivel se
-// propone como una Decision y espera el veredicto del handler. Hoy el handler
-// por defecto aprueba todo, pero cambiarlo es lo único que hay que hacer para
-// que una UI decida: `setDecisionHandler()`.
-//
-// Cada decisión también se escribe a un JSONL, así una UI puede tail-ear el
-// archivo y ver la actividad en vivo sin tocar el bot.
+// Diario: cada acción de alto nivel (viaje, reset, reparto, loot, órdenes del panel, cambios de
+// modo) se anota al panel (`decision`/`history`) y, con --decision-log, a un JSONL.
 // ---------------------------------------------------------------------------
-type DecisionKind =
-  | 'pickup'      // recoger un item del piso
-  | 'sell'        // vender un item a un merchant
-  | 'buy'         // comprar (pociones)
-  | 'reset'       // /reset al llegar al nivel (irreversible)
-  | 'stat'        // subir un punto de atributo
-  | 'skill'       // usar una skill
-  | 'travel'      // viajar a otro mapa
-  | 'engage'      // pelear a un objetivo
-  // Solo registro (no piden veredicto, ver logDecision): órdenes del panel y
-  // cambios de modo. Una pausa no puede quedar rechazada por el handler.
-  | 'command'     // orden recibida del panel (panel-protocol.ts)
-  | 'mode';       // cambio de modo (farm/hunt/paused/...)
-
-type Decision = {
-  kind: DecisionKind;
-  what: string;                  // descripción legible
-  detail: Record<string, unknown>;// datos crudos para la UI
-  autoOk: boolean;               // si el bot puede seguir solo con esto
-};
-
-type Verdict = { allow: boolean; reason?: string };
+type JournalKind = 'pickup' | 'reset' | 'stat' | 'travel' | 'command' | 'mode';
 
 const decisionLogPath = args.get('--decision-log') ?? '';
-let decisionHandler: (d: Decision) => Verdict | Promise<Verdict> = () => ({ allow: true });
-let decisionSeq = 0;
+let journalSeq = 0;
 
-export function setDecisionHandler(h: (d: Decision) => Verdict | Promise<Verdict>) {
-  decisionHandler = h;
-}
-
-// Propone una decisión y devuelve si se puede actuar. Nunca lanza: si el
-// handler falla, la decisión se rechaza (fail-safe: no gastamos recursos sin
-// permiso).
-// Escribe una decisión al JSONL y al WebSocket, sin pedir veredicto.
-async function logDecision(full: Decision): Promise<void> {
-  const entry = { seq: ++decisionSeq, at: new Date().toISOString(), ...full };
-  if (decisionLogPath) {
-    // appendFile (no Bun.write: ese sobrescribe el archivo entero en cada llamada,
-    // así que en una corrida larga solo quedaba la última decisión). Si el archivo
-    // falla, no debe frenar el juego.
-    await appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
-  }
+function journal(kind: JournalKind, what: string, detail: Record<string, unknown> = {}) {
+  const entry = { seq: ++journalSeq, at: new Date().toISOString(), kind, what, detail, autoOk: true };
+  // appendFile (no Bun.write, que sobrescribe); si el archivo falla no frena el juego.
+  if (decisionLogPath) void appendFile(decisionLogPath, JSON.stringify(entry) + '\n').catch(() => {});
   statusServer?.broadcastDecision(entry);
-}
-
-async function decide(d: Omit<Decision, 'autoOk'> & { autoOk?: boolean }): Promise<boolean> {
-  const full: Decision = { autoOk: true, ...d };
-  await logDecision(full);
-  let verdict: Verdict;
-  try {
-    verdict = await decisionHandler(full);
-  } catch (e) {
-    log(`Handler de decisión falló, rechazo por seguridad: ${(e as Error).message}`);
-    return false;
-  }
-  if (!verdict.allow) log(`Acción rechazada (${full.kind}: ${full.what}): ${verdict.reason ?? 'sin motivo'}`);
-  return verdict.allow;
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,13 +1098,7 @@ async function investStatPoints(force = false): Promise<number> {
     plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
     plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
   }
-  const ok = await decide({
-    kind: 'stat',
-    what: plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '),
-    detail: { points, plan: Object.fromEntries(plan) },
-    autoOk: false,
-  });
-  if (!ok) return 0;
+  journal('stat', plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '), { points, plan: Object.fromEntries(plan) });
   statTry = { points, at: Date.now() };
   let spent = 0;
   for (const [name, n] of plan) {
@@ -1409,15 +1292,7 @@ async function lootStep(): Promise<boolean> {
   const d = looting ? drops.get(looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS);
   if (!d) return false;
   if (!looting) {
-    const ok = await decide({
-      kind: 'pickup',
-      what: `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`,
-      detail: { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y },
-    });
-    if (!ok) {
-      drops.delete(d.id);
-      return false;
-    }
+    journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });
     looting = { id: d.id, since: now };
   }
   if (chebyshev(world.x, world.y, d.x, d.y) > 1) {
@@ -1472,9 +1347,6 @@ const WARP_SPOTS: Spot[] = [
   { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0, map: 84 },
   { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0, map: 85 },
 ];
-// Sin el plan B: lo que usan --no-learn y --free-route.
-const ROUTE_SPOTS = WARP_SPOTS.filter((sp) => sp.index !== CROWD_FALLBACK.warp);
-const FIXED_ROUTE_ON = !args.has('--free-route');
 const zenTxt = (sp: Spot | null | undefined) => (sp?.zen ? `cuesta ${sp.zen} zen` : 'zen sin capturar');
 const LORENCIA_WARP = 2;
 // --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
@@ -1483,27 +1355,15 @@ let currentSpot: Spot | null = null;
 // Spot → cuándo se lo encontró "seco" (mapa entero sin monstruos DRY_MAP_MS).
 // No se vuelve a elegir durante LEARN.DRY_EXCLUDE_MS (ver explore.ts).
 const dryAt = new Map<number, number>();
-// Desde cuándo está en currentSpot (para la permanencia mínima del bandit).
-let spotSince = 0;
-
-// Regla fija (la de antes del aprendizaje): el de mayor reqLevel permitido.
-// Se usa con --no-learn.
-function pickSpot(level: number, exclude: ReadonlySet<number> = new Set()): Spot | undefined {
-  return ROUTE_SPOTS.filter((sp) => sp.reqLevel <= level && (!ALLOWED_SPOTS || ALLOWED_SPOTS.has(sp.index)) && !exclude.has(sp.index)).sort(
-    (a, b) => b.reqLevel - a.reqLevel,
-  )[0];
-}
-
 // ---------------------------------------------------------------------------
-// Aprendizaje (ver learning.ts y AGENTS.md, "Aprendizaje"): mide exp/min,
-// kills/min y muertes por spot, lo guarda por personaje y elige el spot con
-// un bandit UCB1 en vez de "el de mayor nivel".
+// Lo aprendido (learning.ts): campamentos, tipos de monstruo, spots calientes, ciclos y la
+// referencia del hambre, por personaje en ~/.mubot/learning.json (--learn-file).
 // ---------------------------------------------------------------------------
-const LEARN_ENABLED = !args.has('--no-learn');
+const SAVE_EVERY_MS = 2 * 60_000;
 const LEARN_FILE = args.get('--learn-file') ?? join(homedir(), '.mubot', 'learning.json');
-const LEARN_SUMMARY_MS = 2 * 60_000;
-let learning: CharLearning = { resets: 0, samples: [] };
-const meter = new SpotMeter();
+let learning: CharLearning = { resets: 0 };
+// Muerte propia: llega por dos lados (HP 0 y ObjectGotKilled); dentro de esta ventana es una sola.
+let lastDeathAt = -Infinity;
 
 // Farmeo por exp/segundo (farming.ts): lo aprendido por tipo de monstruo, el
 // registro id → tipo para atribuir la exp, y la grilla de spots calientes
@@ -1541,9 +1401,8 @@ function onMapArrival() {
 }
 
 async function loadLearningState() {
-  if (!LEARN_ENABLED) return;
   const r = await loadLearning(LEARN_FILE);
-  learning = r.data.chars[CHAR_NAME] ?? { resets: 0, samples: [] };
+  learning = r.data.chars[CHAR_NAME] ?? { resets: 0 };
   if (learning.types) {
     Object.assign(typeStats.expByType, learning.types.expByType);
     Object.assign(typeStats.killSecByType, learning.types.killSecByType);
@@ -1555,18 +1414,13 @@ async function loadLearningState() {
   if (r.status === 'corrupt') {
     log(`Aprendizaje: ${LEARN_FILE} ilegible (${r.error}); arranco de cero${r.backup ? `, el original quedó en ${r.backup}` : ''}.`);
   } else {
-    log(`Aprendizaje: ${learning.samples.length} muestra(s) de ${CHAR_NAME} en ${LEARN_FILE}${r.status === 'missing' ? ' (archivo nuevo)' : ''}.`);
+    log(`Aprendizaje: ${CHAR_NAME} en ${LEARN_FILE}${r.status === 'missing' ? ' (archivo nuevo)' : ''}.`);
   }
-}
-
-function recordSample(s: SpotSample | null) {
-  if (s) learning.samples.push(s);
 }
 
 // Los saves se encadenan (muerte y resumen pueden coincidir): uno a la vez.
 let learnSaveChain: Promise<void> = Promise.resolve();
 function persistLearning(): Promise<void> {
-  if (!LEARN_ENABLED) return Promise.resolve();
   // Nunca frena el juego: si el disco falla, se pierde a lo sumo un tramo.
   learning.types = typeStats.snapshot();
   learning.hot = hotGrid.dump().map(({ map, cx, cy, exp }) => ({ map, cx, cy, exp }));
@@ -1581,131 +1435,60 @@ function persistLearning(): Promise<void> {
   return learnSaveChain;
 }
 
-// Corta el tramo en curso (lo guarda como muestra) y deja de medir.
-function endStint() {
-  recordSample(meter.flush(Date.now(), world.level));
-  meter.stop();
-}
-
-function logLearningSummary() {
-  if (!LEARN_ENABLED) return;
-  const now = Date.now();
-  const live = meter.peek(now);
-  const stats = aggregate(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
-  log(`Aprendizaje (nivel ${world.level}, reset ${learning.resets}, * = spot actual):\n${formatSpotTable(WARP_SPOTS, stats, currentSpot?.index ?? null)}`);
-}
-
-// Estadía en el spot actual (para su exp/min) y el mayor tier de mapas ya visto
-// en este ciclo de reset (ver chooseRouteSpot en learning.ts).
-let stayExp = 0;
-let tierSeen = 0;
 let lastWarpAt = 0;
 // Entre warps: el agente web espera 15 s (que cargue el mapa y aparezcan los
 // monstruos) antes de volver a evaluar.
 const WARP_COOLDOWN_MS = 15_000;
 
-async function warpAndWait(spot: Spot, measure = true): Promise<boolean> {
+async function warpAndWait(spot: Spot): Promise<boolean> {
   const waiter = waitFor('MapChanged075', 6000).catch(() => null);
   warpTo(spot.index);
   lastWarpAt = Date.now();
   const ok = !!(await waiter);
-  if (ok) {
-    endStint();
-    currentSpot = spot;
-    spotSince = Date.now();
-    stayExp = 0;
-    if (measure && LEARN_ENABLED) meter.start(spot.index, world.level, learning.resets, spotSince);
-  } else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
+  if (ok) currentSpot = spot;
+  else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
   return ok;
 }
 
-// Por defecto, la RUTA FIJA por tramo (chooseFixedRoute, learning.ts): cambia
-// de mapa solo al cruzar un tramo, con el mapa vacío (90 s) o por competencia
-// que bajó la exp (campamentos abandonados por gente, o "hambre"). Si ya está
-// en el mapa del tramo al entrar al mundo, lo adopta sin warpear.
-// Con --free-route: la regla vieja (chooseRouteSpot) que prueba mapas por exp/min.
+// La RUTA FIJA por tramo (chooseFixedRoute, learning.ts): cambia de mapa solo al cruzar un tramo,
+// con el mapa vacío (90 s) o por competencia que bajó la exp (campamentos abandonados por gente, o
+// "hambre"). Si ya está en el mapa del tramo al entrar al mundo, lo adopta sin warpear.
 type SpotSignals = { mapDead?: boolean; crowded?: boolean };
 async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
   if (now - lastWarpAt < WARP_COOLDOWN_MS) return false;
-  // Spot fijado por la orden `warp` del panel: ni la ruta ni el bandit lo
-  // cambian hasta la orden `farm`. Si murió o lo sacaron, vuelve ahí.
+  // Spot fijado por la orden `warp` del panel: la ruta no lo cambia hasta la orden `farm`. Si murió
+  // o lo sacaron, vuelve ahí.
   if (pinnedSpot) {
     if (currentSpot?.index === pinnedSpot.index) return false;
-    const pin = pinnedSpot;
-    if (!(await decide({ kind: 'travel', what: `volver al spot fijado por el panel: ${pin.name} (${zenTxt(pin)})`, detail: { warp: pin.index, reason: 'panel' } }))) return false;
-    return warpAndWait(pin);
+    journal('travel', `vuelvo al spot fijado por el panel: ${pinnedSpot.name} (${zenTxt(pinnedSpot)})`, { warp: pinnedSpot.index, reason: 'panel' });
+    return warpAndWait(pinnedSpot);
   }
-  let best: Spot | undefined | null;
-  let what: string;
-  let detail: Record<string, unknown> = { from: currentSpot?.name ?? null, level: world.level };
   const exclude = activeDryExclusions(dryAt, now);
-  if (exclude.size) detail.dry = [...exclude];
-  if (FIXED_ROUTE_ON) {
-    const choice = chooseFixedRoute({
-      spots: WARP_SPOTS,
-      level: world.level,
-      allowed: ALLOWED_SPOTS,
-      current: currentSpot,
-      currentMap: canAdopt ? world.map : -1,
-      mapDead: !!sig.mapDead,
-      crowded: !!sig.crowded,
-      crowdedAt,
-      now,
-      prefer: lastSpotIndex,
-    });
-    if (choice.reason === 'crowd' && currentSpot) crowdedAt.set(currentSpot.index, now);
-    if (sig.crowded) camps.crowdLeaves = [];
-    if (choice.reason === 'adopt' && choice.spot) {
-      // Ya está en el mapa del tramo: seguir acá sin warpear.
-      log(`Spot: ${choice.what}.`);
-      currentSpot = choice.spot;
-      spotSince = now;
-      stayExp = 0;
-      if (LEARN_ENABLED) meter.start(choice.spot.index, world.level, learning.resets, now);
-      return false;
-    }
-    if (!choice.warp || !choice.spot || choice.spot.index === currentSpot?.index) return false;
-    best = choice.spot;
-    what = `${choice.what} (${zenTxt(best)})`;
-    detail = { ...detail, reason: choice.reason, tier: choice.tier };
-  } else if (!LEARN_ENABLED) {
-    best = pickSpot(world.level, exclude);
-    what = `warp a ${best?.name} (nivel ${world.level}, ${zenTxt(best)})`;
-  } else {
-    const live = meter.peek(now);
-    const scores = routeScores(live ? [...learning.samples, live] : learning.samples, world.level, learning.resets);
-    const choice = chooseRouteSpot({
-      spots: ROUTE_SPOTS,
-      level: world.level,
-      allowed: ALLOWED_SPOTS,
-      current: currentSpot,
-      stayMs: currentSpot ? now - spotSince : 0,
-      stayExp,
-      scores,
-      tierSeen,
-      exclude,
-    });
-    tierSeen = Math.max(tierSeen, choice.tier);
-    if (choice.restartEval) {
-      // Rinde poco pero no hay alternativa: medir de nuevo desde ahora.
-      log(`Spot: ${choice.what}; vuelvo a medir.`);
-      spotSince = now;
-      stayExp = 0;
-    }
-    best = choice.spot;
-    what = `${choice.what} → warp a ${best?.name} (${zenTxt(best)})`;
-    detail = {
-      ...detail,
-      reason: choice.reason,
-      curRate: Math.round(choice.curRate),
-      bestKnown: Math.round(choice.bestKnown),
-      scores: Object.fromEntries(scores),
-    };
+  const choice = chooseFixedRoute({
+    spots: WARP_SPOTS.filter((sp) => !exclude.has(sp.index) || sp.index === currentSpot?.index),
+    level: world.level,
+    allowed: ALLOWED_SPOTS,
+    current: currentSpot,
+    currentMap: canAdopt ? world.map : -1,
+    mapDead: !!sig.mapDead,
+    crowded: !!sig.crowded,
+    crowdedAt,
+    now,
+    prefer: lastSpotIndex,
+  });
+  if (choice.reason === 'crowd' && currentSpot) crowdedAt.set(currentSpot.index, now);
+  if (sig.crowded) camps.crowdLeaves = [];
+  if (choice.reason === 'adopt' && choice.spot) {
+    // Ya está en el mapa del tramo: seguir acá sin warpear.
+    log(`Spot: ${choice.what}.`);
+    currentSpot = choice.spot;
+    return false;
   }
-  if (!best || best.index === currentSpot?.index) return false;
-  const ok = await decide({ kind: 'travel', what, detail: { ...detail, warp: best.index }, autoOk: true });
-  if (!ok) return false;
+  if (!choice.warp || !choice.spot || choice.spot.index === currentSpot?.index) return false;
+  const best = choice.spot;
+  const what = `${choice.what} (${zenTxt(best)})`;
+  journal('travel', what, { from: currentSpot?.name ?? null, level: world.level, reason: choice.reason, tier: choice.tier, warp: best.index, ...(exclude.size ? { dry: [...exclude] } : {}) });
   log(`Cambio de spot: ${currentSpot?.name ?? '?'} → ${best.name} — ${what}`);
   const moved = await warpAndWait(best);
   if (moved) await persistLearning();
@@ -1718,13 +1501,7 @@ async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
 // volver a elegir el personaje, repartir los puntos nuevos y salir a farmear.
 // ---------------------------------------------------------------------------
 async function doReset(): Promise<boolean> {
-  const ok = await decide({
-    kind: 'reset',
-    what: `/reset en nivel ${world.level}`,
-    detail: { level: world.level, stats: { ...world.stats } },
-    autoOk: false,
-  });
-  if (!ok) return false;
+  journal('reset', `/reset en nivel ${world.level}`, { level: world.level, stats: { ...world.stats } });
   resetting = true;
   try {
     return await doResetSteps();
@@ -1736,10 +1513,7 @@ async function doReset(): Promise<boolean> {
 async function doResetSteps(): Promise<boolean> {
   doing = `reseteando en nivel ${world.level}`;
   await investStatPoints(true);
-  // Lo medido hasta acá es del reset viejo: cortarlo antes de ir a Lorencia
-  // (el viaje a resetear no es farmeo y no se mide).
-  endStint();
-  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!, false);
+  if (world.map !== 0) await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
   await sleep(2000);
   let listWaiter = waitFor('CharacterList', 8000).catch(() => null);
   sayChat(CHAR_NAME, '/reset');
@@ -1759,13 +1533,8 @@ async function doResetSteps(): Promise<boolean> {
   world.npcs.clear();
   world.townNpcs.clear();
   currentSpot = null;
-  meter.stop();
-  // Ciclo nuevo: el rendimiento por mapa se vuelve a medir (routeScores solo
-  // mira muestras de este reset) y los tiers se vuelven a habilitar desde
-  // Lorencia. Los spots calientes (hotGrid) y lo aprendido por tipo de
-  // monstruo se conservan: dependen del mapa, no del nivel.
-  tierSeen = 0;
-  stayExp = 0;
+  // Ciclo nuevo. Los spots calientes (hotGrid) y lo aprendido por tipo de monstruo se conservan:
+  // dependen del mapa, no del nivel.
   // La vara de cada mapa depende del nivel: se vuelve a medir. La memoria de
   // campamentos se conserva (guarda el nivel al que se midió).
   camps.onReset();
@@ -1857,7 +1626,6 @@ function stopHunt(reason: string) {
   goalPoint = null;
   // El spot de la cacería no es de la ruta: que la ruta fija decida (adopta el
   // mapa si es el del tramo, si no warpea).
-  endStint();
   currentSpot = null;
   canAdopt = true;
   panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
@@ -1912,7 +1680,7 @@ function runPanelCommand(c: PanelCommand): CommandResult {
 async function handlePanelCommand(c: PanelCommand): Promise<CommandResult> {
   const r = runPanelCommand(c);
   panelLog(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`);
-  await logDecision({ kind: 'command', what: `${c.cmd}: ${r.msg}`, detail: { command: c, ok: r.ok }, autoOk: true });
+  journal('command', `${c.cmd}: ${r.msg}`, { command: c, ok: r.ok });
   return r;
 }
 
@@ -1926,7 +1694,7 @@ function noteModeChange() {
   lastMode = m;
   if (from == null) return;
   panelLog(`Modo: ${from} → ${m}.`);
-  void logDecision({ kind: 'mode', what: `${from} → ${m}`, detail: { from, to: m }, autoOk: true });
+  journal('mode', `${from} → ${m}`, { from, to: m });
 }
 
 function updateTrail(now: number) {
@@ -1966,7 +1734,7 @@ function buildPanelState(now: number): PanelState {
     char: {
       name: charName,
       level: world.level,
-      resets: world.resets ?? (LEARN_ENABLED && learning.resets ? learning.resets : null),
+      resets: world.resets ?? (learning.resets || null),
       ...(world.classId != null ? { classId: world.classId } : {}),
       hp: [world.hp, world.maxHp],
       mp: [world.mana, world.maxMana],
@@ -2062,7 +1830,7 @@ const report = new SelfReport(Date.now(), expLog);
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
 async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
-  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta=${FIXED_ROUTE_ON ? 'fija por tramo' : 'libre'}`);
+  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta fija por tramo`);
 
   // Monstruos atacables: los de world.npcs que NO están en zona segura. Después del reset Horaz quedó
   // pegándole a unos Lord centurion parados en el pueblo de Lorencia (en zona segura no hay daño):
@@ -2080,7 +1848,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let resets = 0;
   let deaths = 0;
   let nextResetTry = 0;
-  let lastSummary = Date.now();
+  let lastSave = Date.now();
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastCastAt = 0;
@@ -2098,15 +1866,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // actual: el respawn es en el pueblo, así que el próximo maybeChangeSpot
   // vuelve a warpear (canAdopt = false: no adoptar el pueblo como spot).
   const onDeath = (source: string) => {
-    if (!meter.addDeath(Date.now())) return;
+    if (Date.now() - lastDeathAt < LEARN.DEATH_DEBOUNCE_MS) return;
+    lastDeathAt = Date.now();
     deaths++;
     log(`Muerte #${deaths} (${source}) en ${currentSpot?.name ?? 'spot desconocido'}.`);
-    endStint();
     lastSpotIndex = currentSpot?.index ?? lastSpotIndex;
     currentSpot = null;
     canAdopt = false;
     camps.camp = null;
-    if (LEARN_ENABLED) void persistLearning();
+    void persistLearning();
   };
   let lastHp = world.hp;
   const onHp = (raw: any) => {
@@ -2126,7 +1894,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     if ((p.KillerId & 0x7fff) === playerId) {
       kills++;
-      meter.addKill();
       // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
       if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
       if (process.env.MUBOT_DEBUG_COMBAT) log(`Kill #${kills} (Id=${p.KilledId & 0x7fff})`);
@@ -2145,8 +1912,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const added = p.AddedExperience;
     const now = Date.now();
     totalExpGained += added;
-    meter.addExp(added);
-    stayExp += added;
     report.addExp(added, now);
     const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
     if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
@@ -2244,17 +2009,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Autoevaluación cada ~5 min (con la proyección de resets/día).
     if (Date.now() - lastReport >= REPORT_EVERY_MS) {
       lastReport = Date.now();
-      const spotTxt = currentSpot ? `spot ${currentSpot.name} (${Math.round(stayExp / Math.max((lastReport - spotSince) / 60_000, 1e-6))} exp/min)` : 'sin spot';
+      const spotTxt = currentSpot ? `spot ${currentSpot.name} (${Math.round(expLog.perMin(lastReport, 5 * 60_000))} exp/min)` : 'sin spot';
       const campTxt = camps.camp ? `, campamento (${camps.camp.x},${camps.camp.y}) vara ${Math.round(camps.best[world.map] ?? 0)} exp/min` : '';
       log(report.format(lastReport, world.level, learning.resets, `${kills} kills, ${lootCount} loot, ${spotTxt}${campTxt}`));
       log(`Tramos por ciclo:\n${cycleLog.format()}`);
     }
-    // Aprendizaje: cada ~2 min cierra un tramo, lo guarda y muestra la tabla.
-    if (LEARN_ENABLED && Date.now() - lastSummary >= LEARN_SUMMARY_MS) {
-      lastSummary = Date.now();
-      recordSample(meter.flush(lastSummary, world.level));
+    // Lo aprendido se guarda cada ~2 min.
+    if (Date.now() - lastSave >= SAVE_EVERY_MS) {
+      lastSave = Date.now();
       await persistLearning();
-      logLearningSummary();
     }
     // 0b) Mago: Soul Barrier (16, escudo de maná) cada ~50 s, como el agente del navegador.
     if (isMage() && world.skills.has(16) && Date.now() - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && Date.now() - lastCastAt > SKILL_PACE_MS) {
@@ -2286,9 +2049,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const sp = pendingWarp;
       pendingWarp = null;
       doing = `viajando a ${sp.name}`;
-      if (await decide({ kind: 'travel', what: `warp a ${sp.name} por orden del panel (${zenTxt(sp)})`, detail: { warp: sp.index, reason: 'panel' } })) {
-        if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
-      }
+      journal('travel', `warp a ${sp.name} por orden del panel (${zenTxt(sp)})`, { warp: sp.index, reason: 'panel' });
+      if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; sigue fijado y lo reintento.`);
       target = null;
       continue;
     }
@@ -2316,10 +2078,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
         h.nextWarpAt = nowH + WARP_COOLDOWN_MS;
         doing = `viajando a ${h.hunt.name} a cazar dorados`;
         const spot: Spot = { index: h.hunt.warp, name: `cacería ${h.hunt.name}`, reqLevel: h.hunt.reqLevel, zen: 0, map: h.hunt.map };
-        if (await decide({ kind: 'travel', what: `warp a ${h.hunt.name} para cazar dorados`, detail: { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' } })) {
-          // Sin medir: la cacería no es farmeo y ensuciaría el aprendizaje del spot.
-          await warpAndWait(spot, false);
-        }
+        journal('travel', `warp a ${h.hunt.name} para cazar dorados`, { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' });
+        await warpAndWait(spot);
         continue;
       }
     }
@@ -2538,11 +2298,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (explorer.isDry(now)) {
       const where = currentSpot?.name ?? `map ${world.map}`;
       log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${where}: busco otro spot.`);
-      if (currentSpot) {
-        dryAt.set(currentSpot.index, now);
-        // Corta el tramo ya: queda como muestra (0 exp) aunque después no se warpee.
-        recordSample(meter.flush(now, world.level));
-      }
+      if (currentSpot) dryAt.set(currentSpot.index, now);
       const moved = await maybeChangeSpot({ mapDead: true });
       if (!moved) {
         log('No hay otro spot elegible (o se rechazó el warp): sigo explorando acá.');
@@ -2612,12 +2368,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   EventBus.off('ExperienceGained', onExp);
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
-  if (LEARN_ENABLED) {
-    // Cierra el tramo y guarda.
-    endStint();
-    await persistLearning();
-    logLearningSummary();
-  }
+  await persistLearning();
   drops.clear();
   looting = null;
 
@@ -2666,7 +2417,6 @@ function clearScope() {
   drops.clear();
   looting = null;
   currentSpot = null;
-  meter.stop();
   inGameAt = 0;
   doing = 'conectando';
   goalPoint = null;
@@ -2709,7 +2459,6 @@ async function main() {
       const now = Date.now();
       updateTrail(now);
       noteModeChange();
-      statusServer?.broadcastState(snapshotWorld());
       statusServer?.broadcastPanelState(buildPanelState(now));
     }, 1000);
     setInterval(pollEvents, EVENT_POLL_TICK_MS);

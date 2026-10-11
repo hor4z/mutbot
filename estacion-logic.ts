@@ -96,7 +96,7 @@ export type CharStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fa
 export function exitStatus(code: number | null): { status: CharStatus; msg: string } {
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 0 || code === null) return { status: 'off', msg: 'desconectado' };
-  if (code === 2) return { status: 'failed', msg: 'el bot rechazó el servidor (no es local y falta --allow-remote)' };
+  if (code === 2) return { status: 'failed', msg: 'el bot no arrancó: flag desconocido o servidor no local sin --allow-remote (mirá la consola)' };
   return { status: 'failed', msg: `el bot terminó con error (código ${code}); mirá la consola` };
 }
 
