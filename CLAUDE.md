@@ -19,6 +19,9 @@ Para "correlo", "arrancalo", "ponelo a jugar": skill **`correr-agente`**
 (`.claude/skills/correr-agente/SKILL.md`). Arranca `bun run agent` y carga `bg-timers.js` →
 `browser-agent.js` → `tuner.js` en la pestaña del juego. Los pasos para el usuario están en `README.md`.
 
+Bot sin navegador (lo próximo): estado, lo aprendido y el plan en **[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**.
+Primero Horaz, después Melu.
+
 Reglas rápidas:
 
 - `packets/` es generado: no se edita a mano, se regenera con
