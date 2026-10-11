@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Settings2,
   Sparkles,
+  Trophy,
 } from "lucide-react";
 import type { Routine, StationRequest } from "../../estacion-logic";
 import { Action, Badge, Choice, compact, fmt } from "./components";
@@ -111,6 +112,89 @@ function Console({ charKey }: { charKey: string }) {
     </pre>
   );
 }
+type RankingData = {
+  resets?: { name: string; classNumber: number; totalResets: number; grandResets: number; level: number }[];
+  elo?: { name: string; classNumber: number; elo: number; wins: number; losses: number }[];
+  updatedAt?: string;
+  error?: string;
+};
+// Ranking del server (la misma API que usa el cliente web para /ranking), a través de la estación.
+function Ranking({ mine }: { mine: string[] }) {
+  const [data, setData] = useState<RankingData | null>(null);
+  useEffect(() => {
+    let done = false;
+    async function load() {
+      try {
+        const r = await fetch("/api/ranking", { cache: "no-store" });
+        const d = (await r.json()) as RankingData;
+        if (!done) setData(d);
+      } catch {
+        if (!done) setData({ error: "La estación no contesta." });
+      }
+    }
+    load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      done = true;
+      clearInterval(t);
+    };
+  }, []);
+  const own = new Set(mine.map((n) => n.toLowerCase()));
+  const isMine = (n: string) => own.has(n.toLowerCase());
+  const resets = data?.resets ?? [];
+  const elo = data?.elo ?? [];
+  const where = (list: { name: string }[], n: string) => list.findIndex((x) => x.name.toLowerCase() === n.toLowerCase()) + 1;
+  return (
+    <div className="ranking-view">
+      {data?.error && <p className="empty-copy">{data.error}</p>}
+      {!data && <p className="empty-copy">Cargando ranking…</p>}
+      {data && !data.error && (
+        <>
+          <div className="ranking-mine">
+            {mine.map((n) => (
+              <span key={n} className="chip">
+                <b>{n}</b> · resets #{where(resets, n) || "—"} · ELO #{where(elo, n) || "—"}
+              </span>
+            ))}
+            {data.updatedAt && <span className="muted">Actualizado {new Date(data.updatedAt).toLocaleTimeString("es-AR")}</span>}
+          </div>
+          <div className="ranking-tables">
+            <section>
+              <h2>Resets</h2>
+              <table>
+                <thead>
+                  <tr><th>#</th><th className="name">Personaje</th><th>Resets</th><th title="Grand resets">GR</th><th>Nivel</th></tr>
+                </thead>
+                <tbody>
+                  {resets.slice(0, 50).map((r, i) => (
+                    <tr key={r.name} className={isMine(r.name) ? "mine" : ""}>
+                      <td>{i + 1}</td><td className="name">{r.name}</td><td>{fmt(r.totalResets)}</td><td>{r.grandResets}</td><td>{r.level}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+            <section>
+              <h2>ELO de Arena</h2>
+              <table>
+                <thead>
+                  <tr><th>#</th><th className="name">Personaje</th><th>ELO</th><th>G-P</th></tr>
+                </thead>
+                <tbody>
+                  {elo.slice(0, 50).map((r, i) => (
+                    <tr key={r.name} className={isMine(r.name) ? "mine" : ""}>
+                      <td>{i + 1}</td><td className="name">{r.name}</td><td>{fmt(r.elo)}</td><td>{r.wins}-{r.losses}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function ManageCharacter({
   c,
   selected,
@@ -128,11 +212,7 @@ function ManageCharacter({
   const dirty = useRef(false);
   useEffect(() => {
     if (!dirty.current) setRoutine(fromRoutine(c.routine ?? c.pending));
-  }, [
-    c.routine?.kind,
-    c.pending?.kind,
-    c.routine?.kind === "spot" ? c.routine.warp : null,
-  ]);
+  }, [fromRoutine(c.routine ?? c.pending)]);
   async function perform(r: StationRequest) {
     setBusy(true);
     await act(r);
@@ -430,6 +510,10 @@ export function Station() {
               <Terminal size={14} />
               Consola
             </Tabs.Tab>
+            <Tabs.Tab value="ranking">
+              <Trophy size={14} />
+              Ranking
+            </Tabs.Tab>
           </Tabs.List>
         </div>
         <Tabs.Panel value="panel" className="station-view">
@@ -464,6 +548,9 @@ export function Station() {
               </div>
             </div>
           )}
+        </Tabs.Panel>
+        <Tabs.Panel value="ranking" className="station-view">
+          <Ranking mine={chars.map((x) => x.char)} />
         </Tabs.Panel>
         <Tabs.Panel value="log" className="station-view">
           {c ? (

@@ -1445,3 +1445,60 @@ time {
 .chat-input:focus {
   outline: 1px solid var(--gold);
 }
+
+/* Ranking del server (estación) */
+.ranking-view {
+  height: 100%;
+  overflow: auto;
+  padding: 18px;
+}
+.ranking-mine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.ranking-mine .chip {
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid #373b41;
+  border-radius: 7px;
+  background: #1e2125;
+}
+.ranking-mine .chip b {
+  color: var(--gold);
+}
+.ranking-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+.ranking-tables h2 {
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: var(--gold);
+}
+.ranking-tables table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ranking-tables th,
+.ranking-tables td {
+  text-align: right;
+  padding: 6px 8px;
+  border-bottom: 1px solid #292d31;
+}
+.ranking-tables .name {
+  text-align: left;
+}
+.ranking-tables th {
+  color: #6e7e88;
+  font-weight: 500;
+}
+.ranking-tables tr.mine td {
+  color: var(--gold);
+  font-weight: 600;
+}

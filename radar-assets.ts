@@ -14,9 +14,12 @@ export async function serveRadarAsset(req: Request): Promise<Response | null> {
   if (origin) {
     try {
       const u = new URL(origin);
+      // Solo la estación y los paneles de los bots (sus puertos), como originAllowed de ws-server.
+      const port = Number(u.port);
       if (
         u.protocol !== "http:" ||
-        !["localhost", "127.0.0.1"].includes(u.hostname)
+        !["localhost", "127.0.0.1"].includes(u.hostname) ||
+        !(port === Number(process.env.ESTACION_PORT ?? 8787) || (port >= 8791 && port < 8891))
       )
         return new Response("Origen no permitido.", { status: 403 });
     } catch {

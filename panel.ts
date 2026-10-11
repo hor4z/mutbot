@@ -3,7 +3,7 @@
  * cada 1 s. Todo sale de lo que el bot ya trackea de los packets: funciona igual sin navegador.
  * También las señales de dorados a la estación.
  */
-import { rankingFromPanel, sayFromPanel } from './chat';
+import { sayFromPanel } from './chat';
 import { SKILL_TABLE, pickAttackSkill } from './combat';
 import { eventTimers } from './events';
 import { journal, panelLog } from './journal';
@@ -86,8 +86,6 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     }
     case 'say':
       return sayFromPanel(c);
-    case 'ranking':
-      return rankingFromPanel();
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };

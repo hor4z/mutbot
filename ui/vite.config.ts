@@ -3,9 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Standalone HTML keeps the existing HTTP routes and running bot processes intact.
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root: resolve(import.meta.dirname),
-  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  // Solo al compilar (lib iife): en `ui:dev` React tiene que correr en modo desarrollo (avisos).
+  define: command === "build" ? { "process.env.NODE_ENV": JSON.stringify("production") } : {},
   server: {
     host: "127.0.0.1",
     proxy: {
@@ -57,4 +58,4 @@ export default defineConfig({
       },
     },
   ],
-});
+}));

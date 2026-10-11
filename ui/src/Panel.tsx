@@ -14,7 +14,6 @@ import {
   CircleAlert,
   WifiOff,
   MessageSquare,
-  Trophy,
   Send,
 } from "lucide-react";
 import type { PanelCommand, PanelState } from "../../panel-protocol";
@@ -81,6 +80,7 @@ function useBot() {
     [connected, setConnected] = useState(false),
     [logs, setLogs] = useState<Log[]>([]),
     [chats, setChats] = useState<Chat[]>([]),
+    [result, setResult] = useState<{ id: number; ok: boolean } | null>(null),
     [toast, setToast] = useState("");
   const socket = useRef<WebSocket | null>(null),
     nextId = useRef(1),
@@ -115,11 +115,19 @@ function useBot() {
           const now = Date.now();
           lastAt.current = now;
           setState(m.state);
+          // Después de un reset el nivel baja: la medición de niveles/min arranca de nuevo.
+          const prevLevel = levels.current[levels.current.length - 1]?.[1];
+          if (prevLevel != null && m.state.char.level < prevLevel) levels.current = [];
           levels.current.push([now, m.state.char.level]);
           levels.current = levels.current.filter(([t]) => now - t < 600000);
           window.dispatchEvent(
             new CustomEvent("panel-state", { detail: m.state }),
           );
+        } else if (m.type === "hello") {
+          // Al (re)conectar el bot vuelve a mandar el historial, el log y el chat: empezar de cero
+          // (si no, cada reconexión los duplicaba).
+          setLogs([]);
+          setChats([]);
         } else if (m.type === "log") add(m.text, m.at);
         else if (m.type === "chat")
           setChats((old) => [...old, m as Chat].slice(-500));
@@ -134,6 +142,7 @@ function useBot() {
         else if (m.type === "command-result") {
           add(m.msg, Date.now(), m.ok ? "ok" : "bad");
           setToast(m.msg);
+          setResult({ id: m.id, ok: m.ok });
         }
       };
     }
@@ -149,21 +158,21 @@ function useBot() {
     const t = setTimeout(() => setToast(""), 4500);
     return () => clearTimeout(t);
   }, [toast]);
-  function send(command: PanelCommand) {
+  function send(command: PanelCommand): number | null {
     if (socket.current?.readyState !== WebSocket.OPEN) {
       setToast("Sin conexión con el personaje.");
-      return;
+      return null;
     }
-    socket.current.send(
-      JSON.stringify({ type: "command", id: nextId.current++, command }),
-    );
+    const id = nextId.current++;
+    socket.current.send(JSON.stringify({ type: "command", id, command }));
     add(
       `Orden: ${command.cmd}${"warp" in command ? " · " + command.warp : ""}${"map" in command ? " · " + command.map : ""}`,
       Date.now(),
       "cmd",
     );
+    return id;
   }
-  return { state, connected, logs, chats, toast, send, lastAt, levels };
+  return { state, connected, logs, chats, result, toast, send, lastAt, levels };
 }
 function Controls({
   s,
@@ -293,17 +302,26 @@ function Near({ s }: { s: PanelState }) {
 }
 function ChatPanel({
   chats,
+  result,
   send,
   disabled,
 }: {
   chats: Chat[];
-  send: (c: PanelCommand) => void;
+  result: { id: number; ok: boolean } | null;
+  send: (c: PanelCommand) => number | null;
   disabled: boolean;
 }) {
   const [channel, setChannel] = useState("normal"),
     [to, setTo] = useState(""),
     [text, setText] = useState(""),
-    [showServer, setShowServer] = useState(true);
+    [showServer, setShowServer] = useState(true),
+    // Último mensaje mandado: si el bot lo rechaza (muy rápido, muy largo) vuelve a la caja.
+    pending = useRef<{ id: number; text: string } | null>(null);
+  useEffect(() => {
+    if (!result || result.id !== pending.current?.id) return;
+    if (!result.ok) setText(pending.current.text);
+    pending.current = null;
+  }, [result]);
   const box = useRef<HTMLDivElement | null>(null),
     atBottom = useRef(true);
   useEffect(() => {
@@ -313,10 +331,13 @@ function ChatPanel({
     e.preventDefault();
     const t = text.trim();
     if (!t) return;
+    let id: number | null;
     if (channel === "whisper") {
       if (!to.trim()) return;
-      send({ cmd: "say", text: t, to: to.trim() });
-    } else send({ cmd: "say", text: t, ...(channel === "normal" ? {} : { channel: channel as "party" | "guild" }) });
+      id = send({ cmd: "say", text: t, to: to.trim() });
+    } else id = send({ cmd: "say", text: t, ...(channel === "normal" ? {} : { channel: channel as "party" | "guild" }) });
+    if (id == null) return;
+    pending.current = { id, text: t };
     setText("");
   };
   return (
@@ -330,10 +351,6 @@ function ChatPanel({
             </Switch.Root>
             Avisos del server
           </label>
-          <Action disabled={disabled} onClick={() => send({ cmd: "ranking" })}>
-            <Trophy size={14} />
-            Ranking
-          </Action>
         </div>
       }
     >
@@ -383,7 +400,7 @@ function ChatPanel({
   );
 }
 export function Panel() {
-  const { state: s, connected, logs, chats, toast, send, lastAt, levels } = useBot();
+  const { state: s, connected, logs, chats, result, toast, send, lastAt, levels } = useBot();
   const [tab, setTab] = useState("overview"),
     [onlyBot, setOnlyBot] = useState(false),
     [now, setNow] = useState(Date.now());
@@ -717,7 +734,7 @@ export function Panel() {
           </Section>
         </Tabs.Panel>
         <Tabs.Panel value="chat">
-          <ChatPanel chats={chats} send={send} disabled={!connected} />
+          <ChatPanel chats={chats} result={result} send={send} disabled={!online || !s} />
         </Tabs.Panel>
       </Tabs.Root>
       {toast && (

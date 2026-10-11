@@ -76,6 +76,8 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `protocol097.ts` | Bytes del 0.97d sin estado: ítems de 5 bytes, daño 0x15, chat (leer y armar; susurro 0x02, party `~`, guild `@`, ServerMessage 0x0D), aggro (0x18/0x19), party, ItemDropRemoved, backoff. |
 | `terrain.ts` | Terreno del `.att` del cliente: caminable, zona segura. |
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
+| `ui/` | La interfaz (React + Vite, radar Three.js). **`panel.html` y `estacion.html` se generan** con `bun run ui:build`: editar `ui/src`, no los HTML. Ver `ui/README.md`. |
+| `radar-assets.ts` | Sirve los archivos del radar (`/radar-assets/...`, solo lectura, nombres de la lista; CORS solo para la estación y los puertos de los bots). Los archivos (`assets/radar/`, 91 MB del cliente) no van al repo: `bun run ui:maps`. |
 | `ws-server.ts` | Server del panel de cada bot detrás de `--ws-port` (solo 127.0.0.1). |
 | `panel.html` / `panel-protocol.ts` / `panel-logic.ts` | El panel del bot, su contrato y la lógica pura (0x91, 0xFD, tickets, ciclos, cacería, señales de dorados). |
 | `*-tests.ts` | Tests offline de cada módulo (sin red, reloj simulado, dir temporal). |
@@ -572,6 +574,11 @@ su consola.
 la estación, desconectar, Origin ajeno rechazado). **Falta en vivo:** conectar contra el server real
 y ver la rutina aplicada al entrar.
 
+**Ranking:** la estación expone `GET /api/ranking` (top de resets y ELO de Arena del server, la misma
+API que usa el cliente web para `/ranking`: `https://<host del proxy>/api/ranking`, o `MUBOT_RANKING_URL`),
+con caché de 1 min; la interfaz lo muestra en la pestaña "Ranking" con los personajes propios marcados.
+`/ranking` por el chat del juego NO existe (el server contesta "Comando desconocido").
+
 ## Panel externo
 
 `panel.html` (el panel de cada bot; la estación lo muestra adentro) se conecta al
@@ -587,7 +594,8 @@ página abierta en el navegador podía mandarle órdenes al bot). Clientes sin
 `Origin` (un script local) se aceptan. No exponerlo con ngrok ni similares.
 
 **HTTP (mismo puerto, solo GET):** `/` y `/panel` sirven `panel.html` de la raíz
-(404 si no está); `/terrain/<mapa>` el terreno (256×256 bytes de atributos) para dibujar el mapa.
+(404 si no está; es generado, ver `ui/`); `/terrain/<mapa>` el terreno (256×256 bytes de atributos);
+`/radar-assets/...` los archivos del radar (`radar-assets.ts`).
 
 **WebSocket, bot → panel:** `hello` (`botVersion`, `commands`), `history`
 (decisiones), `panel-state` (cada 1 s), `log` (órdenes, cambios de modo,
@@ -613,12 +621,11 @@ cacería), `command-result` y `decision` (el diario).
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 7 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `ranking`) **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 6 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`) **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
 - `say {text, to?, channel?}`: chat del personaje. Con `to`, susurro; si no, `channel` normal (default), party (`~`) o guild (`@`). Texto de 1 a 60 caracteres imprimibles, sin comandos (`/...`), un mensaje cada 2 s. Lo recibido (y lo mandado, con `mine`) llega al panel como `{type:'chat', at, kind, from, text}`, incluidos susurros y avisos del server; al conectar se mandan los últimos 100.
-- `ranking`: manda `/ranking` (top de resets y ELO de Arena del server); la respuesta llega como avisos por `chat`.
 - `pause` / `resume`: en pausa el loop no camina, no pelea, no warpea ni
   resetea; las pociones siguen.
 - `farm`: vuelve a la ruta normal (cancela la cacería, suelta el spot fijo y la pausa).
