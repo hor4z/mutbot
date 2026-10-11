@@ -3,7 +3,9 @@
  * girar con el skill de área donde deja más monstruos, buff propio, irse un rato si está llena.
  * Lo llama farm-loop.ts desde el nivel 100 hasta el reset (ver cornerActive).
  */
-import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
+import { ATTACK_PACE_MS, PARTY_MATES, SKILL_PACE_MS } from './config';
+import { sendToGS } from './connection';
+import { buildPartyInvite } from './protocol097';
 import { sendHit, sendTargetedSkill } from './actions';
 import { castReach, isMage, pickAttackSkill, useSkill } from './combat';
 import { CORNER, CornerSides, SIDE, SIDES, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
@@ -16,7 +18,7 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
-export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; mateBuffAt: number; sides: CornerSides; expSeen: number;
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; mateBuffAt: number; inviteAt: number; sides: CornerSides; expSeen: number;
   // compañeros que ya estaban en la esquina (para anunciar cuando llega uno)
   matesHere: Set<string>;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
@@ -26,7 +28,7 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
 const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, inviteAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -75,6 +77,14 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     for (const q of matesIn)
       if (!corner.matesHere.has(q.name!)) decide(`Llegó ${q.name} a la esquina: cooperamos, yo en el lado ${corner.sides.side.name} y ${q.name} en el otro.`);
     corner.matesHere = new Set(matesIn.map((q) => q.name!));
+    // El DK invita a party al compañero que está en la esquina (cada 60 s mientras no estén en party).
+    const invitee = !isMage() && !bot.inParty && PARTY_MATES && now - corner.inviteAt > 60_000
+      ? [...world.players].find(([, q]) => q.name != null && isMate(q.name) && inCorner(q)) : undefined;
+    if (invitee) {
+      corner.inviteAt = now;
+      sendToGS(new DataView(buildPartyInvite(invitee[0]).buffer));
+      decide(`Invito a ${invitee[1].name} a party (dúo en la esquina).`);
+    }
     if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level, mateHere })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;
