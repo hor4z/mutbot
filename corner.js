@@ -75,7 +75,7 @@
         // al DK en la esquina o ganá en el medio").
         const now = Date.now(), cur = C.sides.find((x) => x.name === C.side) ?? C.sides[0];
         if (now - C.sideAt < C.dwellMs) return cur;
-        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity);
+        const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && !(window.__corner?.mates ?? []).includes(e.objectNameInWorld));
         const known = Object.values(C.sideStats).map((x) => x.rate).filter((x) => x > 0);
         const best = known.length ? Math.max(...known) : 1;
         const score = (sd) => { const st = C.sideStats[sd.name]; const r = st?.rate > 0 ? st.rate : best * 1.1; return r / (1 + C.rivalPenalty * others.filter((e) => d(e.transform.pos, sd) <= 4).length); };
@@ -87,7 +87,7 @@
       // Con mucha competencia (2+ jugadores a <= 6 tiles), no caminar hacia los monstruos: cuando llega
       // ya los mataron (usuario: "zigzag con mucha competencia no sirve, no llego a pegar"). Quieto en
       // el puesto, pegar solo lo que entra en el giro.
-      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && d(e.transform.pos, P) <= 6).length;
+      const crowd = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity && !(window.__corner?.mates ?? []).includes(e.objectNameInWorld) && d(e.transform.pos, P) <= 6).length;
       if (crowd >= 2) return mons.filter((e) => d(e.transform.pos, P) <= C.spinR + 0.5).sort((a, b) => d(a.transform.pos, P) - d(b.transform.pos, P))[0] ?? null;
       const sideMons = mons.filter((e) => d(e.transform.pos, side) <= C.sideR);
       const local = sideMons.length ? sideMons : mons.filter((e) => d(e.transform.pos, C.home) <= C.radius && d(e.transform.pos, P) <= 4);
@@ -183,7 +183,7 @@
       // Al cruzar 200/300 estando afuera, subir de Arena: se fue a Arena 3 en nivel 2xx y en 305 seguía
       // ahí con 103M/min (Arena 4 rindió hasta 881M).
       const want = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24;
-      if (ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] !== want && want > ai.cfg.spots[0][0]) {
+      if (!(C.yieldAt && nowA - C.yieldAt < 180000) && ai.cfg.spots.length === 1 && ai.cfg.spots[0][0] !== want && want > ai.cfg.spots[0][0]) { // (cediendo a un compañero, no volver a su Arena)
         ai.cfg.spots = C.ROUTE.filter((x) => x[0] === want); ai.spot = want; ai.lastWarp = nowA; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = nowA;
         S.warpCommandRequest(want); L(`nivel ${S.playerData.level}: paso a ${want === 26 ? 'Arena 4' : 'Arena 3'}`); return;
       }
@@ -206,7 +206,7 @@
     if (C.awayUntil && nowA >= C.awayUntil && S.playerData.level >= 360) C.awayUntil = nowA + 60000;
     if (C.awayUntil && nowA >= C.awayUntil) { C.awayUntil = 0; L('vuelvo a mirar la esquina'); }
     if (w.mapIndex === C.map && d(pe.transform.pos, C.home) <= C.radius + 3) {
-      const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && d(e.transform.pos, C.home) <= 15).length;
+      const rivals = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe && !C.mates.includes(e.objectNameInWorld) && d(e.transform.pos, C.home) <= 15).length;
       const rate = ai.expLog.filter((x) => x.t > nowA - 60000).reduce((a, x) => a + x.added, 0);
       C.inCornerSince ??= nowA;
       const alt = S.playerData.level >= 300 ? 26 : S.playerData.level >= 200 ? 25 : 24; // 24: Arena 2 fuera de la esquina
@@ -326,6 +326,63 @@
     for (const n of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) __eventBus.on(n, (raw) => { try { const u = bytes(raw); if (u[2] === 0x19 && u.length >= 9 && (((u[7] << 8) | u[8]) & 0x7fff) === me()) mark(((u[5] << 8) | u[6]) & 0x7fff); } catch {} });
     window.__cornerAggroHooked = true;
   }
+  // Personajes propios (2026-10-11, usuario: "nunca puede pasar que luchen los dos por el spot de abajo;
+  // si necesitan pelear ahí, hagan party"). Cada pestaña publica su posición; si los dos están en la
+  // esquina de Arena 2, el primero por orden alfabético invita y el otro acepta. No se cuentan como
+  // rivales entre ellos. Si 60 s no coinciden en la esquina, el que aceptó sale del grupo (la party
+  // reparte la exp: a Horaz le subió el ciclo de ~9 a ~13,6 min).
+  const me = S.playerData?.name;
+  C.mates = window.__cornerMates ?? ({ Horaz: ['Melu'], Melu: ['Horaz'] })[me] ?? [];
+  window.__partyAllow = [...new Set([...(window.__partyAllow ?? []), ...C.mates])];
+  const send = (b) => S.sendToGS(new DataView(Uint8Array.from(b).buffer));
+  if (!window.__cornerPartyHooked) {
+    __eventBus.on('PartyRequest', (raw) => { try {
+      const u = raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw.buffer ?? raw);
+      const id = ((u[3] << 8) | u[4]) & 0x7fff; let from = null; for (const e of W().byNetId.values()) if ((e.netId & 0x7fff) === id) from = e.objectNameInWorld;
+      if ((window.__corner?.mates ?? []).includes(from)) setTimeout(() => send([0xc1, 0x06, 0x41, 0x01, id >> 8, id & 0xff]), 400);
+    } catch {} });
+    __eventBus.on('PartyList', () => { window.__inParty = true; });
+    __eventBus.on('RemovePartyMember', () => { window.__inParty = false; });
+    window.__cornerPartyHooked = true;
+  }
+  if (window.__corner?.mateTimer) clearInterval(window.__corner.mateTimer);
+  C.mateTimer = setInterval(() => {
+    const w = W(), pe = w?.playerEntity; if (!pe || S.uiState !== 5 || !me) return;
+    const P = pe.transform.pos, now = Date.now();
+    try { localStorage.setItem(`mubot:pos:${me}`, JSON.stringify({ map: w.mapIndex, x: Math.round(P.x), z: Math.round(P.z), level: S.playerData.level, resets: S.playerData.resets ?? 0, at: now })); } catch {}
+    const inCorner = (q) => q && q.map === C.map && d(q, C.home) <= 20;
+    // Prioridad (usuario: "por ningún spot puede luchar Melu con Horaz; Horaz por cantidad de resets
+    // tiene prioridad"): el de menos resets cede. Si el otro está en su mapa a <= 20 tiles, se va 3 min
+    // al mapa más alto que le dé el nivel y donde el otro no esté.
+    for (const m of C.mates) {
+      let q = null; try { q = JSON.parse(localStorage.getItem(`mubot:pos:${m}`) || 'null'); } catch {}
+      if (!q || now - q.at > 10000 || window.__follow?.timers?.length) continue;
+      const mineR = S.playerData.resets ?? 0, theirs = q.resets ?? 0;
+      const iYield = theirs > mineR || (theirs === mineR && me > m);
+      if (!iYield || q.map !== w.mapIndex || d(q, P) > 20 || ai.busy || (C.yieldAt && now - C.yieldAt < 15000)) continue;
+      const lv = S.playerData.level, opts = [[26, 85, 300], [25, 84, 200], [24, 83, 100], [7, 2, 20], [6, 2, 20], [2, 0, 0]];
+      const to = opts.find(([, mp, req]) => lv >= req && mp !== q.map);
+      if (!to) continue;
+      C.yieldAt = now; C.awayUntil = now + 180000; C.inCornerSince = null;
+      ai.cfg.spots = [[to[0], `cedo a ${m}`, 0]]; ai.spot = to[0]; ai.lastWarp = now; ai.camp = null; ai.explore = null; ai.target = null; w.attackTarget = null; ai.arrivalPending = now;
+      S.warpCommandRequest(to[0]); L(`${m} (${theirs} resets) está acá: le dejo el spot, voy al warp ${to[0]}`);
+      return;
+    }
+    let together = false;
+    for (const m of C.mates) {
+      let q = null; try { q = JSON.parse(localStorage.getItem(`mubot:pos:${m}`) || 'null'); } catch {}
+      if (!q || now - q.at > 10000) continue;
+      if (inCorner(q) && inCorner({ map: w.mapIndex, x: P.x, z: P.z })) {
+        together = true; C.togetherAt = now;
+        if (!window.__inParty && me < m && now - (C.invAt ?? 0) > 20000) {
+          for (const e of w.byNetId.values()) if (e.objectNameInWorld === m) { C.invAt = now; const id = e.netId & 0x7fff; send([0xc1, 0x05, 0x40, id >> 8, id & 0xff]); L(`${m} también en la esquina: party`); break; }
+        }
+      }
+    }
+    if (!together && window.__inParty && C.mates.length && me > C.mates[0] && C.togetherAt && now - C.togetherAt > 60000 && !window.__follow?.timers?.length) {
+      C.togetherAt = 0; window.__inParty = false; send([0xc1, 0x04, 0x43, 0x01]); L('ya no coincidimos en la esquina: salgo de la party');
+    }
+  }, 1000);
   C.report = (min = 10) => {
     const since = Date.now() - min * 60000, sp = C.spawns.filter((s) => s.t >= since);
     const cells = {}; for (const s of sp) { const k = `${Math.round(s.x / 3) * 3},${Math.round(s.z / 3) * 3}`; cells[k] = (cells[k] ?? 0) + 1; }
