@@ -429,11 +429,11 @@ export function planStats(points: number, str: number, ene: number, p = STATS_PL
 export const VALUABLE_JEWELS_14 = new Set([11, 13, 14, 16, 22, 31]);
 export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean };
 
+// Solo cajas (14/11: Box of Luck / de Kundun). Usuario 2026-10-11: las joyas se compran en Lorencia y
+// llenaban el inventario; los excelentes que caen no sirven (y al tirarlos se volvían a levantar).
 export function isValuableDrop(d: DropInfo): boolean {
   if (d.isMoney) return false;
-  if (d.excellent) return true;
-  if (d.group === 10 && d.num === 1) return true;
-  return (d.group === 14 && VALUABLE_JEWELS_14.has(d.num)) || (d.group === 12 && d.num === 15);
+  return d.group === 14 && d.num === 11;
 }
 
 // El drop valioso más cercano a <= radius (o null).

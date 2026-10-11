@@ -178,17 +178,16 @@ const hpOf = (t: number) => HP[t] ?? null;
 
 // --- Loot valioso ------------------------------------------------------------------------------
 {
-  ok('joyas y cajas', [11, 13, 14, 16, 22, 31].every((n) => isValuableDrop({ group: 14, num: n })) && isValuableDrop({ group: 12, num: 15 }));
-  ok('guantes 10/1', isValuableDrop({ group: 10, num: 1 }) && !isValuableDrop({ group: 10, num: 2 }));
-  ok('excelente: sí; equipo común, pociones y zen: no', isValuableDrop({ group: 5, num: 3, excellent: true }) && !isValuableDrop({ group: 5, num: 3 }) && !isValuableDrop({ group: 14, num: 1 }) && !isValuableDrop({ group: 14, num: 13, isMoney: true }));
+  ok('solo cajas', isValuableDrop({ group: 14, num: 11 }) && ![13, 14, 16, 22, 31].some((n) => isValuableDrop({ group: 14, num: n })) && !isValuableDrop({ group: 12, num: 15 }));
+  ok('excelentes, guantes, pociones y zen: no', !isValuableDrop({ group: 5, num: 3, excellent: true }) && !isValuableDrop({ group: 10, num: 1 }) && !isValuableDrop({ group: 14, num: 1 }) && !isValuableDrop({ group: 14, num: 11, isMoney: true }));
   const me = { x: 50, y: 50 };
   const ds = [
     { id: 1, x: 52, y: 50, group: 14, num: 1 },          // poción: no
-    { id: 2, x: 58, y: 50, group: 14, num: 13 },         // bless a 8
-    { id: 3, x: 54, y: 50, group: 14, num: 14 },         // soul a 4
-    { id: 4, x: 70, y: 50, group: 14, num: 22 },         // creation a 20: lejos
+    { id: 2, x: 58, y: 50, group: 14, num: 11 },         // caja a 8
+    { id: 3, x: 54, y: 50, group: 14, num: 11 },         // caja a 4
+    { id: 4, x: 70, y: 50, group: 14, num: 11 },         // caja a 20: lejos
   ];
-  ok('el valioso más cercano a <= 12', pickLoot(me, ds)?.id === 3);
+  ok('la caja más cercana a <= 12', pickLoot(me, ds)?.id === 3);
   ok('nada valioso cerca: null', pickLoot(me, [ds[0], ds[3]]) === null);
 }
 
