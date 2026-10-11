@@ -61,6 +61,11 @@ mismo que en el navegador), 0 paquetes perdidos.
 
 ## Plan de mejora continua (aprobado, 2026-10-11)
 
+**Meta (usuario, 2026-10-11): Horaz en el top 10 del ranking.** Estaba 50° con 116 resets; el 10° tiene
+~316. La métrica que manda son los **resets/día de Horaz**. Melu es apoyo: gana el sector con él,
+sostiene la esquina mientras resetea y no le saca exp. Toda perilla y todo canario se juzgan por Horaz
+(`PRIORITY_CHAR` en `knowledge.ts`).
+
 Ciclo **medir → aprender → probar → adoptar o revertir**, solo, con una regla dura: **nunca se adopta
 algo que rinda menos que la línea base**, y todo cambio se revierte solo. Métrica que manda: **resets
 por día** (y debajo: exp/min farmeando, % del tiempo farmeando, tramos del ciclo, muertes).
