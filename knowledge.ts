@@ -65,10 +65,22 @@ export function knowledge(now = Date.now()): Knowledge | null {
   return k;
 }
 
+/**
+ * Carrera de resets del prioritario (usuario: "necesitamos alcanzar el top 10 ya, en 1 o 2 días"):
+ * sin cacerías, sin frenarse por invasiones y sin party (salvo que los datos digan que la party le suma).
+ */
+export const isPriorityChar = (name: string) => name.toLowerCase() === PRIORITY_CHAR.toLowerCase();
+
 /** Party en el dúo: lo aprendido, o lo contrario en un bloque de experimento. */
 export function partyWanted(now = Date.now()): { use: boolean; why: string } {
   const p = knowledge(now)?.party;
-  const base = p?.use ?? true;
+  // Carrera: sin party por defecto (la exp se reparte: en el navegador los ciclos de Horaz pasaron de
+  // ~9 a ~13,6 min) y sin experimentos; solo con datos que digan que le suma a Horaz.
+  if (!p?.on || !p.off) {
+    setPolicy('party=no (carrera)');
+    return { use: false, why: 'carrera de resets de Horaz: sin party hasta tener datos de que le suma' };
+  }
+  const base = p.use;
   const exp = experimentSlot(now, 1);
   setPolicy(`party=${(exp ? !base : base) ? 'si' : 'no'}${exp ? ' (experimento)' : ''}`);
   if (exp) return { use: !base, why: `experimento: pruebo ${base ? 'sin' : 'con'} party 30 min` };
