@@ -6,7 +6,7 @@
  *
  * Lógica PURA (sin red, sin EventBus, sin `world`): recibe posiciones, eventos y
  * reloj por parámetro, así se testea offline en `farming-tests.ts`.
- * `headless-bot.ts` la engancha en `autonomousLoop`. Ver AGENTS.md, "Farmeo
+ * `farm-loop.ts` la engancha en `autonomousLoop`. Ver AGENTS.md, "Farmeo
  * por exp/segundo".
  */
 

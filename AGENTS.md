@@ -46,7 +46,23 @@ la sesión vieja del propio bot). Lo pasa la estación.
 
 | Archivo | Qué es |
 |---|---|
-| `headless-bot.ts` | El bot: conexión, mundo, loop de farmeo (`autonomousLoop`, `cornerStep`), reset, panel, diario. |
+| `headless-bot.ts` | Entrada del bot (lo que lanza la estación): flags en la cabecera, panel, keepalives, `main`/`session` con reconexión y backoff, señales. |
+| `config.ts` | Flags (los desconocidos cortan con código 2), guard de "solo local" y ritmos humanos. |
+| `state.ts` | Estado compartido, un objeto por dueño: `world` (lo que dicen los packets), `bot` (spot, modo, cacería, órdenes del panel), `learned` (lo que se guarda en `learning.json`); tablas de monstruos. |
+| `connection.ts` | Sockets CS/GS, cifrado de salida (xor32 del 0.97d + SimpleModulus), `waitFor`, login, `LoginError`. |
+| `world.ts` | Parsers a mano del 0.97d (CharacterList, CharacterInformation, skills, NPCs, jugadores), `trackWorld` y la entrada al mundo (`selectCharacter`). |
+| `actions.ts` | Packets de salida armados a mano: paso, golpe, skills, ping/eco, warp, chat. |
+| `combat.ts` | Tabla de skills, área o directo, alcance de cast, `pickAttackSkill`/`useSkill`, pociones. |
+| `loot.ts` | Drops en scope y `lootStep` (levantar lo valioso). |
+| `route.ts` | Warps de farmeo, `warpAndWait`, ruta fija (`maybeChangeSpot`), cargar/guardar lo aprendido. |
+| `progress.ts` | Reparto de puntos (`/add`) y `/reset` encadenado. |
+| `events.ts` | Aperturas de eventos (0x91), invasión dorada (0xFD), CharacterResets. |
+| `journal.ts` | Diario de acciones (`journal()`) y log al panel. |
+| `panel.ts` | Modo, órdenes del panel, estado que se manda cada 1 s, señales de dorados. |
+| `farm-loop.ts` | El loop autónomo (`autonomousLoop`): prioridades de cada tick. |
+| `corner-step.ts` | Un tick en la esquina de Arena 2 (`cornerStep`). |
+| `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
+| `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
 | `explore.ts` | Exploración (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
@@ -64,6 +80,12 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |
 | `data/` | `items.json`, `monsters.json` y `skills.json` del cliente. |
 | `extract-packets.ts` | Regenera `packets/` (`bun run extract`). |
+
+Un proceso es un personaje, así que los módulos del bot usan singletons. Lo que escriben varios
+módulos va en `world`, `bot` o `learned` (`state.ts`): un `let` exportado no se puede asignar desde
+otro módulo. Lo que solo toca un módulo queda privado ahí (cooldown de pociones, `statTry`, el
+toggle del golpe). Sin imports circulares: `config`/`util` → `state` → `connection` → `actions` →
+`combat`/`loot`/`route` → `world`/`progress`/`panel` → `farm-loop` → `headless-bot`.
 
 ### Proyecto independiente
 
@@ -104,7 +126,7 @@ viejo (UCB1, `--free-route`) se ignoran al leer: esa lógica se sacó, la ruta e
 El agente que juega dentro del cliente web (`browser-agent.js`) sube de nivel
 mucho más rápido que el bot headless. Su lógica de decisión está portada a
 `farming.ts` (pura, testeada en `farming-tests.ts`) y enganchada en
-`autonomousLoop`:
+`autonomousLoop` (`farm-loop.ts`):
 
 - **Objetivo por EXP POR SEGUNDO, no por cercanía** (`targetRate`; el bot lo
   usa a través de los campamentos de `camp.ts`, `pickTarget` queda para tests):
@@ -239,7 +261,7 @@ en vivo" al final de la sección.
     20/50/100/200/300/350/400. El informe muestra los últimos ciclos y la
     **proyección resets/día** (1440 / promedio de los últimos 5). Solo cierran
     los ciclos que llegaron al 400.
-14. **Reconexión** (`main`/`session`, `Backoff` en `protocol097.ts`): si se corta
+14. **Reconexión** (`main`/`session` en `headless-bot.ts`, `Backoff` en `protocol097.ts`): si se corta
     la conexión (kick, red, timeout) vuelve a conectar con backoff 5 s → 5 min
     (vuelve a 5 s tras una sesión > 5 min; ≥ 60 s si la cuenta figura
     conectada). Nunca dos sesiones: reconecta con la anterior cerrada. Login con
@@ -434,7 +456,7 @@ distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
 
 - **CharacterList**: el XML define el "Extended" (34 bytes/char), pero 0.97d
   manda el chico (26 bytes/char, count en índice 4). El parser desborda. Por eso
-  `headless-bot.ts` lo parsea a mano con `parseCharacterList097()`.
+  `world.ts` lo parsea a mano con `parseCharacterList097()`.
 - **ServerListResponse (F4/06)** vs **ServerListResponseOld (F4/02)**: layouts
   distintos. F4/06 trae solo `ServerId` + `LoadPercentage`, **no trae dirección**,
   así que la dirección sale siempre de `--cs-host`. Este bug rompía el arranque

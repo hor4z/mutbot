@@ -4,7 +4,7 @@
  *
  * Lógica PURA (sin red, sin EventBus, sin `world`): recibe posición, mapa y
  * reloj por parámetro, así se testea offline en `explore-tests.ts`.
- * `headless-bot.ts` la engancha en `autonomousLoop`.
+ * `farm-loop.ts` la engancha en `autonomousLoop`.
  *
  * Todo esto se aprendió jugando en vivo con un agente dentro del cliente web
  * (ver AGENTS.md, "Loop autónomo — exploración").
@@ -172,7 +172,7 @@ export const FIRST_EXITS: Record<number, Point> = {
   0: { x: 110, y: 180 },
 };
 
-// Las 8 direcciones (mismo orden que DIR_DELTA de headless-bot.ts).
+// Las 8 direcciones (mismo orden que DIR_DELTA de util.ts).
 const DIRS: Array<[number, number]> = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
 
 const clamp = (v: number) => Math.max(8, Math.min(247, Math.round(v)));

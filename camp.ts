@@ -6,7 +6,7 @@
  *
  * Lógica PURA (sin red, sin EventBus, sin `world`): recibe posiciones, eventos
  * y reloj por parámetro, así se testea offline en `camp-tests.ts`.
- * `headless-bot.ts` la engancha en `autonomousLoop`. Ver AGENTS.md,
+ * `farm-loop.ts` la engancha en `autonomousLoop`. Ver AGENTS.md,
  * "Campamentos".
  *
  * Coordenadas: (x, y) del protocolo = (x, z) del cliente web. "Arriba" en
