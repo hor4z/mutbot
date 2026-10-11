@@ -132,7 +132,11 @@
         const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== pe);
         if (others.some((e) => d(e.transform.pos, ai.camp) <= 6)) {
           const alt = (ai.campHist?.[w.mapIndex] ?? []).filter((k) => !k.seed && k.rate > 0 && d(k, ai.camp) > 10 && !others.some((e) => d(e.transform.pos, k) <= 8)).sort((a, b) => b.rate - a.rate)[0];
-          if (alt) { ai.camp = { x: alt.x, z: alt.z, map: w.mapIndex, since: nowA, lastSeen: nowA, known: true }; ai.target = null; w.attackTarget = null; ai.explore = { x: alt.x, z: alt.z, kind: 'camp' }; ai.moveTo(pe, alt); L(`spot ocupado: paso a (${alt.x},${alt.z}) ~${Math.round(alt.rate / 1e6)}M/min sin nadie`); }
+          // Pelear el spot de igual a igual: solo se cambia si el libre rindió más que lo que este spot
+          // está dando ahora con el otro jugador (último minuto). Si no, se queda y compite.
+          const nowRate = ai.expLog.filter((x) => x.t > nowA - 60000).reduce((a, x) => a + x.added, 0);
+          if (alt && alt.rate <= nowRate) { if (!C.contestLogged) { C.contestLogged = true; L(`spot compartido: me quedo (${Math.round(nowRate / 1e6)}M/min acá contra ${Math.round(alt.rate / 1e6)}M del libre)`); } }
+          else if (alt) { C.contestLogged = false; ai.camp = { x: alt.x, z: alt.z, map: w.mapIndex, since: nowA, lastSeen: nowA, known: true }; ai.target = null; w.attackTarget = null; ai.explore = { x: alt.x, z: alt.z, kind: 'camp' }; ai.moveTo(pe, alt); L(`spot ocupado: paso a (${alt.x},${alt.z}) ~${Math.round(alt.rate / 1e6)}M/min sin nadie`); }
         }
       }
       return;
