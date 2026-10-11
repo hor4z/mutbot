@@ -1,0 +1,122 @@
+/**
+ * Un tick del loop en la esquina de Arena 2 (la lógica pura está en corner.ts): viajar hasta ahí,
+ * girar con el skill de área donde deja más monstruos, buff propio, irse un rato si está llena.
+ * Lo llama farm-loop.ts desde el nivel 100 hasta el reset (ver cornerActive).
+ */
+import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
+import { sendHit, sendTargetedSkill } from './actions';
+import { pickAttackSkill, useSkill } from './combat';
+import { CORNER, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { journal, panelLog } from './journal';
+import { lootStep } from './loot';
+import { walkTowards, type LoopCtx } from './loop-ctx';
+import { WARP_COOLDOWN_MS, WARP_SPOTS, warpAndWait } from './route';
+import { bot, expLog, monsterName, world } from './state';
+import { chebyshev, directionTowards, log, sleep } from './util';
+
+// Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff.
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number };
+
+export function newCornerState(): CornerState {
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0 };
+}
+
+export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
+  const now = Date.now();
+  const arena2 = WARP_SPOTS.find((sp) => sp.index === CORNER.warp)!;
+  if (world.map !== CORNER.map) {
+    corner.since = null;
+    corner.routeIdx = null;
+    ctx.target = null;
+    if (now - bot.lastWarpAt < WARP_COOLDOWN_MS) {
+      bot.doing = 'esperando para ir a la esquina de Arena 2';
+      await sleep(500);
+      return;
+    }
+    bot.doing = `viajando a la esquina de Arena 2 (nivel ${world.level})`;
+    journal('travel', `warp a Arena 2 para la esquina (nivel ${world.level})`, { warp: CORNER.warp, reason: 'corner' });
+    if (await warpAndWait(arena2)) log(`Esquina: en Arena 2 en nivel ${world.level}.`);
+    return;
+  }
+  bot.currentSpot = arena2;
+  const me = { x: world.x, y: world.y };
+  const skill = pickAttackSkill();
+  const r = spinRange(skill?.number);
+  const mons = [...ctx.npcs.values()];
+  const here = inCorner(me);
+  if (here) {
+    corner.since ??= now;
+    // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
+    const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
+    const rate = expLog.perMin(now, 60_000);
+    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate })) {
+      corner.awayUntil = now + CORNER.awayMs;
+      corner.since = null;
+      ctx.target = null;
+      const alt = WARP_SPOTS.find((sp) => sp.index === altWarp(world.level))!;
+      panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M/min el último minuto): voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
+      journal('travel', `esquina llena: warp a ${alt.name}`, { warp: alt.index, reason: 'corner-full', rivals });
+      await warpAndWait(alt);
+      return;
+    }
+  } else corner.since = null;
+  // Pegar: lo que deja más monstruos en el giro, a ritmo de skill. Viajando, solo lo que bloquea.
+  const st = here ? spinTarget(me, mons, r) : cornerTarget(me, mons, 0, r);
+  if (st && Date.now() - ctx.lastCastAt >= SKILL_PACE_MS) {
+    ctx.phase = 'fight';
+    bot.doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
+    if (skill && useSkill(st.id)) {
+      ctx.lastCastAt = Date.now();
+      ctx.skillsUsed++;
+      await sleep(SKILL_PACE_MS);
+      return;
+    }
+    // Sin skill o sin maná: golpe normal al que esté pegado.
+    if (chebyshev(world.x, world.y, st.x, st.y) <= 1) {
+      sendHit(st.id, directionTowards(world.x, world.y, st.x, st.y));
+      await sleep(ATTACK_PACE_MS);
+      return;
+    }
+  }
+  if (here) {
+    // Buff propio (Swell Life 48 / Mana Shield 16) cada ~55 s.
+    const buff = [48, 16].map((k) => world.skills.get(k)).find((x) => x != null);
+    if (buff && now - corner.buffAt > CORNER.buffMs && now - ctx.lastCastAt >= SKILL_PACE_MS) {
+      corner.buffAt = now;
+      ctx.lastCastAt = now;
+      sendTargetedSkill(buff.index, bot.playerId);
+      await sleep(SKILL_PACE_MS);
+      return;
+    }
+    // Sin nada a tiro: levantar cajas cerca, o caminar al grupo, o esperar en la esquina.
+    if (await lootStep()) {
+      bot.doing = 'esquina de Arena 2: levantando loot';
+      return;
+    }
+    const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
+    const ct = cornerTarget(me, mons, playersNear, r);
+    const goal = ct ?? CORNER.wait;
+    // Sin skill hay que llegar pegado para el golpe normal.
+    const reach = ct ? (skill ? r : 1) : 0.8;
+    bot.goalPoint = [goal.x, goal.y];
+    if (Math.hypot(goal.x - world.x, goal.y - world.y) > reach) {
+      ctx.phase = 'walk';
+      bot.doing = ct ? `esquina de Arena 2: voy al grupo de ${monsterName(ct.type)}` : 'esquina de Arena 2: espero la reaparición';
+      await walkTowards(ctx, goal.x, goal.y);
+      return;
+    }
+    ctx.phase = 'wait';
+    bot.doing = 'esquina de Arena 2: espero la reaparición';
+    await sleep(300);
+    return;
+  }
+  // Viajando por el camino de la llegada a la esquina.
+  if (corner.routeIdx == null || now - corner.routeAt > 20_000) corner.routeIdx = null;
+  const wp = nextRoutePoint(me, corner.routeIdx);
+  corner.routeIdx = wp.idx;
+  corner.routeAt = now;
+  ctx.phase = 'walk';
+  bot.goalPoint = [wp.x, wp.y];
+  bot.doing = `camino a la esquina de Arena 2 (${wp.idx + 1}/${CORNER.route.length})`;
+  await walkTowards(ctx, wp.x, wp.y);
+}

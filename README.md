@@ -61,7 +61,7 @@ bun run proxy       # proxy WebSocket → TCP para un server local
 | Archivo | Qué es |
 |---|---|
 | `estacion.ts`, `estacion.html`, `estacion-logic.ts` | La estación: personajes, conectar/desconectar, rutinas, dorados vistos. |
-| `headless-bot.ts` | El bot: conexión, mundo, loop de farmeo, reset, panel. |
+| `headless-bot.ts` y sus módulos | El bot: entrada (`headless-bot.ts`), conexión, mundo, combate, ruta, reset, panel y el loop de farmeo (`farm-loop.ts`). Ver la tabla de `AGENTS.md`. |
 | `corner.ts` | La esquina de Arena 2. |
 | `camp.ts`, `explore.ts`, `farming.ts`, `learning.ts` | Campamentos, exploración, exp por segundo, ruta fija y lo que aprende (`~/.mubot/learning.json`). |
 | `protocol097.ts` | Parsers y builders del 0.97d (ítems de 5 bytes, daño, party). |

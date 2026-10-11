@@ -97,7 +97,7 @@ ok('drop: item 12/7', itemGroup(dropped.ItemData) === 12 && itemNum(dropped.Item
 //     arriba, también 0x20) pero layout totalmente distinto — bug real
 //     encontrado jugando: el bot intentaba leer un ItemData de 12 bytes de un
 //     drop de dinero (que no lo tiene) y crasheaba. Se distingue por tamaño
-//     de buffer (14 bytes fijos), ver parseDropsPacket en headless-bot.ts.
+//     de buffer (14 bytes fijos), ver parseDropsPacket en loot.ts.
 const moneyDrop = new Uint8Array(14);
 moneyDrop[0] = 0xc2; moneyDrop[1] = 0; moneyDrop[2] = 14; moneyDrop[3] = 0x20;
 moneyDrop[4] = 1;                 // ItemCount=1 (siempre, es un solo drop)

@@ -24,7 +24,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const MU_SRC = process.env.MU_SRC ?? join(HERE, '..', 'mu', 'src');
 const SRC = join(MU_SRC, 'common', 'packets');
 
-// Las clases que headless-bot.ts importa, agrupadas por archivo de origen.
+// Las clases que importa el bot (headless-bot.ts y sus módulos), agrupadas por archivo de origen.
 const WANTED: Record<string, string[]> = {
   'ConnectServerPackets.ts': [
     'ConnectionInfoPacket',
