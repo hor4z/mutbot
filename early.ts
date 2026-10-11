@@ -66,6 +66,11 @@ export function lorenciaPlan(rand: () => number, walkable: (p: Pos) => boolean =
 export function deviasCamp<M extends Pos>(inp: { arrival: Pos; monsters: readonly M[]; prev: Pos | null; poorSince: number | null; now: number }): { camp: Pos; poorSince: number | null; why: string | null } {
   const E = EARLY;
   const near = inp.monsters.filter((m) => dist(m, inp.arrival) <= E.campScan);
+  // El spot de Devias 4 solo si está cerca de la llegada: desde Devias 3 (222,208) Horaz cruzaba el mapa
+  // caminando ~150 tiles. Lejos, se espera junto a la llegada (sin exp, el arranque cambia de entrada).
+  const nearSpot = dist(inp.arrival, E.devias.spot) <= E.farScan;
+  const fallback = nearSpot ? E.devias.spot : inp.arrival;
+  const fallbackWhy = nearSpot ? 'spot de Devias 4 (69,181)' : 'espero junto a la llegada';
   const big = biggestCluster(near);
   let camp = inp.prev;
   let why: string | null = null;
@@ -74,15 +79,15 @@ export function deviasCamp<M extends Pos>(inp: { arrival: Pos; monsters: readonl
     why = `grupo de ${big.n} junto a la llegada`;
   }
   if (!camp) {
-    camp = E.devias.spot;
-    why = 'spot de Devias 4 (69,181)';
+    camp = { ...fallback };
+    why = fallbackWhy;
   }
   const poor = inp.monsters.filter((m) => dist(m, camp!) <= E.poorR).length < E.campMin;
   let poorSince = poor ? (inp.poorSince ?? inp.now) : null;
   if (poorSince != null && inp.now - poorSince > E.poorMs) {
     const far = biggestCluster(inp.monsters.filter((m) => dist(m, inp.arrival) <= E.farScan));
-    camp = far && far.n >= 2 ? far.at : E.devias.spot;
-    why = far && far.n >= 2 ? `campamento pobre: grupo de ${far.n} más lejos` : 'campamento pobre: spot de Devias 4 (69,181)';
+    camp = far && far.n >= 2 ? far.at : { ...fallback };
+    why = far && far.n >= 2 ? `campamento pobre: grupo de ${far.n} más lejos` : `campamento pobre: ${fallbackWhy}`;
     poorSince = null;
   }
   return { camp, poorSince, why };

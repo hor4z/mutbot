@@ -34,6 +34,11 @@ const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
   ok('Devias: sin grupo → spot (69,181), y queda pobre', r.camp.x === 69 && r.camp.y === 181 && r.poorSince === 0, r);
   r = deviasCamp({ arrival, monsters: [{ x: 50, y: 170 }, { x: 51, y: 171 }], prev: { x: 69, y: 181 }, poorSince: 0, now: EARLY.poorMs + 1 });
   ok('Devias: pobre 10 s → grupo de 2 más lejos (<= 25)', r.camp.x === 50 || r.camp.x === 51, r);
+  const d3 = { x: 222, y: 208 }; // llegada de Devias 3 (Horaz, 2026-10-11)
+  r = deviasCamp({ arrival: d3, monsters: [], prev: { x: 214, y: 218 }, poorSince: 0, now: EARLY.poorMs + 1 });
+  ok('Devias 3 pobre: no cruza el mapa al spot de Devias 4, espera en la llegada', dist(r.camp, d3) <= 1, r);
+  r = deviasCamp({ arrival: d3, monsters: [], prev: null, poorSince: null, now: 0 });
+  ok('Devias 3 sin grupo: campamento en la llegada', dist(r.camp, d3) <= 1, r);
   r = deviasCamp({ arrival, monsters: [{ x: 61, y: 188 }], prev: { x: 61, y: 188 }, poorSince: 0, now: 5000 });
   ok('Devias: pobre hace 5 s → todavía no se muda', r.camp.x === 61 && r.poorSince === 0, r);
 }
