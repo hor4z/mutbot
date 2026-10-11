@@ -85,3 +85,27 @@ corriendo `bun run agent`. Cada vez que la página del juego carga y el personaj
 script inyecta el agente solo. Si un deploy te manda al login, entrás vos y el bot sigue. Para jugar
 sin nadie durante horas, el camino es el bot sin navegador, que se reconecta solo con las
 credenciales del `.env`.
+
+### Cooperación entre dos personajes (`follow.js`)
+
+Para dos pestañas del mismo Chrome (ej. Horaz y Melu). El líder no cambia nada de lo que hace: solo
+publica su posición y nivel (`localStorage`) e invita a la party. El seguidor hace todo lo demás.
+
+```js
+// pestaña del LÍDER (Horaz)
+window.__followRole = 'lider'; window.__followMate = 'Melu';
+(0, eval)(await (await fetch('http://127.0.0.1:8788/follow.js')).text())
+
+// pestaña del SEGUIDOR (Melu), con el agente ya cargado
+window.__followRole = 'seguidor'; window.__followLeader = 'Horaz';
+(0, eval)(await (await fetch('http://127.0.0.1:8788/follow.js')).text())
+```
+
+El seguidor: hace warp al mapa del líder y se acerca (teleport si está a > 10 tiles), acepta solo la
+party del líder, ataca con su skill de área a <= 6 tiles sin desviarse (Evil Spirit primero), deja de
+pegar si recibe mucho daño, escapa con teleport con < 40 % de vida, resetea solo en 400, y si el mapa
+del líder no le da el nivel o el líder va 30+ niveles por debajo, farmea sola con su ruta.
+
+Para cortarla: en el líder `window.__followMate = null`; en el seguidor recargar el agente sin
+`follow.js`. **Medido 2026-10-11:** con party el seguidor sube rapidísimo (127 → 284 en ~3 min), pero
+el líder reparte la exp y sus ciclos pasaron de ~9 a ~13,6 min. Usarla cuando importa el seguidor.
