@@ -124,6 +124,23 @@ export function mageCenter<M extends Pos>(monsters: readonly M[], r: number): { 
   return best;
 }
 
+/**
+ * Disputarle el grupo a un rival (mago con un top cerca): el monstruo a tiro que deja más monstruos en
+ * el giro, tirando hacia el rival (cluster × 3 − distancia al rival). Le saca kills sin pegarle a él.
+ */
+export function contestTarget<M extends Pos>(me: Pos, monsters: readonly M[], rival: Pos, r: number, reach: number): M | null {
+  let best: M | null = null;
+  let bs = -Infinity;
+  for (const m of monsters) {
+    if (dist(m, me) > reach) continue;
+    const n = cluster(m, monsters, r);
+    if (n === 0) continue;
+    const s = n * 3 - dist(m, rival);
+    if (s > bs) { bs = s; best = m; }
+  }
+  return best;
+}
+
 /** La Arena "de afuera" según el nivel: 24 (Arena 2, otro spot), 25 (Arena 3) o 26 (Arena 4). */
 export const altWarp = (level: number) => (level >= 300 ? 26 : level >= 200 ? 25 : 24);
 

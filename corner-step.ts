@@ -7,9 +7,10 @@ import { ATTACK_PACE_MS, PARTY_MATES, SKILL_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { buildPartyInvite, buildPartyKick } from './protocol097';
 import { isPriorityChar, partyWanted } from './knowledge';
+import { topRank } from './rivals';
 import { sendHit, sendTargetedSkill } from './actions';
 import { castReach, isMage, mageNeedsPower, pickAttackSkill, useSkill } from './combat';
-import { CORNER, CornerSides, SIDE, SIDES, mageCenter, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { CORNER, CornerSides, SIDE, SIDES, contestTarget, mageCenter, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { decide, journal } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
@@ -19,7 +20,9 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
-export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; mateBuffAt: number; inviteAt: number; partyUse: boolean | null; sides: CornerSides; expSeen: number;
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; mateBuffAt: number; inviteAt: number; partyUse: boolean | null;
+  // rival del top: último lugar donde se lo vio en la esquina, y avisos ya dados
+  rivalSpot: { name: string; x: number; y: number; at: number } | null; rivalSpotTaken: boolean; rivalSaidAt: Map<string, number>; sides: CornerSides; expSeen: number;
   // compañeros que ya estaban en la esquina (para anunciar cuando llega uno)
   matesHere: Set<string>;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
@@ -29,7 +32,7 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
 const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, inviteAt: 0, partyUse: null, sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, inviteAt: 0, partyUse: null, rivalSpot: null, rivalSpotTaken: false, rivalSaidAt: new Map(), sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -121,7 +124,24 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   // tiles) al grupo más grande a tiro, sin caminar hacia los monstruos.
   const mateInCorner = [...world.players.values()].some((q) => q.name != null && isMate(q.name) && inCorner(q));
   const planted = here && isMage() && mateInCorner && skill != null;
-  const st = here ? (spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
+  // Rival del top cerca (rivals.ts): anunciarlo una vez cada 5 min; el mago le disputa su grupo con
+  // Decay y el prioritario recuerda dónde se para (para tomarle el lugar cuando se va).
+  let top: { name: string; rank: number; x: number; y: number } | null = null;
+  for (const q of rivalPlayers()) {
+    const rank = topRank(q.name);
+    if (rank != null && Math.hypot(q.x - me.x, q.y - me.y) <= 10 && (!top || rank < top.rank)) top = { name: q.name!, rank, x: q.x, y: q.y };
+  }
+  if (top) {
+    if (here && inCorner(top)) corner.rivalSpot = { name: top.name, x: top.x, y: top.y, at: now };
+    if (now - (corner.rivalSaidAt.get(top.name) ?? 0) > 5 * 60_000) {
+      corner.rivalSaidAt.set(top.name, now);
+      decide(isMage()
+        ? `${top.name} (#${top.rank} del ranking) cerca: le disputo su grupo con Decay, sin atacarlo.`
+        : `${top.name} (#${top.rank} del ranking) cerca: compito por las kills; si se va, tomo su lugar.`);
+    }
+  }
+  const contested = here && isMage() && top && skill ? contestTarget(me, mons, top, r, castReach(skill.number)) : null;
+  const st = here ? (contested ?? spinTarget(me, mons, r, planted ? castReach(skill!.number) : undefined) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
   // Mago solo (sin rivales ni compañero cerca): al centro del grupo más grande, para que Evil Spirit
   // agarre la mayor cantidad. Se mueve solo si allá agarra 2+ más que acá.
   if (here && isMage() && !mageNeedsPower()) {
@@ -201,6 +221,20 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     // Con un compañero en la esquina, el lado que él no ocupa (el DK se planta en la esquina).
     const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
     const before = corner.sides.side.name;
+    // El prioritario, sin nada a tiro: si un rival del top se fue de su lugar en la esquina (hace 15 s a
+    // 3 min, ej. reseteando), ocuparlo antes de que vuelva.
+    const rs = corner.rivalSpot;
+    const gone = rs && !top && now - rs.at > 15_000 && now - rs.at < 3 * 60_000 && ![...world.players.values()].some((q) => q.name === rs.name);
+    if (gone && isPriorityChar(bot.charName) && !ct && Math.hypot(rs!.x - me.x, rs!.y - me.y) > 1.5) {
+      if (!corner.rivalSpotTaken) decide(`${rs!.name} se fue de su lugar en la esquina: lo ocupo (${rs!.x},${rs!.y}).`);
+      corner.rivalSpotTaken = true;
+      ctx.phase = 'walk';
+      bot.goalPoint = [rs!.x, rs!.y];
+      bot.doing = `esquina de Arena 2: ocupo el lugar de ${rs!.name}`;
+      await walkTowards(ctx, rs!.x, rs!.y);
+      return;
+    }
+    if (!gone) corner.rivalSpotTaken = false;
     const goal = ct ?? corner.sides.pick(now, rivalPlayers(), mates, !isMage(), isMage() && mates.length > 0);
     if (corner.sides.side.name !== before) {
       const why = mates.some((m) => inCorner(m)) ? `con ${mates.map((m) => m.name).join(', ')} en la esquina` : 'rinde más';
