@@ -71,8 +71,8 @@
     // 150): la party rinde cuando el que mata es de nivel parecido o más alto.
     // Usuario: "que Horaz la ayude en niveles altos y, cuando tenga una buena suma de resets, vaya por
     // su cuenta". Seguirlo solo desde nivel window.__followFromLevel (100) y mientras tenga menos de
-    // window.__followUntilResets (30) resets; si no, farmea sola.
-    const ownTime = pd.level < (window.__followFromLevel ?? 100) || (pd.resets ?? 0) >= (window.__followUntilResets ?? 30);
+    // window.__followUntilResets (12) resets; usuario: "30 es mucho, 10-14 está bien"; si no, farmea sola.
+    const ownTime = pd.level < (window.__followFromLevel ?? 100) || (pd.resets ?? 0) >= (window.__followUntilResets ?? 12);
     if (ownTime || pd.level < (REQ[lp.map] ?? 0) || (lp.level != null && lp.level < pd.level - 30)) { if (ai && !ai.on) { ai.on = true; L(`nivel ${pd.level} (${leader} ${lp.level ?? '?'} en mapa ${lp.map}): farmeo sola`); } F.solo = true; return; }
     if (F.solo) { F.solo = false; L(`nivel ${pd.level}: vuelvo con ${leader}`); }
     if (ai?.on) { ai.on = false; ai.target = null; w.attackTarget = null; }
