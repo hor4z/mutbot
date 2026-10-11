@@ -30,6 +30,19 @@ export const VERSION = (() => {
 let policy = '';
 export const setPolicy = (p: string) => { policy = p; };
 
+/** Consulta de solo lectura a la base (FORMAT JSONEachRow); [] si no hay base o falla. */
+export async function queryDb<T = Record<string, unknown>>(sql: string): Promise<T[]> {
+  if (!telemetryOn()) return [];
+  try {
+    const r = await fetch(`${DB_URL}/?database=mubot`, {
+      method: 'POST', body: sql, signal: AbortSignal.timeout(5_000),
+      headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD },
+    });
+    if (!r.ok) return [];
+    return (await r.text()).trim().split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l) as T);
+  } catch { return []; }
+}
+
 /** Una sesión = un proceso del bot. */
 export const SESSION = `${Date.now().toString(36)}-${process.pid}`;
 

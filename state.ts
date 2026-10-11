@@ -105,7 +105,9 @@ export const world = {
 export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number>; auto?: boolean;
   // Dorados vistos en el mapa de la cacería (propios o avisados por un compañero): id → dónde y cuándo.
   // Después de morir o si se van de scope, se vuelve directo ahí en vez de recorrer celdas.
-  spots?: Map<number, { x: number; y: number; type: number; at: number }> };
+  spots?: Map<number, { x: number; y: number; type: number; at: number }>;
+  // Zonas de dragones ya recorridas en esta cacería ("x,y"; zones.ts).
+  zonesVisited?: Set<string> };
 
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.
