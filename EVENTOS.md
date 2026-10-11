@@ -175,3 +175,14 @@ Avistamientos registrados: Lorencia **(149,168)** (salida sur del pueblo, camino
 los vio también "a la salida de Noria", en radios cortos de las entradas que usamos. El buscador de
 `hunter.js` revisa esos puntos antes que las celdas (`DRAGON_SPOTS`) y guarda cada dragón nuevo en
 `mubot-dragon-spots` (localStorage compartido entre pestañas, últimos 30 por mapa).
+
+### Caza conjunta de grandes (2026-10-11)
+
+Usuario: "si se topan con cualquier dorado lo matan igual, pero la prioridad es buscar dragones o
+cosas grandes". `hunter.js` con `CFG.bigOnly`: a las :49:20 Melu espera en Lorencia (149,168) y Horaz
+en Devias; arrancada la invasión, cada uno gira (Melu Lorencia → Noria → Devias, Horaz Devias con sus 4
+entradas → Lorencia → Noria) y revisa primero los puntos donde ya salió un dragón. Un dorado chico a
+la vista se mata, pero no se persigue por aviso ni alarga la búsqueda; sin un grande a la vista ni
+avisado, a los 3 min de invasión vuelven a farmear. Un dragón visto se avisa por /gold y el otro va.
+Farmeando (`corner.js`), cualquier dorado a <= 20 tiles se mata (dragones primero) y no se cambia de
+mapa ni se resetea hasta levantar las cajas.

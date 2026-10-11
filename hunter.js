@@ -47,7 +47,7 @@
   // y gira por Lorencia y Noria si en tourSec no ve dorados (el Golden Dragon sale al azar en esos 3).
   // En las demás pestañas el cazador queda apagado salvo que se prenda a mano (__hunt.setAuto(true)).
   const SOLO = { Horaz: { map: 2, tour: [0, 3] } };
-  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, huntBand: SOLO[S.playerData?.name] ? [0, 256] : [128, 256] };
+  const CFG = { huntMaxLevel: 401, huntStopLevel: 401, huntMinAlive: 25, huntStopAlive: 20, huntMaxMin: 15, huntWindowMin: 3, tourSec: 12, bigOnly: true, huntBand: SOLO[S.playerData?.name] ? [0, 256] : [128, 256] };
   const gold = jget(`mubot-gold:${me}`, {});      // { map: { "cx,cz": vistos } }
   const hunts = jget(`mubot-hunts:${me}`, []);     // historial de cacerías
   if (window.__hunt?.timer) window.clearInterval(window.__hunt.timer);
@@ -113,6 +113,11 @@
   // Prioridad (usuario: "los dragones son el objetivo número 1, después los grandes, lo que tire cosas
   // relevantes"): Golden Dragon 3 > grandes (Titan, Lizard King, Tantallos) 2 > el resto 1.
   const prio = (name) => (/Golden Dragon/i.test(name) ? 3 : /Titan|Lizard|Tantal/i.test(name) ? 2 : 1);
+  // Búsqueda de grandes (usuario 2026-10-11: "si se topan con cualquier dorado lo matan igual, pero la
+  // prioridad es buscar dragones o cosas grandes"): un dorado chico a la vista se mata (sighting usa
+  // isGold, con los grandes primero), pero no se persigue por aviso ni alarga la búsqueda; sin un
+  // grande a la vista ni avisado, la gira sigue y la cacería corta a los huntWindowMin.
+  const isTarget = (e) => isGold(e) && (!CFG.bigOnly || prio(String(e.objectNameInWorld ?? '')) >= 2);
   // Dorado a la vista: atacarlo primero y recordar dónde estaba.
   const sighting = (w, P) => {
     let b = null, bd = 1e9;
@@ -133,7 +138,7 @@
   };
   // Avisos de los buscadores (headless-bot.ts --scout → POST /gold en el servidor local): cada 2 s.
   h.reports = [];
-  const pollGold = () => fetch('http://127.0.0.1:8788/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me) : []; }).catch(() => {});
+  const pollGold = () => fetch('http://127.0.0.1:8788/gold?' + Date.now()).then((r) => r.json()).then((list) => { h.reports = Array.isArray(list) ? list.filter((g) => g.from !== me && (!CFG.bigOnly || prio(g.name ?? '') >= 2)) : []; }).catch(() => {});
   const reportGoal = (P, w) => {
     const near = h.reports.filter((g) => g.map === w.mapIndex && Date.now() - g.at < 30000).map((g) => ({ ...g, z: g.y, d: dist(P, { x: g.x, z: g.y }), p: prio(g.name ?? '') })).sort((a, b) => b.p - a.p || a.d - b.d)[0];
     if (!near || near.d < 4) return null;
@@ -241,14 +246,14 @@
     if (lootPending()) return;
     // Gira de dragón: arrancada la invasión, si en CFG.tourSec no hay dorados a la vista, saltar al
     // siguiente mapa de h.tour (Melu: Lorencia → Noria). Se vuelve a medir en cada mapa.
-    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
+    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
       if (inView) h.lastSeenGold = Date.now();
       if (!h.pre && h.tour?.length && h.invStart && w?.mapIndex === h.map && !inView && Date.now() - Math.max(h.startedAt, h.lastSeenGold ?? 0, h.invStart) > CFG.tourSec * 1000) {
         let next = h.tour.shift(); while (next === h.map && h.tour.length) next = h.tour.shift(); // no "saltar" al mismo mapa
         if (next !== h.map && MAPS[next] && S.playerData.level >= MAPS[next].lvl) { ai.L(`HUNTER: nada en ${MAPS[h.map].name} en ${CFG.tourSec} s → ${MAPS[next].name}`); const t = h.tour; h.stop('gira'); h.start(next); h.tour = t; return; } } }
     // Devias: saltar entre sus 4 entradas (warps 6, 7, 5, 4) mira 4 zonas lejanas en segundos;
     // en cada una se queda 6 s si no hay dorados a la vista.
-    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
+    { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
       if (!h.pre && h.map === 2 && w?.mapIndex === 2 && h.hops?.length && !inView && !ai.target && Date.now() - h.lastHop > 6000) { const wp = h.hops.shift(); h.lastHop = Date.now(); S.warpCommandRequest(wp); ai.explore = null; ai.L(`HUNTER: salto a la entrada ${wp} de Devias`); return; } }
     const w = W(), pe = w?.playerEntity; if (!pe) return;
     const g = reportGoal(pe.transform.pos, w);
@@ -294,7 +299,7 @@
     }
     const fresh = h.reports.filter((g) => Date.now() - g.at < 30000 && MAPS[g.map] && lvl >= MAPS[g.map].lvl);
     if (h.on && h.byReport) {
-      const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
+      const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; }
       if (inView || fresh.some((g) => g.map === h.map)) h.lastGoldAt = Date.now();
       const why = Date.now() - h.lastGoldAt > 45000 ? 'el dorado avisado ya no está' : (Date.now() - h.startedAt) / 60000 > 6 ? '6 min' : null;
       if (why) h.stop(why);
@@ -306,9 +311,9 @@
     const dragon = fresh.filter((g) => prio(g.name ?? '') === 3 && g.map !== h.map).sort((a, b) => b.at - a.at)[0];
     if (h.on && dragon && !(ai.target && prio(String(ai.target.objectNameInWorld ?? '')) === 3)) { h.stop(`dragón avisado en ${MAPS[dragon.map].name}`); h.start(dragon.map, h.byReport); return; }
     if (h.on) {
-      let inView = false; { const w = W(); if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; } }
+      let inView = false; { const w = W(); if (w) for (const e of w.byNetId.values()) if (isTarget(e)) { inView = true; break; } }
       const dragonNow = inView || h.reports.some((g) => Date.now() - g.at < 30000 && prio(g.name ?? '') === 3);
-      const why = !active ? 'terminó la invasión' : h.invStart && Date.now() - h.invStart > CFG.huntWindowMin * 60000 && !dragonNow ? `pasaron ${CFG.huntWindowMin} min de invasión` : aliveIn(h.map) <= CFG.huntStopAlive ? `quedan ${aliveIn(h.map)} en ${MAPS[h.map].name}: no vale la pena` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
+      const why = !active ? 'terminó la invasión' : h.invStart && Date.now() - h.invStart > CFG.huntWindowMin * 60000 && !dragonNow ? `pasaron ${CFG.huntWindowMin} min de invasión` : !CFG.bigOnly && aliveIn(h.map) <= CFG.huntStopAlive ? `quedan ${aliveIn(h.map)} en ${MAPS[h.map].name}: no vale la pena` : (Date.now() - h.startedAt) / 60000 > CFG.huntMaxMin ? '15 min' : lvl >= CFG.huntStopLevel ? `nivel ${lvl}` : null;
       if (why) h.stop(why);
       return;
     }

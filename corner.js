@@ -36,8 +36,9 @@
     setTimeout(() => { if (TEMP.includes(ai.cfg.skill) && C.baseSkill != null) ai.cfg.skill = C.baseSkill; }, 900);
   };
   C.isMage = () => [9, 10, 14, 38].includes(ai.cfg.skill);
-  // Regla fuerte (usuario: "si aparece un dragón o lo que sea dorado lo matás y recogés las cajas"):
-  // dorado vivo a <= 20 tiles mientras farmea, primero Golden Dragon (tipo 79) o Dragón Rojo (44).
+  // Regla fuerte (usuario: "si aparece un dragón o lo que sea dorado lo matás y recogés las cajas"; y
+  // después: "si se topan con cualquier dorado lo matan igual"): dorado vivo a <= 20 tiles mientras
+  // farmea, primero Golden Dragon (tipo 79) o Dragón Rojo (44), después el más cercano.
   // Mientras haya uno, la esquina se corre (sin correa, sin campamento) y el agente no cambia de mapa
   // ni resetea; el objetivo es el dorado. Al morir, 15 s más quieto para que el looter (radio 12)
   // levante las cajas.
