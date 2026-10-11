@@ -132,7 +132,9 @@
     if (map == null || !MAPS[map]) { ai.L('HUNTER: no hay mapa con dorados al alcance'); return false; }
     Object.assign(h, { on: true, map, byReport, pre, hops: map === 2 ? [6, 7, 5, 4] : [], lastHop: 0, lastGoldAt: Date.now(), startedAt: Date.now(), lvl0: S.playerData.level, golds0: h.seen.size });
     h.visited.clear();
-    h.saved = { spots: ai.cfg.spots, leash: ai.cfg.leashMaps, roam: ai.cfg.roam };
+    // allSpots: con el dúo "juntos" cfg.spots es un getter filtrado por el nivel del compañero; se guarda
+    // la lista completa para devolverla al terminar.
+    h.saved = { spots: ai.cfg.allSpots ?? ai.cfg.spots, leash: ai.cfg.leashMaps, roam: ai.cfg.roam };
     ai.cfg.spots = [[MAPS[map].warp, `cacería ${MAPS[map].name}`, 0]];
     ai.cfg.leashMaps = ai.cfg.leashMaps.filter((m) => m !== map);
     ai.camp = null; ai.explore = null; ai.target = null; W().attackTarget = null;
