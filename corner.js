@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [6, 'Devias 3', 20], [5, 'Devias 2', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -34,6 +34,14 @@
     const inner = (ai.cornerInner ??= ai.pickTarget);
     ai.pickTarget = (w, P, c) => {
       const C = window.__corner;
+      // Devias hasta el 100: solo lo que está a <= 8 tiles del campamento (usuario: "en Devias no te
+      // salgas del spot muy lejos"). Sin nada cerca, esperar ahí la reaparición.
+      if (C?.on && w.mapIndex === 2 && S.playerData.level < C.minLevel && ai.camp?.map === 2 && !window.__hunt?.on) {
+        const near = [...w.byNetId.values()].filter((e) => alive(e) && d(e.transform.pos, ai.camp) <= C.deviasR);
+        let best = null, bs = -1e9;
+        for (const e of near) { const n = near.filter((o) => d(o.transform.pos, e.transform.pos) <= C.spinR).length; const sc = n * 3 - d(P, e.transform.pos) * 0.5; if (sc > bs) { bs = sc; best = e; } }
+        return best;
+      }
       if (!C?.on || w.mapIndex !== C.map || window.__hunt?.on || (C.awayUntil && Date.now() < C.awayUntil)) return inner(w, P, c);
       const mons = [...w.byNetId.values()].filter(alive);
       // Camino a la esquina: derecho, sin pelear lo que hay en el camino (zigzagueaba con los Elite
@@ -81,7 +89,8 @@
         ai.camp = { x: Math.round(best.x), z: Math.round(best.z), map: 2, since: Date.now(), lastSeen: Date.now(), known: true };
         if (!ai.target) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
       }
-      if (ai.target && d(ai.target.transform.pos, A) > 18) { ai.target = null; w.attackTarget = null; }
+      if (ai.target && ai.camp && d(ai.target.transform.pos, ai.camp) > C.deviasR + 2) { ai.target = null; w.attackTarget = null; }
+      if (!ai.target && ai.camp && d(pe.transform.pos, ai.camp) > 3 && pe.playerMoveTo.handled) { ai.explore = { x: ai.camp.x, z: ai.camp.z, kind: 'camp' }; ai.moveTo(pe, ai.camp); }
     }
     if (S.playerData.level < C.minLevel) { if (!ai.cfg.spots.some((x) => x[0] === 1)) { ai.cfg.spots = C.ROUTE; ai.camp = null; ai.explore = null; ai.lastWarp = 0; } return; }
     // Esquina llena: con 3 o más jugadores cerca y el último minuto rindiendo menos que el mejor spot
