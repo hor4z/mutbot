@@ -13,6 +13,7 @@
  *   Seguidor:  __duo.follower('Horaz')   // NO ataca: sigue al líder a <= 4 tiles, mismo
  *                                        // warp, pociones y reparto de puntos; acepta su party
  *   window.__pullSkill = 9                // opcional: el seguidor tira Evil Spirit para atraer monstruos al líder
+ *   window.__coopFight = true             // cooperación: el seguidor pelea (Evil Spirit) a <= 2 tiles del líder
  */
 (() => {
   const S = __store, W = () => __world;
@@ -86,12 +87,20 @@
       // Atraer (usuario, 2026-10-10): con window.__pullSkill (Evil Spirit = 9) el seguidor lanza
       // el área cuando hay >= 2 monstruos a <= 6 tiles y está con el líder: se le vienen encima y,
       // como está en el mismo tile, el giro del líder los toma a todos juntos. Sin golpe normal.
+      // Cooperación (usuario, 2026-10-10: "que cooperen, hacé crecer a Melu"): con window.__coopFight el
+      // seguidor pelea de verdad: Evil Spirit al monstruo más cercano a <= 4 tiles cada 0,4 s, con vida
+      // > 60 % y maná > 20 %, sin esperar a que el líder esté quieto. Va a <= 2 tiles del líder.
+      if (window.__coopFight && w.mapIndex === h.map && pd.currentHP / pd.maxHP > 0.6 && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 400 && !w.castRequest) {
+        const P = pe.transform.pos; let near = null, nd = 99;
+        for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; const d = dist(P, e.transform.pos); if (d < nd) { nd = d; near = e; } }
+        if (near && nd <= 4) { const sk = window.__coopSkill ?? 9; if (S.currentSkill !== sk) S.selectSkill(sk); const tp = near.transform.pos; w.castRequest = { target: near, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
+      }
       const pull = window.__pullSkill;
       if (pull && w.mapIndex === h.map && dist(pe.transform.pos, h) <= 1 && h.still && pd.currentMP / pd.maxMP > 0.2 && now - lastPull > 1500) {
         const P = pe.transform.pos; let n = 0, near = null;
         for (const e of w.byNetId.values()) { if (!ai.isMonster(e) || e.dying || (e.attributeSystem?.getValue?.('currentHealth') ?? 0) <= 0) continue; if (dist(P, e.transform.pos) <= 6) { n++; near ??= e; } }
         if (n >= 2 && !w.castRequest) { if (S.currentSkill !== pull) S.selectSkill(pull); const tp = near.transform.pos; w.castRequest = { target: near, point: { x: tp.x, y: tp.z }, forced: false }; lastPull = now; }
-      } else if (!pull) w.castRequest = null;
+      } else if (!pull && !window.__coopFight) w.castRequest = null;
       // Si el líder está en un mapa que el seguidor no puede entrar (nivel), esperar en
       // Lorencia (zona segura) en vez de quedar solo y sin protección en el mapa anterior.
       // window.__followMaxReq: tope de mapa por seguridad (Melu murió 5 veces en Arena 3 sin
@@ -101,7 +110,8 @@
       if (w.mapIndex !== h.map || !canEnter) { if (now - lastWarp > 20000) { lastWarp = now; if (canEnter && w.mapIndex !== h.map) S.warpCommandRequest(h.spot); else if (!canEnter && w.mapIndex !== 0) S.warpCommandRequest(2); } return; }
       // En el MISMO tile que el líder ("debajo de su espada", usuario), revisando 4 veces por segundo.
       const P0 = pe.transform.pos;
-      if (Math.round(P0.x) !== h.x || Math.round(P0.z) !== h.z) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
+      // En cooperación alcanza con <= 2 tiles (pegada pero peleando); si no, el mismo tile.
+      if (window.__coopFight ? dist(P0, h) > 2 : (Math.round(P0.x) !== h.x || Math.round(P0.z) !== h.z)) { const m = pe.playerMoveTo; if (m.point.x !== h.x || m.point.y !== h.z || m.handled) { m.point.x = h.x; m.point.y = h.z; m.handled = false; m.sendToServer = true; } }
     }, 250);
     every(async () => { if (S.uiState !== 5 || ai.distributing || (S.playerData.points ?? 0) < 10) return; ai.distributing = true; try { await ai.distribute(); } finally { ai.distributing = false; } }, 5000);
     return `seguidor: ${me} sigue a ${leaderName} sin atacar`;
