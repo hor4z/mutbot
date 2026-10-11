@@ -401,7 +401,10 @@
     try {
       L(`baúl: voy a guardar ${toMove().length} ítem(s) (${why})`);
       if (W().mapIndex !== 0) { S.warpCommandRequest(2); ai.spot = 2; ai.lastWarp = Date.now(); for (let i = 0; i < 30 && (W()?.mapIndex !== 0 || S.sceneLoading); i++) await sleep(500); await sleep(1500); }
-      let npc = null; for (const e of W().byNetId.values()) if (e.npcType === 240) npc = e;
+      // Baz está en (147,145) de Lorencia; desde la llegada del warp queda fuera de la vista: caminar hasta ahí.
+      const findBaz = () => { for (const e of W().byNetId.values()) if (e.npcType === 240) return e; return null; };
+      let npc = findBaz();
+      for (let i = 0; i < 60 && !npc; i++) { if (i % 6 === 0) ai.moveTo(W().playerEntity, { x: 147, z: 147 }); await sleep(500); npc = findBaz(); }
       if (!npc) { L('baúl: no encuentro a Baz (Storage Guard)'); return false; }
       const pe = W().playerEntity, tp = npc.transform.pos;
       for (let i = 0; i < 40 && dist(pe.transform.pos, tp) > 2; i++) { if (i % 6 === 0) ai.moveTo(pe, { x: Math.round(tp.x), z: Math.round(tp.z) + 1 }); await sleep(500); }
