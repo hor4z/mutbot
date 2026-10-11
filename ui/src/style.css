@@ -1535,3 +1535,40 @@ time {
   color: #6e7e88;
   font-weight: 500;
 }
+
+/* Radar en modo cámara: nombres arriba de cada uno y lo que hace el personaje */
+.radar-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.radar-tag {
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #0d1215c8;
+  color: #f1b5bd;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px #000;
+}
+.radar-tag-self { color: #f4d28e; font-weight: 600; }
+.radar-tag-player { color: #9fd8f7; }
+.radar-tag-gold { color: #ffd361; font-weight: 600; }
+.radar-tag-drop { color: #d6bdff; }
+.radar-tag.is-target { outline: 1px solid #e86d7b; color: #fff; }
+.radar-doing {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #111619d8;
+  border: 1px solid #4e6067;
+  color: #e8eef0;
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}

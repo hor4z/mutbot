@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as T from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { Crosshair, RotateCcw, Move3d, Trees, Maximize } from "lucide-react";
 import type { PanelState } from "../../panel-protocol";
 import { Action, Segments } from "./components";
@@ -8,7 +9,8 @@ import { loadRealMap, type RealMap } from "./map-assets";
 
 type RadarApi = {
   update: (s: PanelState) => void;
-  zoom: (span: number) => void;
+  // "cam" = cámara: pegada al personaje, al ángulo del juego, con nombres arriba de cada uno.
+  zoom: (v: string) => void;
   reset: () => void;
   setObjects: (visible: boolean) => void;
   dispose: () => void;
@@ -38,6 +40,11 @@ function makeRadar(
   renderer.outputColorSpace = T.SRGBColorSpace;
   renderer.setClearColor("#111619");
   el.appendChild(renderer.domElement);
+  // Nombres arriba de monstruos y jugadores (solo en modo cámara).
+  const labels = new CSS2DRenderer();
+  labels.domElement.className = "radar-labels";
+  labels.domElement.style.display = "none";
+  el.appendChild(labels.domElement);
   renderer.domElement.setAttribute(
     "aria-label",
     "Radar 3D. Arrastrá para girar, usá la rueda para acercar y el botón Centrar para volver al personaje.",
@@ -68,6 +75,7 @@ function makeRadar(
   let state: PanelState | null = null,
     map = -1,
     span = 40,
+    cam = false,
     terrain: Uint8Array | null = null,
     terrainAbort: AbortController | null = null,
     disposed = false,
@@ -158,6 +166,7 @@ function makeRadar(
     y: number,
     label: string,
     target = false,
+    tag?: string,
   ) {
     let group = pool.get(key);
     if (!group) {
@@ -179,6 +188,12 @@ function makeRadar(
       r.position.y = 0.07;
       r.name = "ring";
       group.add(r);
+      const div = document.createElement("div");
+      div.className = `radar-tag radar-tag-${kind}`;
+      const t = new CSS2DObject(div);
+      t.position.y = kind === "self" || kind === "player" ? 1.9 : 2;
+      t.name = "tag";
+      group.add(t);
       pool.set(key, group);
       entities.add(group);
     }
@@ -189,9 +204,14 @@ function makeRadar(
     if (!group.userData.to) group.position.copy(to);
     group.userData.to = to;
     // Characters keep their world size and are occluded by the actual scenery.
-    const scale = kind === "self" || kind === "player" ? 1 : Math.max(1, span / 65);
+    const scale = kind === "self" || kind === "player" || cam ? 1 : Math.max(1, span / 65);
     group.scale.setScalar(scale);
     group.userData.label = label;
+    const tagObj = group.getObjectByName("tag") as CSS2DObject;
+    tagObj.visible = cam && !!tag;
+    if (tag && tagObj.element.textContent !== tag) tagObj.element.textContent = tag;
+    tagObj.element.classList.toggle("is-target", target);
+    group.userData.target = target;
     group.getObjectByName("ring")!.visible =
       kind === "self" || kind === "camp" || target;
   }
@@ -213,7 +233,8 @@ function makeRadar(
             -state.where.y,
           );
     controls.target.copy(target);
-    const offset = new T.Vector3(fit * 0.65, fit * 0.85, fit * 0.7);
+    // Cámara: más cerca y más baja, como se ve el personaje en el juego.
+    const offset = cam ? new T.Vector3(8.5, 11, 8.5) : new T.Vector3(fit * 0.65, fit * 0.85, fit * 0.7);
     if (span >= 256) {
       const vertical = T.MathUtils.degToRad(camera.fov);
       const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * camera.aspect);
@@ -374,6 +395,8 @@ function makeRadar(
       s.where.x,
       s.where.y,
       `${s.char.name} · ${s.where.x}, ${s.where.y}`,
+      false,
+      s.char.name,
     );
     halo.position.set(
       s.where.x,
@@ -389,12 +412,13 @@ function makeRadar(
         m.y,
         `${m.name} · ${m.x}, ${m.y}${m.target ? " · Objetivo" : ""}`,
         m.target,
+        m.name,
       );
     for (const p of s.entities?.players ?? [])
-      marker(`p${p.id}`, "player", p.x, p.y, `Jugador · ${p.x}, ${p.y}`);
+      marker(`p${p.id}`, "player", p.x, p.y, `${p.name ?? "Jugador"}${p.mate ? " (compañero)" : ""} · ${p.x}, ${p.y}`, false, p.name ? `${p.name}${p.mate ? " ★" : ""}` : "Jugador");
     for (const [i, d] of (s.entities?.drops ?? []).entries())
       if (d.valuable)
-        marker(`d${i}`, "drop", d.x, d.y, `${d.name} · ${d.x}, ${d.y}`);
+        marker(`d${i}`, "drop", d.x, d.y, `${d.name} · ${d.x}, ${d.y}`, false, d.name);
     if (s.camp) marker("camp", "camp", ...s.camp, "Destino del personaje");
     for (const [key, g] of pool)
       if (!g.visible) {
@@ -465,6 +489,7 @@ function makeRadar(
       h = el.clientHeight;
     if (!w || !h) return;
     renderer.setSize(w, h);
+    labels.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     if (span >= 256) reset();
@@ -493,8 +518,13 @@ function makeRadar(
       camera.position.add(step);
       follow.sub(step);
     }
+    // El objetivo del personaje late (en cámara se ve a quién le está pegando).
+    const pulse = 1 + 0.25 * Math.sin(t / 140);
+    for (const g of pool.values())
+      if (g.userData.target) g.getObjectByName("ring")!.scale.setScalar(cam ? pulse : 1);
     controls.update();
     renderer.render(scene, camera);
+    if (cam) labels.render(scene, camera);
   }
   frame = requestAnimationFrame(animate);
   return {
@@ -504,7 +534,10 @@ function makeRadar(
       real?.setObjects(visible);
     },
     zoom(v) {
-      span = v;
+      cam = v === "cam";
+      span = cam ? 16 : +v;
+      labels.domElement.style.display = cam ? "" : "none";
+      if (state) update(state);
       patchKey = "";
       buildGround();
       reset();
@@ -541,6 +574,7 @@ function makeRadar(
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
+      labels.domElement.remove();
     },
   };
 }
@@ -588,10 +622,11 @@ export function Radar({ state }: { state: PanelState | null }) {
           value={zoom}
           onChange={(v) => {
             setZoom(v);
-            api.current?.zoom(+v);
+            api.current?.zoom(v);
           }}
           label="Alcance del radar"
           items={[
+            { value: "cam", label: "Cámara" },
             { value: "40", label: "Cerca" },
             { value: "90", label: "Zona" },
             { value: "256", label: "Mapa" },
@@ -646,6 +681,9 @@ export function Radar({ state }: { state: PanelState | null }) {
           </Action>
         </div>
         {hover && <div className="map-tooltip">{hover}</div>}
+        {zoom === "cam" && state && (
+          <div className="radar-doing">{state.doing}</div>
+        )}
       </div>
       <div className="radar-footer">
         <div className="map-legend">
