@@ -5,7 +5,7 @@
 import { BUILD_ARG, BUILD_WEIGHTS, CHAR_NAME, CHAT_PACE_MS, MAX_STAT, STAT_BATCH_MIN, type StatName } from './config';
 import { requestCharacterList, waitFor } from './connection';
 import { sayChat } from './actions';
-import { planStats } from './farming';
+import { capStats, planStats } from './farming';
 import { journal } from './journal';
 import { LORENCIA_WARP, WARP_SPOTS, crowdedAt, persistLearning, warpAndWait } from './route';
 import { bot, learned, world } from './state';
@@ -37,11 +37,11 @@ export async function investStatPoints(force = false): Promise<number> {
   if (!BUILD_ARG) {
     // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
     // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
-    const p = planStats(points, world.stats.str, world.stats.ene);
-    plan = ([['ene', p.ene], ['str', p.str], ['vit', p.vit]] as Array<[StatName, number]>).filter(([name]) => world.stats[name] < 65535); // 65535 = tope del server (u16)
-    // Lo que iba a un stat en el tope va al primero que quede (si no, cada vuelta repartía solo el 5% de vit).
-    if (!plan.length) { const v = (['vit', 'agi'] as StatName[]).find((k) => world.stats[k] < 65535); if (!v) return 0; plan = [[v, 0]]; }
-    plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
+    // Tope de 65535 por stat como el navegador (capStats): lo que no entra va a agilidad y vitalidad.
+    // Todo en el tope: no se reparte (si no, /add rechazado y los puntos no bajan).
+    const capped = capStats(planStats(points, world.stats.str, world.stats.ene), world.stats);
+    plan = (['ene', 'str', 'agi', 'vit'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
+    if (!plan.length) return 0;
   } else {
     const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
     const total = active.reduce((acc, [, w]) => acc + w, 0);

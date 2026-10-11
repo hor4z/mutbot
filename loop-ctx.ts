@@ -23,10 +23,13 @@ export type LoopCtx = {
   walkStuck: number;
   lastX: number;
   lastY: number;
+  // Exp ganada en esta corrida (para medir los lados de la esquina) y monstruos que me pegaron (id → cuándo).
+  expTotal: number;
+  aggro: Map<number, number>;
 };
 
 export function newLoopCtx(): LoopCtx {
-  return { npcs: new Map(), target: null, phase: 'other', lastCastAt: 0, skillsUsed: 0, walkStuck: 0, lastX: world.x, lastY: world.y };
+  return { npcs: new Map(), target: null, phase: 'other', lastCastAt: 0, skillsUsed: 0, walkStuck: 0, lastX: world.x, lastY: world.y, expTotal: 0, aggro: new Map() };
 }
 
 // Un paso hacia (x, y); si no avanza, rodea el obstáculo abriendo de a 45°

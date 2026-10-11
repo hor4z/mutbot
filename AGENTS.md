@@ -60,7 +60,9 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `journal.ts` | Diario de acciones (`journal()`) y log al panel. |
 | `panel.ts` | Modo, órdenes del panel, estado que se manda cada 1 s, señales de dorados. |
 | `farm-loop.ts` | El loop autónomo (`autonomousLoop`): prioridades de cada tick. |
-| `corner-step.ts` | Un tick en la esquina de Arena 2 (`cornerStep`). |
+| `corner-step.ts` | Un tick en la esquina de Arena 2 (`cornerStep`): lados por exp medida, aggro, buff, esquina llena. |
+| `early-step.ts` | El arranque en el loop (`EarlyPlanner`): Lorencia al Lich, Devias 4 con campamento y correa. |
+| `chat.ts` | Chat: lo que llega va al panel (`chat`) y la orden `say` lo manda (un mensaje cada 2 s). |
 | `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
@@ -272,7 +274,7 @@ en vivo" al final de la sección.
     real: elegir personaje → nivel/mapa/puntos de `CharacterInformation` → la
     ruta adopta el mapa o warpea, y a 400 resetea. Los handlers del EventBus se
     registran una sola vez y `sendToGS` no manda nada con el socket cerrado.
-15. **Hambre** (`Hunger`, `camp.ts`): si en los últimos 45 s la exp/min es < 25%
+15. **Hambre** (`Hunger`, `camp.ts`; apagada en el arranque, ver "Reglas del farmeo"): si en los últimos 45 s la exp/min es < 25%
     de la referencia del tramo (promedio móvil 0.95/0.05 por tier, a lo sumo una
     actualización por segundo, sin contar el primer minuto tras un warp; se
     persiste como `tierRef`) —o < 5M/min sin referencia— y hay ≥ 1 jugador a
@@ -515,6 +517,25 @@ el estado real del server, que es más confiable que cualquier reimplementación
 packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
 camino corto. No se usa ahora porque no acepta control externo: las decisiones
 quedan fijas en el C#.
+## Reglas del farmeo (port del agente del navegador)
+
+Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
+
+- **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
+  - Lorencia: directo al Lich (134,202 ±3) con una salida variada en cada reset.
+  - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181); objetivos a ≤ 8 del campamento.
+  - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena (desde el 50 va a Arena 1); sin nadie, como mapa vacío (otra entrada de Devias).
+- **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
+  - Espera en el lado (esquina / medio / este) que más exp/min midió.
+  - Prioriza a los monstruos que le pegaron (aggro, 0x18/0x19) a ≤ 15 tiles.
+  - Se va 5 min si está llena.
+- **Dorados** (`golden.ts`): farmeando, un dorado a ≤ 20 tiles es el objetivo, dragones (44/79) primero. A los 2 min sin matarlo se deja. Mientras dura, y 15 s después para las cajas, no resetea, no cambia de spot ni vuelve a la esquina.
+- **Defensa propia** (`defense.ts`):
+  - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.
+  - Con vida < 35 % se va a Lorencia y evita ese mapa 5 min.
+  - Sin verificar: los nombres de los jugadores en scope (no se excluye a los propios por nombre).
+- **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
+
 ## Estación (conectar personajes desde el navegador)
 
 `bun run estacion` → `http://127.0.0.1:8787/panel` (también `/`). Lista los personajes, los conecta o desconecta sin
@@ -591,10 +612,11 @@ cacería), `command-result` y `decision` (el diario).
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 5 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`) **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 6 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`) **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
+- `say {text, to?, channel?}`: chat del personaje. Con `to`, susurro; si no, `channel` normal (default), party (`~`) o guild (`@`). Texto de 1 a 60 caracteres imprimibles, sin comandos (`/...`), un mensaje cada 2 s. Lo recibido (y lo mandado, con `mine`) llega al panel como `{type:'chat', at, kind, from, text}`, incluidos susurros y avisos del server; al conectar se mandan los últimos 100.
 - `pause` / `resume`: en pausa el loop no camina, no pelea, no warpea ni
   resetea; las pociones siguen.
 - `farm`: vuelve a la ruta normal (cancela la cacería, suelta el spot fijo y la pausa).

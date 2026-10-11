@@ -6,7 +6,7 @@
 import { ATTACK_PACE_MS, SKILL_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
 import { pickAttackSkill, useSkill } from './combat';
-import { CORNER, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
+import { CORNER, CornerSides, altWarp, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { journal, panelLog } from './journal';
 import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
@@ -14,11 +14,12 @@ import { WARP_COOLDOWN_MS, WARP_SPOTS, warpAndWait } from './route';
 import { bot, expLog, monsterName, world } from './state';
 import { chebyshev, directionTowards, log, sleep } from './util';
 
-// Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff.
-export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number };
+// Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
+// el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number };
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0 };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0 };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -46,6 +47,9 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   const here = inCorner(me);
   if (here) {
     corner.since ??= now;
+    // Exp de este tick al lado elegido (si está cerca de él).
+    corner.sides.record(now, me, ctx.expTotal - corner.expSeen);
+    corner.expSeen = ctx.expTotal;
     // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
     const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
@@ -60,8 +64,14 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       return;
     }
   } else corner.since = null;
-  // Pegar: lo que deja más monstruos en el giro, a ritmo de skill. Viajando, solo lo que bloquea.
-  const st = here ? spinTarget(me, mons, r) : cornerTarget(me, mons, 0, r);
+  // Monstruos que me pegaron en los últimos 5 s y están a <= 15 (los que pegan de lejos en las Arenas).
+  for (const [id, t] of ctx.aggro) if (now - t > 5000 || !ctx.npcs.has(id)) ctx.aggro.delete(id);
+  const aggro = [...ctx.aggro.keys()].map((id) => ctx.npcs.get(id)!).filter((m) => Math.hypot(m.x - me.x, m.y - me.y) <= 15)
+    .sort((a, b) => Math.hypot(a.x - me.x, a.y - me.y) - Math.hypot(b.x - me.x, b.y - me.y))[0] ?? null;
+  // Pegar: lo que deja más monstruos en el giro (o el que me pega, si está a tiro), a ritmo de skill.
+  // Viajando, solo lo que bloquea.
+  const aggroInReach = aggro && Math.hypot(aggro.x - me.x, aggro.y - me.y) <= r + 0.5 ? aggro : null;
+  const st = here ? (spinTarget(me, mons, r) ?? aggroInReach) : cornerTarget(me, mons, 0, r);
   if (st && Date.now() - ctx.lastCastAt >= SKILL_PACE_MS) {
     ctx.phase = 'fight';
     bot.doing = `esquina de Arena 2: ${here ? 'giro' : 'paso'} con ${monsterName(st.type)} (${mons.filter((m) => Math.hypot(m.x - st.x, m.y - st.y) <= r).length} en el giro)`;
@@ -94,8 +104,9 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       return;
     }
     const playersNear = [...world.players.values()].filter((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist).length;
-    const ct = cornerTarget(me, mons, playersNear, r);
-    const goal = ct ?? CORNER.wait;
+    // El que me pega primero; si no, el grupo; si no, el lado elegido por exp medida.
+    const ct = aggro ?? cornerTarget(me, mons, playersNear, r);
+    const goal = ct ?? corner.sides.pick(now, [...world.players.values()]);
     // Sin skill hay que llegar pegado para el golpe normal.
     const reach = ct ? (skill ? r : 1) : 0.8;
     bot.goalPoint = [goal.x, goal.y];

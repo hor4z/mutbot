@@ -96,24 +96,31 @@ export type PanelCommand =
   | { cmd: 'farm' }
   /** cazar dorados; sin map = el mapa con más vivos al alcance según 0xFD */
   | { cmd: 'hunt'; map?: number }
+  /**
+   * chat del personaje: `to` = susurro a ese personaje; si no, `channel` normal (default), party o
+   * guild. Texto de 1 a 60 caracteres imprimibles; los comandos ("/...") no se aceptan.
+   */
+  | { cmd: 'say'; text: string; to?: string; channel?: 'normal' | 'party' | 'guild' }
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
   | { cmd: 'warp'; warp: number };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
   | { type: 'hello'; botVersion: string; commands: readonly string[] }
   | { type: 'panel-state'; state: PanelState }
   | { type: 'log'; at: number; text: string }
-  | { type: 'command-result'; id: number; ok: boolean; msg: string };
+  | { type: 'command-result'; id: number; ok: boolean; msg: string }
+  /** una línea de chat (recibida o mandada por el bot) o un aviso del server */
+  | { type: 'chat'; at: number; kind: 'normal' | 'party' | 'guild' | 'whisper' | 'server'; from: string; text: string; mine?: boolean };
 
 /** Mensaje panel → bot. */
 export type PanelClientMessage = { type: 'command'; id: number; command: PanelCommand };
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {
@@ -122,6 +129,13 @@ export function isPanelCommand(v: unknown): v is PanelCommand {
   if (typeof c.cmd !== 'string' || !PANEL_COMMANDS.includes(c.cmd as never)) return false;
   const allowed = COMMAND_KEYS[c.cmd as (typeof PANEL_COMMANDS)[number]];
   if (Object.keys(c).some((k) => !allowed.includes(k))) return false;
+  if (c.cmd === 'say') {
+    // Imprimible latin1 (sin controles), 1-60, sin comandos del server.
+    if (typeof c.text !== 'string' || !/^[\x20-\x7e\xa0-\xff]{1,60}$/.test(c.text) || c.text.trimStart().startsWith('/')) return false;
+    if (c.to !== undefined && (typeof c.to !== 'string' || !/^[A-Za-z0-9_]{1,10}$/.test(c.to))) return false;
+    if (c.channel !== undefined && !['normal', 'party', 'guild'].includes(c.channel as string)) return false;
+    return !(c.to !== undefined && c.channel !== undefined && c.channel !== 'normal');
+  }
   if (c.cmd === 'warp') return Number.isInteger(c.warp) && (c.warp as number) >= 0 && (c.warp as number) < 256;
   const isMap = (m: unknown) => m === undefined || (Number.isInteger(m) && (m as number) >= 0 && (m as number) < 256);
   if (c.cmd === 'hunt') return isMap(c.map);

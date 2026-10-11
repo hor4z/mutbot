@@ -38,12 +38,15 @@ type ServerMessage =
 type WsData = Record<string, never>;
 
 export type CommandResult = { ok: boolean; msg: string };
+export type ChatOut = Omit<Extract<PanelServerMessage, { type: 'chat' }>, 'type'>;
 export type CommandHandler = (command: PanelCommand) => CommandResult | Promise<CommandResult>;
 
 export type StatusServer = {
   broadcastDecision(entry: DecisionLogEntry): void;
   broadcastPanelState(state: PanelState): void;
   broadcastLog(text: string): void;
+  /** una línea de chat (recibida o mandada); las últimas se mandan al conectar */
+  broadcastChat(line: ChatOut): void;
   /** Registra quién ejecuta las órdenes del panel (una sola; la última gana). */
   onCommand(handler: CommandHandler): void;
   close(): void;
@@ -94,6 +97,7 @@ export function originAllowed(origin: string | null, port: number): boolean {
 export function startStatusServer(opts: { port: number }): StatusServer {
   const history: DecisionLogEntry[] = [];
   const logs: Array<{ at: number; text: string }> = [];
+  const chats: ChatOut[] = [];
   const clients = new Set<{ send(data: string): void }>();
   let commandHandler: CommandHandler | null = null;
   let lastPanelState: PanelState | null = null;
@@ -156,6 +160,7 @@ export function startStatusServer(opts: { port: number }): StatusServer {
         clients.add(ws);
         send(ws, { type: 'hello', botVersion: BOT_VERSION, commands: PANEL_COMMANDS });
         send(ws, { type: 'history', decisions: history });
+        for (const c of chats) send(ws, { type: 'chat', ...c });
         for (const l of logs) send(ws, { type: 'log', at: l.at, text: l.text });
         if (lastPanelState) send(ws, { type: 'panel-state', state: lastPanelState });
       },
@@ -183,6 +188,11 @@ export function startStatusServer(opts: { port: number }): StatusServer {
     broadcastPanelState(state) {
       lastPanelState = state;
       broadcast({ type: 'panel-state', state });
+    },
+    broadcastChat(line) {
+      chats.push(line);
+      if (chats.length > LOG_HISTORY_SIZE) chats.shift();
+      broadcast({ type: 'chat', ...line });
     },
     broadcastLog(text) {
       const l = { at: Date.now(), text };

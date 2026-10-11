@@ -1,8 +1,9 @@
 /**
  * El arranque en el loop (early.ts, como el navegador): Lorencia hasta el 20 directo al Lich con salida
  * variada; Devias 4 (o 3/2 si estaba llena) hasta el 100 con campamento en el grupo más denso junto a la
- * llegada y objetivos a <= 8 del campamento. Sin saltos por hambre ni por mapa vacío: solo Devias llena
- * (o 45 s sin nada de exp con jugadores cerca) cambia de spot.
+ * llegada y objetivos a <= 8 del campamento. Sin saltos por hambre: en Devias cambia de spot solo si
+ * está llena (3+ jugadores en el campamento 20 s) o si pasan 60 s en el mapa sin nada de exp (con
+ * jugadores cerca cuenta como llena, sin nadie como mapa vacío).
  */
 import { CORNER, type Pos } from './corner';
 import { EARLY, deviasCamp, dist, lorenciaPlan } from './early';
@@ -34,15 +35,29 @@ export class EarlyPlanner {
     return world.map === EARLY.lorencia.map && this.lorPlan?.via != null;
   }
 
-  /** El campamento y a dónde caminar en este tick (recalcula al llegar a un mapa). */
-  goal(npcs: Iterable<ScopedNpc>): { camp: Pos; goal: Pos } {
+  private tickAt = -1;
+  private last: { camp: Pos; goal: Pos } | null = null;
+
+  /**
+   * El campamento y a dónde caminar en este tick (recalcula al llegar a un mapa). `npcs` = los
+   * atacables (sin los inalcanzables). Se calcula una vez por tick (`tick`).
+   */
+  goal(npcs: Iterable<ScopedNpc>, tick: number): { camp: Pos; goal: Pos } {
+    if (tick === this.tickAt && this.last) return this.last;
+    this.tickAt = tick;
+    this.last = this.compute(npcs);
+    return this.last;
+  }
+
+  private compute(npcs: Iterable<ScopedNpc>): { camp: Pos; goal: Pos } {
     const now = Date.now();
     const me = { x: world.x, y: world.y };
     if (this.arrivalAt !== bot.lastArrivalAt) {
       this.arrivalAt = bot.lastArrivalAt;
       // Reconectando el bot aparece donde quedó (Horaz entró en (181,72)): si eso está lejos de la
       // llegada de Devias 4, los grupos se buscan alrededor de la llegada, no de ahí.
-      this.arrival = world.map === EARLY.devias.map && dist(me, DEVIAS4_ARRIVAL) > 30 ? { ...DEVIAS4_ARRIVAL } : { ...me };
+      // (solo si el spot es Devias 4: tras un warp a Devias 3 o 2 vale la llegada real).
+      this.arrival = world.map === EARLY.devias.map && bot.currentSpot?.index === 7 && dist(me, DEVIAS4_ARRIVAL) > 30 ? { ...DEVIAS4_ARRIVAL } : { ...me };
       this.camp = null;
       this.poorSince = null;
       this.lorPlan = null;

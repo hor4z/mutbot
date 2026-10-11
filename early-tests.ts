@@ -44,7 +44,9 @@ const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
   const inLeash = [{ x: 61, y: 189, id: 1 }, { x: 62, y: 189, id: 2 }];
   const far = { x: 80, y: 188, id: 3 };
   ok('correa: elige dentro de 8 del campamento', leashedTarget({ x: 60, y: 188 }, camp, [...inLeash, far])?.id !== 3);
-  ok('correa: nada en el campamento → el más cercano a <= 12 de mí', leashedTarget({ x: 75, y: 188 }, camp, [far])?.id === 3);
+  const edge = { x: 69, y: 188, id: 4 }; // a 9 del campamento: fuera de la correa (8), dentro de 10
+  ok('correa: nada en el campamento → el más cercano a <= 12 de mí, sin pasar 10 del campamento', leashedTarget({ x: 72, y: 188 }, camp, [edge, far])?.id === 4);
+  ok('correa: uno a 20 del campamento no se elige aunque esté al lado mío', leashedTarget({ x: 79, y: 188 }, camp, [far]) === null);
   ok('correa: nada cerca → null', leashedTarget({ x: 0, y: 0 }, camp, [far]) === null);
 }
 
