@@ -5,8 +5,9 @@
  * (usa __ai.isMonster y __ai.moveTo; el agente queda apagado: __ai.on = false).
  *
  *   __atlas.start()   arrancar (vuelve a empezar cuando termina todos los mapas)
- *   __atlas.invasionOnly (por defecto true): solo busca durante la invasión dorada, en la franja oeste;
- *                     el resto del tiempo espera en Lorencia. false = recorrido completo de mapas.
+ *   Recorre los mapas buscando spots; durante la invasión dorada (> 25 vivos) interrumpe y busca
+ *   dorados en la franja oeste del mapa de la invasión, y después sigue donde estaba.
+ *   __atlas.invasionOnly = true: fuera de la invasión espera en Lorencia en vez de recorrer.
  *   __atlas.stop()
  *   __atlas.report()  resumen por mapa y dorados vistos
  *
@@ -32,7 +33,7 @@
   const ROUTE = [[2, 0, 'Lorencia', 10], [3, 3, 'Noria', 10], [6, 2, 'Devias', 20], [8, 1, 'Dungeon', 30], [14, 4, 'Lost Tower', 50], [11, 7, 'Atlans', 70], [21, 8, 'Tarkan', 140]];
   const MINUTES_PER_MAP = 12;
   if (window.__atlas?.timer) window.clearInterval(window.__atlas.timer);
-  const X = (window.__atlas = { invasionOnly: true, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
+  const X = (window.__atlas = { invasionOnly: false, invMode: null, startAlive: 25, stopAlive: 20, band: [0, 128], fight: true, fightRange: 5, skill: 9, on: false, idx: 0, mapSince: 0, visited: new Set(), goal: null, goalSince: 0, seenIds: new Set(), lastPot: 0, lastWarp: 0, lastPost: 0, timer: null });
 
   const potion = () => { const it = S.playerData.items || []; let best = -1, bn = -1; it.forEach((x, i) => { if (x && x.group === 14 && x.num >= 1 && x.num <= 3 && i >= 12 && x.num > bn) { best = i; bn = x.num; } }); return best; };
   const record = (w) => {
@@ -67,7 +68,7 @@
     const walk = (x, z) => { for (let r = 0; r < 10; r++) for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r]]) if (w.isWalkable(x + dx, z + dz)) return { x: x + dx, z: z + dz }; return null; };
     let best = null, bd = 1e9;
     for (let x = 12; x < 250; x += 25) for (let z = 12; z < 250; z += 25) {
-      if (X.visited.has(cellOf(x, z)) || (X.invasionOnly && (x < X.band[0] || x >= X.band[1]))) continue;
+      if (X.visited.has(cellOf(x, z)) || (X.invMode && (x < X.band[0] || x >= X.band[1]))) continue;
       const p = walk(x, z); if (!p) { X.visited.add(cellOf(x, z)); continue; }
       const d = dist(P, p); if (d < bd) { bd = d; best = p; }
     }
@@ -94,16 +95,27 @@
   const INV_MAPS = ROUTE.filter((r) => [0, 3, 2, 7, 8].includes(r[1]));
   const aliveIn = (m) => window.__invasion?.maps?.find((x) => x.map === m)?.alive ?? 0;
   const invActive = () => window.__invasion?.status === 1 && Date.now() - window.__invasion.at < 120000;
+  // Durante la invasión (si un mapa al alcance tiene > startAlive vivos según 0xFD) deja el recorrido,
+  // va a ese mapa y barre la franja oeste (Horaz el este); con <= stopAlive o al terminar la invasión,
+  // vuelve al recorrido donde lo dejó. Con X.invasionOnly, fuera de la invasión espera en Lorencia.
   X.invasionTick = () => {
-    if (!X.invasionOnly) return false;
     const w = W(), pd = S.playerData, now = Date.now();
-    if (X.on && (!invActive() || aliveIn(route()[X.idx % route().length][1]) <= X.stopAlive)) { X.on = false; closeFight(); save(); ai.L('ATLAS: sin dorados que buscar → Lorencia a esperar'); }
-    if (!X.on) {
-      const best = INV_MAPS.filter((r) => pd.level >= r[3] && aliveIn(r[1]) > X.startAlive).sort((a, b) => aliveIn(b[1]) - aliveIn(a[1]))[0];
-      if (invActive() && best) { X.idx = route().findIndex((r) => r[1] === best[1]); X.on = true; X.mapSince = 0; X.visited.clear(); X.goal = null; ai.L(`ATLAS: invasión con ${aliveIn(best[1])} dorados en ${best[2]} → busco (franja oeste)`); }
-      else if (w.mapIndex !== 0 && now - X.lastWarp > 20000 && S.uiState === 5) { X.lastWarp = now; S.warpCommandRequest(2); }
+    if (X.invMode) {
+      if (!invActive() || aliveIn(X.invMode.map) <= X.stopAlive) {
+        closeFight(); save(); X.idx = X.invMode.prevIdx; X.visited = X.invMode.prevVisited; X.mapSince = 0; X.goal = null; X.invMode = null;
+        if (X.invasionOnly) X.on = false;
+        ai.L(X.invasionOnly ? 'ATLAS: sin dorados que buscar → Lorencia a esperar' : 'ATLAS: fin de la búsqueda de dorados → sigo explorando');
+      }
+      return;
     }
-    return true;
+    const best = INV_MAPS.filter((r) => pd.level >= r[3] && aliveIn(r[1]) > X.startAlive).sort((a, b) => aliveIn(b[1]) - aliveIn(a[1]))[0];
+    if (invActive() && best && S.uiState === 5) {
+      X.invMode = { map: best[1], prevIdx: X.idx, prevVisited: X.visited };
+      X.idx = route().findIndex((r) => r[1] === best[1]); X.visited = new Set(); X.on = true; X.mapSince = 0; X.goal = null;
+      ai.L(`ATLAS: invasión con ${aliveIn(best[1])} dorados en ${best[2]} → busco (franja oeste)`);
+      return;
+    }
+    if (X.invasionOnly && !X.on && w?.mapIndex !== 0 && now - X.lastWarp > 20000 && S.uiState === 5) { X.lastWarp = now; S.warpCommandRequest(2); }
   };
   X.tick = () => {
     X.invasionTick();
@@ -116,7 +128,7 @@
     if (w.mapIndex !== map) { if (now - X.lastWarp > 15000) { X.lastWarp = now; S.warpCommandRequest(warp); ai.L(`ATLAS: voy a ${name}`); } return; }
     X.mapSince ||= now;
     record(w);
-    if (!X.invasionOnly && now - X.mapSince > MINUTES_PER_MAP * 60000) return nextMap(`${MINUTES_PER_MAP} min en ${name}`);
+    if (!X.invMode && now - X.mapSince > MINUTES_PER_MAP * 60000) return nextMap(`${MINUTES_PER_MAP} min en ${name}`);
     // Pelear lo que tenga cerca (usuario: "hacé que ataque"): Evil Spirit (área) contra el monstruo más
     // cercano a <= fightRange, dorados primero. Mientras pelea no camina; después sigue el recorrido.
     if (X.fight && hp >= 0.5 && pd.currentMP / pd.maxMP > 0.1) {
@@ -135,7 +147,7 @@
     if (!X.goal || dist(P, X.goal) < 4 || now - X.goalSince > 45000) {
       if (X.goal) X.visited.add(cellOf(X.goal.x, X.goal.z));
       X.goal = nextCell(w, P); X.goalSince = now;
-      if (!X.goal) { if (X.invasionOnly) { X.visited.clear(); return; } return nextMap(`recorrí todo ${name}`); }
+      if (!X.goal) { if (X.invMode) { X.visited.clear(); return; } return nextMap(`recorrí todo ${name}`); }
     }
     const m = pe.playerMoveTo; if (m.handled || m.point.x !== X.goal.x || m.point.y !== X.goal.z) ai.moveTo(pe, X.goal);
     if (now - X.lastPost > 60000) { X.lastPost = now; save(); fetch('http://127.0.0.1:8788/atlas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: me, atlas }) }).catch(() => {}); }
