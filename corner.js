@@ -21,7 +21,7 @@
   const ai = window.__ai, S = __store, W = () => __world;
   if (!ai) return 'primero browser-agent.js';
   if (window.__corner?.timer) clearInterval(window.__corner.timer);
-  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
+  const C = (window.__corner = { ROUTE: [[2, 'Lorencia', 10], [7, 'Devias 4', 20], [24, 'Arena 2', 100], [25, 'Arena 3', 200], [26, 'Arena 4', 300]], on: true, minLevel: 100, map: 83, warp: 24, home: { x: 7, z: 11 }, lorencia: { x: 134, z: 202 }, radius: 7, deviasR: 8, sides: [{ name: 'esquina', x: 2, z: 10 }, { name: 'medio', x: 7, z: 11 }, { name: 'este', x: 12, z: 11 }], sideR: 4, dwellMs: 40000, rivalPenalty: 0.25, side: 'esquina', sideLog: [], sideStats: {}, sideAt: 0, spinR: 2.5, fill: 2, swellAt: 0,
     route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]], spawns: [], seen: new Map(), log: [], timer: null, warpAt: 0 });
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -55,15 +55,16 @@
       // dos están igual, quedarse en el actual salvo que el otro tenga el doble de monstruos (+2).
       const side = (() => {
         // Posición: esquina (2,10), medio (7,11) o este (12,11). Usuario: "si conviene, foco en la
-        // esquina; si no, en el spot del medio; adaptate". Se queda >= 20 s en cada una y después
+        // esquina; si no, en el spot del medio; adaptate". Se queda >= 40 s en cada una (con 20 s saltaba de este a medio con las mediciones movidas por los rivales) y después
         // elige la de mayor exp/min medida (EMA; la que no probó, optimista para probarla), dividida
-        // por (1 + 0,5 × jugadores a <= 4 tiles de ese punto).
+        // por (1 + 0,25 × jugadores a <= 4 tiles): un rival encima pesa poco, se compite (usuario: "ganale
+        // al DK en la esquina o ganá en el medio").
         const now = Date.now(), cur = C.sides.find((x) => x.name === C.side) ?? C.sides[0];
-        if (now - C.sideAt < 20000) return cur;
+        if (now - C.sideAt < C.dwellMs) return cur;
         const others = [...w.byNetId.values()].filter((e) => e.heroState !== undefined && e !== w.playerEntity);
         const known = Object.values(C.sideStats).map((x) => x.rate).filter((x) => x > 0);
         const best = known.length ? Math.max(...known) : 1;
-        const score = (sd) => { const st = C.sideStats[sd.name]; const r = st?.rate > 0 ? st.rate : best * 1.1; return r / (1 + 0.5 * others.filter((e) => d(e.transform.pos, sd) <= 4).length); };
+        const score = (sd) => { const st = C.sideStats[sd.name]; const r = st?.rate > 0 ? st.rate : best * 1.1; return r / (1 + C.rivalPenalty * others.filter((e) => d(e.transform.pos, sd) <= 4).length); };
         let pick = cur; for (const sd of C.sides) if (score(sd) > score(pick) * 1.15) pick = sd;
         C.sideAt = now;
         if (pick !== cur) { C.side = pick.name; C.sideLog.push(`${new Date().toLocaleTimeString()} → ${pick.name} (${C.sides.map((sd) => `${sd.name} ${Math.round(score(sd) / 1e6)}M`).join(', ')})`); if (C.sideLog.length > 50) C.sideLog.shift(); }
