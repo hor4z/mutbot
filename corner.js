@@ -26,6 +26,7 @@
   // Alcance del skill de área: Twisting Slash (DK, 41) ~2,5 tiles; Evil Spirit (DW, 9) ~5 (Melu, la
   // misma clase que los magos que lideran la esquina).
   C.spinR = ({ 9: 5, 14: 3, 38: 3.5, 41: 2.5, 42: 3 })[ai.cfg.skill] ?? 2.5;
+  C.isMage = () => [9, 10, 14, 38].includes(ai.cfg.skill);
   const L = (m) => { C.log.push(new Date().toLocaleTimeString() + ' ' + m); if (C.log.length > 200) C.log.shift(); ai.L('ESQUINA: ' + m); };
   const d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
   const hp = (e) => e.attributeSystem?.getValue?.('currentHealth') ?? 0;
@@ -40,6 +41,10 @@
       // Primero, los monstruos que le pegaron en los últimos 5 s y están a <= 15 tiles (los que atacan de
       // lejos en Arena 4 lo desgastaban mientras él esperaba en el campamento; usuario: "tiene que
       // limpiar todo, estos atacan de distancia").
+      // Modo mago (Evil Spirit / Inferno / Decay / Hellfire pegan en círculo alrededor del mago): no
+      // elegir objetivo, así el agente no camina hacia cada monstruo como un DK (usuario: "farmea como
+      // DK, se mueve mucho y no usa bien el Spirit"). Los tiros los hace C.fast, desde donde está.
+      if (C?.on && C.isMage() && !window.__hunt?.on) return null;
       if (C?.on && !window.__hunt?.on) {
         const now = Date.now(); let ag = null, ad = 1e9;
         for (const [id, t] of C.aggro ?? []) { if (now - t > 5000) { C.aggro.delete(id); continue; } const e = w.getByNetId?.(id) ?? [...w.byNetId.values()].find((x) => (x.netId & 0x7fff) === id); if (!e || !alive(e)) continue; const dd = d(e.transform.pos, P); if (dd <= 15 && dd < ad) { ad = dd; ag = e; } }
@@ -290,9 +295,14 @@
   // ya (el agente revisa cada 400 ms y el mago de al lado borra la tanda en ~1 s).
   if (window.__corner?.fast) clearInterval(window.__corner.fast);
   C.fast = setInterval(() => {
-    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (C.awayUntil && Date.now() < C.awayUntil)) return;
-    const w = W(), pe = w?.playerEntity; if (!pe || w.mapIndex !== C.map || w.castRequest) return;
-    const P = pe.transform.pos; if (d(P, C.home) > C.radius + C.fill) return;
+    if (!C.on || !ai.on || ai.busy || ai.looting || S.uiState !== 5 || S.sceneLoading || window.__hunt?.on || window.__defense?.engaged || (!C.isMage() && C.awayUntil && Date.now() < C.awayUntil)) return;
+    if (C.isMage() && ai.cfg.castRange !== C.spinR) ai.cfg.castRange = C.spinR; // el caster del agente tampoco apunta más lejos (el cliente caminaba hasta el objetivo)
+    const w = W(), pe = w?.playerEntity; if (!pe || w.castRequest) return;
+    const P = pe.transform.pos;
+    if (!C.isMage() && (w.mapIndex !== C.map || d(P, C.home) > C.radius + C.fill)) return;
+    // Mago: tira desde donde está en cualquier mapa, y mientras haya monstruos cerca del campamento,
+    // el campamento sigue "con monstruos" para el agente (si no, lo daba por vacío y se iba).
+    if (C.isMage() && ai.camp && [...w.byNetId.values()].some((e) => alive(e) && d(e.transform.pos, ai.camp) <= 8)) ai.camp.lastSeen = Date.now();
     let best = null, bn = 0;
     for (const e of w.byNetId.values()) { if (!alive(e) || d(e.transform.pos, P) > C.spinR + 0.5) continue; const n = [...w.byNetId.values()].filter((o) => alive(o) && d(o.transform.pos, e.transform.pos) <= C.spinR).length; if (n > bn) { bn = n; best = e; } }
     if (!best) return;
