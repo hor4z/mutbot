@@ -14,7 +14,7 @@
  *   GET  /gold  avistamientos vivos de los últimos 60 s (el cazador de Horaz lo lee cada 2 s).
  */
 const ROOT = new URL('..', import.meta.url).pathname;
-const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js', 'hunter.js', 'explorer.js', 'defense.js', 'corner.js']);
+const FILES = new Set(['browser-agent.js', 'tuner.js', 'skill-ab.js', 'duo.js', 'bg-timers.js', 'hunter.js', 'explorer.js', 'defense.js', 'corner.js', 'follow.js']);
 const CORS = {
   'Access-Control-Allow-Origin': 'https://mu.mormon.garden',
   'Access-Control-Allow-Private-Network': 'true',
