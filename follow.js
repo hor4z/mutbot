@@ -35,6 +35,7 @@
   }
 
   const leader = window.__followLeader ?? 'Horaz';
+  window.__partyAllow = [...new Set([...(window.__partyAllow ?? []), leader])];
   if (window.__ai) window.__ai.on = false;
   // Aceptar solo la party del líder (0x40 llega con el id de quien invita; respuesta C1 06 41 01 id).
   if (!window.__followAcceptHooked) {

@@ -687,6 +687,10 @@
       try {
         const dv = raw instanceof DataView ? raw : new DataView(raw.buffer ?? raw);
         const id = dv.getUint16(3, false) & 0x7fff;
+        // Salvo los personajes propios (window.__partyAllow, ej. ['Horaz'] en Melu): esos los acepta
+        // follow.js. Antes el rechazo le ganaba a la aceptación y la party nunca se armaba.
+        let from = null; for (const e of W().byNetId.values()) if ((e.netId & 0x7fff) === id) from = e.objectNameInWorld;
+        if (from && (window.__partyAllow ?? []).includes(from)) return;
         setTimeout(() => { S.sendToGS(new DataView(Uint8Array.from([0xc1, 0x06, 0x41, 0x00, id >> 8, id & 0xff]).buffer)); window.__ai?.L?.(`party rechazada (de #${id})`); }, 600 + Math.random() * 900);
       } catch (e) { window.__ai?.L?.('error al rechazar party: ' + e.message); }
     });
