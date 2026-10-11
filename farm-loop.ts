@@ -193,6 +193,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const goldReporter = new GoldReporter(bot.charName);
   // Esquina de Arena 2 (corner-step.ts).
   const corner = newCornerState();
+  let altMeasuredAt = 0;
   let devCrowdSince: number | null = null;
   const early = new EarlyPlanner();
   // Regla fuerte de dorados (golden.ts) y los ya avisados.
@@ -392,6 +393,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 3) Invertir puntos de atributo cuando junte un lote, en segundo plano (sigue peleando).
     investStatPointsInBackground((n) => { statPointsSpent += n; });
 
+    // Afuera de la esquina (llena o sin rendir): medir cuánto rinde esta Arena, para compararla la
+    // próxima vez (promedio móvil por warp, una medición por minuto con al menos 1 min en el mapa).
+    if (corner.awayUntil > Date.now() && bot.currentSpot && Date.now() - bot.lastArrivalAt > 60_000 && Date.now() - altMeasuredAt > 60_000) {
+      altMeasuredAt = Date.now();
+      const r = expLog.perMin(altMeasuredAt, 60_000);
+      const prev = corner.altRates.get(bot.currentSpot.index);
+      corner.altRates.set(bot.currentSpot.index, prev == null ? r : prev * 0.6 + r * 0.4);
+    }
     // 3b) La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, salvo cazando, con un
     //     spot fijado por el panel o mientras está afuera porque estaba llena.
     // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.

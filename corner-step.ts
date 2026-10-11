@@ -16,10 +16,12 @@ import { chebyshev, directionTowards, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
-export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number };
+export type CornerState = { awayUntil: number; since: number | null; routeIdx: number | null; routeAt: number; buffAt: number; sides: CornerSides; expSeen: number;
+  // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
+  altRates: Map<number, number> };
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0 };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, sides: new CornerSides(), expSeen: 0, altRates: new Map() };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -55,15 +57,18 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     // Exp de este tick al lado elegido (si está cerca de él).
     corner.sides.record(now, me, ctx.expTotal - corner.expSeen);
     corner.expSeen = ctx.expTotal;
-    // Llena: 3+ jugadores, más de 60 s adentro y rindiendo poco → 5 min a la Arena de su nivel.
+    // Llena (3+ jugadores, 60 s) o sin rendir (90 s) y rindiendo menos que la Arena de afuera medida →
+    // 5 min a la Arena de su nivel. Si rinde, compite aunque haya gente.
     const rivals = [...world.players.values()].filter((q) => Math.hypot(q.x - CORNER.home.x, q.y - CORNER.home.y) <= CORNER.fullRivalDist).length;
     const rate = expLog.perMin(now, 60_000);
-    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate })) {
+    const altRate = corner.altRates.get(altWarp(world.level));
+    if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate })) {
       corner.awayUntil = now + CORNER.awayMs;
       corner.since = null;
       ctx.target = null;
       const alt = WARP_SPOTS.find((sp) => sp.index === altWarp(world.level))!;
-      panelLog(`Esquina llena (${rivals} jugadores, ${Math.round(rate / 1e6)}M/min el último minuto): voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
+      const vs = `${Math.round(rate / 1e6)}M/min el último minuto contra ${Math.round(Math.max(altRate ?? 0, CORNER.altMinRate) / 1e6)}M de ${alt.name}`;
+      panelLog(`Esquina ${rivals >= CORNER.fullRivals ? `llena (${rivals} jugadores)` : 'sin rendir'}, ${vs}: voy a ${alt.name} por ${CORNER.awayMs / 60_000} min.`);
       journal('travel', `esquina llena: warp a ${alt.name}`, { warp: alt.index, reason: 'corner-full', rivals });
       await warpAndWait(alt);
       return;

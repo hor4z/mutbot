@@ -528,7 +528,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
   - Espera en el lado (esquina / medio / este) que más exp/min midió.
   - Prioriza a los monstruos que le pegaron (aggro, 0x18/0x19) a ≤ 15 tiles.
-  - Se va 5 min si está llena.
+  - Compite si rinde (con 2+ jugadores encima no camina, gira con lo que entra). Se va 5 min a la Arena de su nivel si rinde menos que esa Arena medida (piso 60M): llena (3+ jugadores, 60 s) o sin rendir (90 s, aunque no haya nadie).
 - **Dorados** (`golden.ts`): farmeando, un dorado a ≤ 20 tiles es el objetivo, dragones (44/79) primero. A los 2 min sin matarlo se deja. Mientras dura, y 15 s después para las cajas, no resetea, no cambia de spot ni vuelve a la esquina.
 - **Defensa propia** (`defense.ts`):
   - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.
