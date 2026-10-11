@@ -525,7 +525,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
   - Lorencia: directo al Lich (134,202 ±3) con una salida variada en cada reset.
-  - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181); objetivos a ≤ 8 del campamento.
+  - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181, solo si está a ≤ 25 de la llegada: desde Devias 3 Horaz cruzaba el mapa a pie); objetivos a ≤ 8 del campamento.
   - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena; sin nadie, como mapa vacío. En los dos casos va primero a otra entrada de Devias y solo a Arena 1 (rinde ~0,4M/min) si todas están llenas.
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
   - Espera en el lado (esquina / medio / este) que más exp/min midió.
@@ -535,6 +535,9 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Los compañeros (`MUBOT_MATES`, que la estación pasa con todos sus personajes; por defecto Horaz y Melu) se reconocen por el nombre, que viene en `AddCharactersToScope`: byte 14 en el formato 075 de 27 bytes, byte 18 en el 095 de 31.
   - No cuentan como rivales: ni para "esquina llena", ni para la elección de lado, ni para la defensa.
   - Si un compañero está en la esquina, los lados que ocupa no se eligen y se cambia ya; el DK se planta en la esquina (2,10) si está libre.
+  - **El mago le deja la esquina al DK** (`CornerSides.pick` con `yieldCorner`): con un compañero a la vista va al **segundo spot (medio, 7,11)** si está libre, y si está parado en la esquina se corre antes de girar. Con el DK en la esquina se queda plantado y tira de lejos (`castReach`) al grupo más grande, sin caminar hacia los monstruos.
+  - **Skill del mago en la esquina: Decay (38)** siempre que lo tenga (usuario: "con eso ganamos a los rivales"; Evil Spirit solo sirve sin competidores). Fuera de la esquina, la lista de mago (Evil Spirit primero). El skill de área que confirma el server se loguea ("Tiro Decay (38)", `ownAreaSkill`, 0x1E de 9 bytes).
+  - **Party**: el DK invita al compañero que está en la esquina (`buildPartyInvite`, C1 05 40) cada 60 s si no están en party y los datos no dicen lo contrario (`knowledge.ts`); para disolverla manda PartyPlayerKick índice 0 (sin verificar en vivo).
   - **Party solo entre compañeros**: con la estación (MUBOT_MATES) o `--party-mates` se acepta la invitación de un compañero; el resto se rechaza. Con party la exp se reparte (en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min): se está midiendo en el dúo de la esquina. En party, el mago le pone Soul Barrier (16) al compañero a <= 6 en los huecos del giro; Swell Life (48) del DK ya alcanza a la party.
 - **Equipo** (`team.ts`; la estación hace de canal: `GET/POST /api/team`, `MUBOT_TEAM_URL`):
   - Cada bot consulta cada 5 s dónde están los compañeros y los pedidos de ayuda vigentes (2 min).
@@ -548,6 +551,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - Solo contesta a un jugador que le pegó en los últimos 10 s y está a ≤ 10 tiles; usa Death Stab si lo tiene.
   - Con vida < 35 % se va a Lorencia y evita ese mapa 5 min.
   - Sin verificar: los nombres de los jugadores en scope (no se excluye a los propios por nombre).
+- **Cacería con memoria** (`HuntState.spots`): cada dorado visto se recuerda 3 min. Sin dorados a la vista, va primero al recordado más cercano (después de morir, por ejemplo) y recién después recorre celdas. Un dorado nuevo se le avisa al compañero al momento (`askHelp('golden', …, 15 s)`); si caza en el mismo mapa, va. Al morir se anota quién lo mató (`Me mató X en (x,y)`, KillerId del 0x17): casi siempre un rival, los dorados no pueden con Horaz ni con Melu.
 - **Cazador automático** (`autoHuntChoice`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y más de 25 vivos en un mapa al alcance (Lorencia, Noria, Devias), sale a cazar solo, una vez por invasión. Corta con 20 o menos vivos, con la invasión terminada o a los 15 min. Entre :47 y :51 no resetea.
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
 

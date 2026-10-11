@@ -29,6 +29,10 @@ A la derecha se ve el panel del bot (mapa, nivel, exp, log) o su consola. **Desc
 - **Antes de conectar, cerrá la pestaña del juego con esa cuenta.** El bot no entra si la cuenta ya
   está conectada en otro lado (lo muestra como "cuenta abierta").
 - Los bots siguen jugando aunque cierres la estación. Al volver a abrirla, los encuentra solos.
+- Para dejarla corriendo sin terminal abierta (todo el día):
+  `setsid nohup bun run estacion >> ~/.mubot/logs/estacion.log 2>&1 < /dev/null &`. Si reiniciás la
+  computadora, la base vuelve sola (Docker) pero la estación no: volvé a correrla y conectá a los
+  personajes.
 - Cuando quieras jugar vos en el navegador, desconectá el personaje desde la estación.
 
 ## Cómo farmea
@@ -38,6 +42,7 @@ A la derecha se ve el panel del bot (mapa, nivel, exp, log) o su consola. **Desc
 | 10 → 20 | Lorencia, grupo de Lich (132,200) |
 | 20 → 100 | Devias 4 (el spot pegado a la llegada). Lleno o sin exp: otra entrada de Devias (3 o 2); Arena 1 solo si todas están llenas |
 | 100 → 400 | La esquina (7,11) de Arena 2: skill de área al grupo más grande, espera la reaparición. Con la esquina llena: 5 min en la Arena de su nivel |
+| Dúo | Horaz (DK) plantado en la esquina (2,10) y Melu (Soul Master) en el segundo spot, el medio (7,11), tirando **Decay**: así ganan el sector. Horaz invita a Melu a party; los datos deciden si conviene |
 | 400 | `/reset`, vuelve a entrar y empieza otra vez |
 
 Además, en cualquier nivel:
@@ -46,12 +51,36 @@ Además, en cualquier nivel:
 - no le pega a monstruos parados en zona segura;
 - se reconecta solo si se corta la conexión.
 
+## Panel
+
+- **Radar 3D** con el mapa real del server. Con el modo **Cámara** se sigue al personaje de cerca, con
+  el nombre de cada monstruo y jugador (★ = compañero), el objetivo que late y lo que hace abajo.
+- **Decisiones**: qué decide el personaje y por qué (cooperar, cambiar de lado, quién lo mató…).
+- **Chat** del personaje y **Ranking** (resets y ELO del server) en la estación.
+
+## Datos y aprendizaje
+
+Los bots guardan lo que pasa en una base **ClickHouse local** (Docker, solo `127.0.0.1`), para aprender
+qué conviene y mejorar solos sin retroceder.
+
+```bash
+bun run db:up       # levanta la base (credenciales en .env.db, no se commitea)
+bun run db:init     # tablas y vistas
+bun run aprender    # respuestas de los datos y ~/.mubot/knowledge.json (la estación lo corre cada 30 min)
+```
+
+- Consola web: http://127.0.0.1:8123/play (usuario y clave de `.env.db`). Una consulta por vez, sin
+  `;`. `SHOW TABLES FROM mubot` lista todo.
+- Qué se guarda y por qué, las vistas y las perillas que el bot ajusta solo: "Datos y aprendizaje" en
+  `AGENTS.md`. El plan de mejora continua está en `PLAN-SIN-NAVEGADOR.md`.
+
 ## Comandos
 
 ```bash
 bun run test        # tests offline (no tocan el server)
 bun run tsc         # typecheck
 bun run estacion    # la estación (panel y control de personajes)
+bun run aprender    # qué dicen los datos (ver "Datos y aprendizaje")
 bun run bot         # un bot suelto, sin estación (ver flags en la cabecera de headless-bot.ts)
 bun run proxy       # proxy WebSocket → TCP para un server local
 ```
