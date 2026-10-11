@@ -6,6 +6,7 @@
  */
 import { isPanelCommand } from './panel-protocol';
 import {
+  GOLD_TTL_MS, applyGoldSignal, freshGolds,
   DEFAULT_SERVER, botArgs, charFromEnv, exitStatus, isCharEnvFile, isRoutine, parseEnvFile, parseStationRequest,
   processRunsAccount, routineCommands, type CharConfig,
 } from './estacion-logic';
@@ -69,6 +70,18 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'horaz', char: 
   ok('proc: --user manda', processRunsAccount([...bot, '--user', 'melu'], ['MUBOT_USER=horaz'], melu));
   ok('proc: MUBOT_USER del entorno', processRunsAccount(bot, ['MUBOT_USER=melu'], melu) && !processRunsAccount(bot, ['MUBOT_USER=melu'], horaz));
   ok('proc: sin nada = .env de la raíz', processRunsAccount(bot, [], horaz) && !processRunsAccount(bot, [], melu));
+}
+
+// --- señales de dorados -------------------------------------------------------------------
+{
+  const golds = new Map();
+  ok('dorado: visto', applyGoldSignal(golds, { from: 'Horaz', map: 2, x: 10, y: 20, name: 'Golden Goblin', id: 77, at: 1 }, 1000) && golds.size === 1);
+  ok('dorado: se movió (misma clave)', applyGoldSignal(golds, { from: 'Horaz', map: 2, x: 11, y: 20, name: 'Golden Goblin', id: 77 }, 2000) && golds.size === 1 && freshGolds(golds, 2000)[0].x === 11);
+  ok('dorado: gone lo borra', applyGoldSignal(golds, { from: 'Horaz', map: 2, id: 77, gone: true }, 3000) && golds.size === 0);
+  ok('dorado: inválidos', !applyGoldSignal(golds, { from: 'H', map: 999, x: 1, y: 1, id: 1 }, 0) && !applyGoldSignal(golds, { from: '', map: 1, x: 1, y: 1, id: 1 }, 0)
+    && !applyGoldSignal(golds, { from: 'H', map: 1, x: 300, y: 1, id: 1 }, 0) && !applyGoldSignal(golds, [], 0));
+  applyGoldSignal(golds, { from: 'Melu', map: 3, x: 1, y: 1, name: 'x', id: 5 }, 0);
+  ok('dorado: vence al minuto', freshGolds(golds, GOLD_TTL_MS + 1).length === 0 && golds.size === 0);
 }
 
 // --- salida del bot -----------------------------------------------------------------------

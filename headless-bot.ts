@@ -84,15 +84,11 @@ import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
 import {
-  EVENT_KEYS, GoldReporter, HUNT_MAPS, HuntExplorer, SCOUT_GOLD_URL, SCOUT_MIN_ALIVE, SCOUT_START_ALIVE, buildOpeningStateRequest, chooseHuntMap, countTickets,
-  goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout, toPanelCycle,
+  EVENT_KEYS, GOLD_URL, GoldReporter, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets,
+  goldenTypes, mapName, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt, toPanelCycle,
   validateWarp, type GoldGone, type GoldSighting, type HuntMap,
 } from './panel-logic';
 import type { BotMode, EventKey, EventTimer, Invasion, PanelCommand, PanelState } from './panel-protocol';
-import {
-  ATLAS_CRITICAL_PCT, ATLAS_FILE, ATLAS_FLEE, ATLAS_FLEE_CAUTIOUS, ATLAS_MINUTES_PER_MAP, ATLAS_POTION_TARGET, ATLAS_REST_MS, ATLAS_SAFE_MAP,
-  ATLAS_WARPS, Atlas, AtlasSaver, atlasMapDone, atlasMapList, loadAtlas, nextAtlasIndex, parseAtlasMaps, saveAtlas, type AtlasMap,
-} from './atlas';
 import {
   SimpleModulusEncryptor,
   Xor32Encryptor,
@@ -111,12 +107,7 @@ import {
   RequestCharacterListPacket,
   SelectCharacterPacket,
   ConsumeItemRequest075Packet,
-  IncreaseCharacterStatPointPacket,
   ClientReadyAfterMapChangePacket,
-  TalkToNpcRequestPacket,
-  SellItemToNpcRequestPacket,
-  BuyItemFromNpcRequestPacket,
-  CloseNpcRequestPacket,
   PickupItemRequest075Packet,
 } from './packets';
 import {
@@ -128,26 +119,19 @@ import {
   GameServerEnteredPacket,
   ObjectWalked075Packet,
   ObjectMovedPacket,
-  SkillListUpdatePacket,
   MapChanged075Packet,
   CurrentHealthAndShieldPacket,
   CurrentManaAndAbilityPacket,
   CharacterLevelUpdatePacket,
   ItemsDroppedPacket,
   MoneyDropped075Packet,
-  ItemAddedToInventoryPacket,
-  NpcItemSellResultPacket,
   InventoryMoneyUpdatePacket,
-  NpcItemBuyFailedPacket,
-  NpcWindowResponsePacket,
-  NpcWindowResponseNpcWindowEnum,
   MasterStatsUpdatePacket,
   MasterCharacterLevelUpdatePacket,
   MasterSkillLevelUpdatePacket,
 } from './packets';
 import monstersData from './data/monsters.json';
 import skillsData from './data/skills.json';
-import itemsData from './data/items.json';
 
 // TypeNumber reales de monstruos (del propio dataset del juego), para no confundir
 // un NPC amistoso del pueblo (vendedor, etc.) con algo atacable.
@@ -285,7 +269,6 @@ type StatName = 'str' | 'agi' | 'vit' | 'ene';
 // En MU el orden de los atributos es fijo: strength, agility, vitality, energy.
 // IncreaseCharacterStatPoint.StatType usa exactamente esos mismos índices.
 const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
-const STAT_INDEX: Record<StatName, number> = { str: 0, agi: 1, vit: 2, ene: 3 };
 
 type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean };
 type SkillInfo = { index: number; number: number; level: number };
@@ -348,9 +331,6 @@ function snapshotWorld() {
 // la mejor: se compra barata, se stacks (X=1 Y=1) y alcanza para todo el farm.
 const POTION_GROUP = 14;
 const HEAL_POTION_NUMS = new Set([1, 2, 3]); // small / normal / large healing
-const SELL_INTERVAL_MS = 600;   // respiro entre ventas para no parecer un burst
-// Con esto lleno (de 40 slots) vamos a vender antes de no poder recoger más.
-const SELL_AT_PRESSURE = 0.6;
 
 // Skills de ataque configurables (números de skill, NO índices de lista).
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.
@@ -578,24 +558,6 @@ function parseInventory097(raw: any): ItemSlot[] {
     if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
     const { group, num, level, excellent } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
     out.push({ slot: bytes[base], group, num, level, excellent });
-  }
-  return out;
-}
-
-// StoreItemList (C2/0x31): mismo layout que CharacterInventory (count en byte
-// 5, items desde byte 6, stride 1+12), pero el getItems() generado tiene el
-// mismo bug de stride que ya rompía CharacterInventory (calcula el ItemData
-// con longitud 0) — lo parseamos a mano, igual que el inventario.
-type ShopItem = { shopSlot: number; group: number; num: number };
-function parseStoreItemList097(raw: any): ShopItem[] {
-  const bytes = toBytes(raw);
-  const count = bytes[5];
-  const out: ShopItem[] = [];
-  for (let i = 0; i < count; i++) {
-    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
-    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
-    const { group, num } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
-    out.push({ shopSlot: bytes[base], group, num });
   }
   return out;
 }
@@ -1475,295 +1437,14 @@ async function lootStep(): Promise<boolean> {
 }
 let lootCount = 0;
 
-// --- Economía: qué es basura y qué vale la pena guardar -------------------
-// El bot no tiene ni el precio ni IsSellableToNpc del server, así que usa el
-// catálogo del repo (data/items.json) para decidir por grupo.
-//   12 = jewels/ribbons (comunes)  14 = pociones  15 = scrolls  0 = weapons
-//   13 = misc (bless, bows)  31 = event  41 = event
-// Lo que NO se vende: equipamiento de slot principal que el personaje pueda
-// usar (1..11 weapons/armor), porque ahí la decisión es tuya, no del bot.
-type ItemRow = { Group: number; Index: number; ItemName: string; X: number; Y: number; Width: number; Height: number };
-const ITEMS: ItemRow[] = itemsData as unknown as ItemRow[];
-
-// Grupos que el bot vende sin preguntar (basura estándar de farm).
-// El grupo 12 (Wings of Fairy / Wings of Angel, ver items.json) es EQUIPAMIENTO,
-// no basura — estaba mal clasificado acá y el bot vendía las alas del personaje.
-const JUNK_GROUPS = new Set([14, 15, 30, 31, 32, 41, 42, 43]);
-// Grupos de equipamiento: nunca se tocan sin que la UI/intervención lo pida.
-const EQUIP_GROUPS = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-
-function isJunk(it: ItemSlot): boolean {
-  if (EQUIP_GROUPS.has(it.group)) return false; // decisión del humano
-  if (!JUNK_GROUPS.has(it.group)) return false; // grupo desconocido: no tocar
-  // Las pociones curativas no se venden nunca: son las que nos mantienen vivo.
-  if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return false;
-  return true;
-}
-
-function junkSlots(): ItemSlot[] {
-  return [...world.inventory.values()].filter(isJunk);
-}
-
-function inventoryPressure(): number {
-  // El server manda CharacterInventory con lo que hay; si no loinskió no podemos saberlo.
-  const MAX_SLOTS = 40;
-  return world.inventory.size / MAX_SLOTS;
-}
-
-// --- Merchant ---------------------------------------------------------------
-// Flujo de venta (SellItemToNpcAction de OpenMU): el server exige que
-// player.OpenedNpc tenga MerchantStore, o sea que HAY que hablarle al NPC antes.
-// Si no, responde ItemSoldToNpc(false) y no pasa nada.
-const MERCHANT_IDS = new Set(
-  (args.get('--merchant') ?? '')
-    .split(',')
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !Number.isNaN(n)),
-);
-
-let openedNpcId: number | null = null;
+// --- Zen -----------------------------------------------------------
+// El bot no compra ni vende (pedido del usuario): solo lleva el zen para el panel.
 let lastMoney = 0;
 
-function talkToNpc(npcId: number) {
-  const p = TalkToNpcRequestPacket.createPacket();
-  p.NpcId = npcId;
-  sendToGS(p.buffer);
-  openedNpcId = npcId;
-  log(`Hablo con NPC Id=${npcId}`);
-}
-
-function closeNpc() {
-  if (openedNpcId == null) return;
-  sendToGS(CloseNpcRequestPacket.createPacket().buffer);
-  openedNpcId = null;
-}
-
-function sellSlot(slot: number) {
-  const p = SellItemToNpcRequestPacket.createPacket();
-  p.ItemSlot = slot;
-  sendToGS(p.buffer);
-}
-
-// Compra por índice en la lista del merchant. El server valida el índice; si no
-// existe responde NpcItemBuyFailed (0x32/0xFF) y no cobra nada.
-function buyShopSlot(shopIndex: number) {
-  const p = BuyItemFromNpcRequestPacket.createPacket();
-  p.ItemSlot = shopIndex;
-  sendToGS(p.buffer);
-}
-
-// Vende un item concreto pasando por la capa de decisión.
-async function sellItem(it: ItemSlot): Promise<boolean> {
-  const ok = await decide({
-    kind: 'sell',
-    what: `vender item ${it.group}/${it.num} del slot ${it.slot}`,
-    detail: { slot: it.slot, group: it.group, num: it.num },
-  });
-  if (!ok) return false;
-  if (openedNpcId == null) {
-    log('No hay merchant abierto: no puedo vender.');
-    return false;
-  }
-  sellSlot(it.slot);
-  return true;
-}
-
-// El ID del slot en el inventario NO coincide con el índice del ItemData, así
-// que para saber si el server aceptó la venta comparamos el estado del slot
-// antes y después de la respuesta.
-async function sellJunkToMerchant(): Promise<boolean> {
-  const junk = junkSlots();
-  if (!junk.length) return false;
-
-  // Vender es la acción más pesada del bot: siempre pasa por decisión.
-  if (!(await decide({
-    kind: 'sell',
-    what: `vender ${junk.length} item(s) de basura por un merchant`,
-    detail: { items: junk.map((i) => ({ slot: i.slot, group: i.group, num: i.num })) },
-    autoOk: false,
-  }))) return false;
-
-  let merchant = openedNpcId;
-  if (merchant == null) {
-    if (knownMerchants.size === 0) {
-      log('Buscando un merchant en el mapa...');
-      merchant = await discoverMerchant();
-      if (merchant == null) {
-        log('No encontré merchant en esta zona. Pasá --merchant <id> si sabés cuál es.');
-        return false;
-      }
-    } else {
-      merchant = knownMerchants.values().next().value!;
-      talkToNpc(merchant);
-    }
-  }
-
-  let sold = 0;
-  for (const it of junk) {
-    const before = world.inventory.has(it.slot);
-    sellSlot(it.slot);
-    // Un respiro entre ventas: el server lleva contador por request y un burst
-    // de ventas iguales lo puede parsear como speedhack.
-    await sleep(SELL_INTERVAL_MS);
-    // El server borra el item del inventario al venderlo; si sigue, no se vendió.
-    if (before && !world.inventory.has(it.slot)) {
-      sold++;
-    }
-    if (openedNpcId == null) break; // el server cerró la ventana: no insistir
-  }
-  closeNpc();
-  log(`Vendí ${sold}/${junk.length} item(s).`);
-  return sold > 0;
-}
-
-// Catálogo real del merchant abierto (por StoreItemList). group/num salen del
-// mismo parser que el inventario, así que coinciden con items.json.
-const shopCatalog = new Map<number, ShopItem>();
-
-function findShopSlotFor(group: number, num: number): number | undefined {
-  for (const it of shopCatalog.values()) {
-    if (it.group === group && it.num === num) return it.shopSlot;
-  }
-  return undefined;
-}
-
-// Comprar pociones. El ItemSlot que espera BuyItemFromNpcRequest NO es el
-// índice de items.json sino la posición dentro de la lista del merchant, que el
-// server arma por su cuenta. Antes dependía ciegamente de --buy-slot; ahora,
-// si ya llegó StoreItemList del merchant abierto, usamos el catálogo real y
-// solo caemos a --buy-slot si todavía no tenemos esa info (compatibilidad).
-async function ensurePotions(): Promise<boolean> {
-  if (haveHealingPotions()) return false;
-  if (openedNpcId == null) {
-    // Solo un merchant que esté en scope: los conocidos quedan de otros mapas (en la Arena le hablaba
-    // al de Lorencia cada 25 ticks, sin respuesta).
-    const merchant = [...knownMerchants].find((id) => world.townNpcs.has(id));
-    if (merchant == undefined) return false;
-    talkToNpc(merchant);
-    await sleep(600); // tiempo para que llegue NpcWindowResponse + StoreItemList
-  }
-
-  const fromCatalog = [...HEAL_POTION_NUMS]
-    .map((num) => findShopSlotFor(POTION_GROUP, num))
-    .filter((slot): slot is number => slot != null);
-  const candidates = fromCatalog.length ? fromCatalog : SHOP_POTION_SLOTS;
-  if (!candidates.length) return false;
-
-  for (const slot of candidates) {
-    const ok = await decide({
-      kind: 'buy',
-      what: `comprar poción del slot ${slot} del shop`,
-      detail: { shopSlot: slot, money: lastMoney, fromCatalog: fromCatalog.length > 0 },
-      autoOk: false, // gastar plata es siempre decisión del humano
-    });
-    if (!ok) continue;
-    buyShopSlot(slot);
-    await sleep(600);
-    if (haveHealingPotions()) return true;
-  }
-  return false;
-}
-
-function haveHealingPotions(): boolean {
-  for (const it of world.inventory.values()) {
-    if (it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num)) return true;
-  }
-  return false;
-}
-
-// Índices de pociones dentro de la lista del merchant, en orden de preferencia.
-const SHOP_POTION_SLOTS = (args.get('--buy-slot') ?? '')
-  .split(',')
-  .map((s) => parseInt(s.trim(), 10))
-  .filter((n) => !Number.isNaN(n));
-
-function watchEconomy() {
-  EventBus.on('NpcItemSellResult', (raw: any) => {
-    const p = new NpcItemSellResultPacket(raw);
-    if (p.Success) {
-      lastMoney = p.Money;
-      log(`Venta OK. Dinero ahora: ${p.Money}`);
-    } else {
-      log('Venta rechazada por el server.');
-    }
-  });
+function watchMoney() {
   EventBus.on('InventoryMoneyUpdate', (raw: any) => {
-    const p = new InventoryMoneyUpdatePacket(raw);
-    lastMoney = p.Money;
-    log(`Dinero actualizado: ${p.Money}`);
+    lastMoney = new InventoryMoneyUpdatePacket(raw).Money;
   });
-  EventBus.on('NpcItemBuyFailed', () => log('Compra falló (índice de shop inválido).'));
-  EventBus.on('StoreItemList', (raw: any) => {
-    shopCatalog.clear();
-    for (const it of parseStoreItemList097(raw)) shopCatalog.set(it.shopSlot, it);
-    log(`Catálogo del merchant: ${shopCatalog.size} ítem(s) — ${[...shopCatalog.values()].map((i) => `slot${i.shopSlot}:${i.group}/${i.num}`).join(', ')}`);
-  });
-  EventBus.on('NpcWindowResponse', (raw: any) => {
-    const p = new NpcWindowResponsePacket(raw);
-    log(`Ventana de NPC: ${NpcWindowResponseNpcWindowEnum[p.Window] ?? p.Window}`);
-  });
-}
-// --- Descubrimiento de merchants -------------------------------------------
-// monsters.json NO contiene NPCs (solo monstruos), así que no hay forma de
-// saber de antemano qué Id es un merchant. La forma honesta es descubrirlo:
-// hablamos con los NPCs que hay en scope y leemos la ventana que conteste.
-// Merchant=0 / Merchant1=1 son las ventanas de venta.
-const isMerchantWindow = (w: number) => w === 0 || w === 1;
-
-const knownMerchants = new Set<number>(MERCHANT_IDS);
-
-async function discoverMerchant(): Promise<number | null> {
-  const candidates = [...world.townNpcs.values()].filter((n) => !isJunkType(n.type));
-  for (const c of candidates) {
-    const ok = await decide({
-      kind: 'travel',
-      what: `hablar con NPC Id=${c.id} para ver si es merchant`,
-      detail: { npcId: c.id, x: c.x, y: c.y },
-    });
-    if (!ok) continue;
-    const waiter = waitFor('NpcWindowResponse', 3000).catch(() => null);
-    talkToNpc(c.id);
-    const raw = await waiter;
-    if (!raw) {
-      closeNpc();
-      continue;
-    }
-    const w = new NpcWindowResponsePacket(raw).Window;
-    if (isMerchantWindow(w)) {
-      log(`¡Merchant encontrado! Id=${c.id} (ventana ${NpcWindowResponseNpcWindowEnum[w]})`);
-      knownMerchants.add(c.id);
-      return c.id;
-    }
-    closeNpc();
-  }
-  return null;
-}
-
-// Los candidatos salen de world.townNpcs (TypeNumber 200-299). Los guardias
-// (247 Crossbow, 249 Berdysh) no abren ventana: no vale la pena hablarles.
-function isJunkType(type: number): boolean {
-  return type === 247 || type === 249;
-}
-
-// /move <mapa> por chat público (MoveChatCommandPlugIn de OpenMU): el server
-// valida nivel y zen según su WarpList (Version075: Dungeon = nivel 30, 3000 zen)
-// y contesta con MapChanged075. Es lo mismo que tipear el comando en el cliente.
-// PublicChatMessage: C1, code 0x00, Character[10]@3, Message@13 (null-terminado).
-async function moveToMap(mapName: string): Promise<boolean> {
-  const ok = await decide({
-    kind: 'travel',
-    what: `/move ${mapName} (cuesta zen)`,
-    detail: { command: '/move', map: mapName, fromMap: world.map },
-    autoOk: false,
-  });
-  if (!ok) return false;
-  const waiter = waitFor('MapChanged075', 5000).catch(() => null);
-  sayChat(CHAR_NAME, `/move ${mapName}`);
-  if (!(await waiter)) {
-    log(`/move ${mapName}: el server no cambió de mapa (¿nivel, zen o nombre de mapa?).`);
-    return false;
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2153,10 +1834,11 @@ function currentMode(): BotMode {
   return hunting ? 'hunt' : 'farm';
 }
 
-// Avisos del buscador: POST con timeout corto; si el receptor no está, se ignora.
+// Señales de dorados a la estación (GOLD_URL): cada dorado que ve, con posición; POST con timeout
+// corto y sin reintentos (si la estación no está, se ignora).
 function publishGold(p: GoldSighting | GoldGone) {
   try {
-    void fetch(SCOUT_GOLD_URL, {
+    void fetch(GOLD_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(p),
@@ -2402,7 +2084,6 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastCastAt = 0;
-  let nextPotionTrip = 0;
   let lastBarrierAt = 0;
   // Fase de la iteración anterior: el tiempo hasta la próxima se le atribuye.
   let phase: TimeKind = 'other';
@@ -2481,7 +2162,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
   if (!economyWatched) {
-    watchEconomy();
+    watchMoney();
     economyWatched = true;
   }
 
@@ -2492,6 +2173,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let stuckCount = 0;
   // Objetivo a distancia de golpe que no muere: tras TARGET_NO_KILL_MS se abandona (red de seguridad
   // si la posición que conocemos del monstruo no es la real).
+  const goldReporter = new GoldReporter(charName);
   let attackTarget: number | null = null;
   let attackSince = 0;
   let lastX = world.x;
@@ -2543,6 +2225,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   while ((deadline <= 0 || Date.now() < deadline) && !kicked) {
     refreshAttackable();
+    // Señales de dorados a la estación (nuevos, movidos, idos): los ve aunque estén en zona segura.
+    for (const { payload } of goldReporter.update(world.map, [...world.npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) })), Date.now())) publishGold(payload);
     ticks++;
     {
       const t = Date.now();
@@ -2981,7 +2665,6 @@ function clearScope() {
   world.players.clear();
   drops.clear();
   looting = null;
-  openedNpcId = null;
   currentSpot = null;
   meter.stop();
   inGameAt = 0;
@@ -2989,7 +2672,7 @@ function clearScope() {
   goalPoint = null;
 }
 
-async function session(first: boolean, deadline: number): Promise<LoopResult> {
+async function session(deadline: number): Promise<LoopResult> {
   kicked = false;
   clearScope();
   await connectToConnectServer();
@@ -3004,28 +2687,8 @@ async function session(first: boolean, deadline: number): Promise<LoopResult> {
     trackPanelPackets();
     worldTracked = true;
   }
-  const { startX, startY } = await loginAndSelectCharacter();
+  await loginAndSelectCharacter();
 
-  if (first && args.has('--probe-dir')) {
-    const dir = parseInt(args.get('--probe-dir')!);
-    log(`\n--- Modo prueba: UN solo WalkRequest, dirección ${dir}, desde (${startX},${startY}) ---`);
-    sendToGS(buildWalkPacket(startX, startY, [dir]).buffer);
-    await sleep(800);
-    console.log(`\n=== Resumen (modo prueba) ===`);
-    console.log(`Se mandó 1 paquete válido, dirección ${dir}. Revisá la DB para ver si la posición cambió.`);
-    gsSocket?.close();
-    process.exit(0);
-  }
-
-  if (first) {
-    const warp = args.get('--warp') ? parseInt(args.get('--warp')!) : null;
-    if (warp != null) {
-      const spot = WARP_SPOTS.find((sp) => sp.index === warp) ?? { index: warp, name: `warp ${warp}`, reqLevel: 0, zen: 0 };
-      await warpAndWait(spot);
-    }
-    const moveTo = args.get('--move');
-    if (moveTo) await moveToMap(moveTo);
-  }
   // Damos un par de segundos a que lleguen skill list, inventario y NPCs
   // en scope antes de que el loop empiece a decidir.
   await sleep(2000);
@@ -3072,7 +2735,7 @@ async function main() {
     let alreadyConnected = false;
     try {
       sessions++;
-      const r = await session(first, deadline);
+      const r = await session(deadline);
       for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
     } catch (e) {
       if (e instanceof LoginError && FATAL_LOGIN.has(e.result)) {

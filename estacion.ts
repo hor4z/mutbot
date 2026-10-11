@@ -18,10 +18,11 @@ import { closeSync, mkdirSync, openSync, readdirSync, readFileSync } from 'node:
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
+import { mapName } from './panel-logic';
 import type { PanelServerMessage, PanelState } from './panel-protocol';
 
 const ROOT = import.meta.dir;
@@ -186,6 +187,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   // Sin MUBOT_* heredados: la estación pudo cargar el .env de otro personaje.
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
+  env.MUBOT_GOLD_URL = `http://127.0.0.1:${PORT}/api/gold`;
   const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, stdin: 'ignore', stdout: fd, stderr: fd,
   });
@@ -255,6 +257,15 @@ function tail(path: string, lines: number): string {
   } catch { return ''; }
 }
 
+// Señales de dorados (POST /api/gold): de los bots (sin Origin) o del juego en el navegador.
+const golds = new Map<string, GoldSignal>();
+const GOLD_CORS = {
+  'access-control-allow-origin': GAME_ORIGIN,
+  'access-control-allow-private-network': 'true',
+  'access-control-allow-methods': 'POST',
+  'access-control-allow-headers': 'content-type',
+};
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 refreshSlots();
@@ -270,10 +281,21 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
-      if (url.pathname === '/api/state') return json({ chars: view() });
+      if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       return new Response('No encontrado.', { status: 404 });
+    }
+    if (url.pathname === '/api/gold') {
+      const origin = req.headers.get('origin');
+      if (origin && origin !== GAME_ORIGIN && !originAllowed(origin, PORT)) return new Response('origen no permitido', { status: 403 });
+      if (req.method === 'OPTIONS') return new Response(null, { headers: GOLD_CORS });
+      if (req.method !== 'POST') return new Response('No.', { status: 405 });
+      const body = await req.text();
+      if (body.length > 1024) return new Response('grande', { status: 413, headers: GOLD_CORS });
+      let raw: unknown;
+      try { raw = JSON.parse(body); } catch { return new Response('json', { status: 400, headers: GOLD_CORS }); }
+      return applyGoldSignal(golds, raw, Date.now()) ? new Response('ok', { headers: GOLD_CORS }) : new Response('datos', { status: 400, headers: GOLD_CORS });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.

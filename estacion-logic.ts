@@ -151,3 +151,36 @@ for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'pause' }
 
 /** Tras desconectar desde la estación, cuánto se considera que la sesión vieja puede seguir abierta. */
 export const RECENT_STOP_MS = 90_000;
+
+/** Señal de dorado (de un bot sin navegador o del navegador si el usuario juega ahí). */
+export type GoldSignal = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };
+export const GOLD_TTL_MS = 60_000;
+/** Origen del juego en el navegador: puede mandar señales (POST /api/gold) con CORS. */
+export const GAME_ORIGIN = 'https://mu.mormon.garden';
+
+const num = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
+/**
+ * Aplica una señal `{ from, map, x, y, name, id }` (visto/movido) o `{ from, map, id, gone: true }` al
+ * registro de avistamientos (clave from:id). Devuelve false si el cuerpo no es válido.
+ */
+export function applyGoldSignal(golds: Map<string, GoldSignal>, body: unknown, now: number): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const g = body as Record<string, unknown>;
+  const from = typeof g.from === 'string' ? g.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 20) : '';
+  if (!from || !num(g.map, 0, 255) || !num(g.id, 0, 65535)) return false;
+  const key = `${from}:${g.id}`;
+  if (g.gone === true) {
+    golds.delete(key);
+    return true;
+  }
+  if (!num(g.x, 0, 255) || !num(g.y, 0, 255)) return false;
+  golds.set(key, { from, map: g.map, x: g.x, y: g.y, name: String(g.name ?? '').slice(0, 40), id: g.id, at: now });
+  return true;
+}
+
+/** Avistamientos vigentes (los de más de GOLD_TTL_MS se borran). */
+export function freshGolds(golds: Map<string, GoldSignal>, now: number): GoldSignal[] {
+  for (const [k, g] of golds) if (now - g.at > GOLD_TTL_MS) golds.delete(k);
+  return [...golds.values()].sort((a, b) => b.at - a.at);
+}

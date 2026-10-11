@@ -55,6 +55,10 @@
     <div class="sub">Personajes sin navegador. Antes de conectar, cerrá su pestaña del juego.</div>
   </div>
   <div id="chars" style="display:grid;gap:12px"><div class="sub">cargando…</div></div>
+  <div class="card" style="cursor:default">
+    <div class="top"><span class="name" style="font-size:14px">Dorados vistos</span><span class="sub">último minuto</span></div>
+    <div id="golds" class="info">ninguno</div>
+  </div>
 </aside>
 <main>
   <div class="tabs">
@@ -186,8 +190,18 @@
     } catch {}
   }
 
+  function renderGolds(golds) {
+    const box = $('golds'); box.replaceChildren();
+    if (!golds?.length) { box.textContent = 'ninguno'; return; }
+    for (const g of golds) {
+      const d = document.createElement('div');
+      d.textContent = `★ ${g.name} · ${g.mapName} (${g.x},${g.y}) · lo vio ${g.from} hace ${Math.max(0, Math.round((Date.now() - g.at) / 1000))} s`;
+      box.append(d);
+    }
+  }
+
   async function poll() {
-    try { chars = (await (await fetch('/api/state')).json()).chars; render(); } catch { $('chars').innerHTML = '<div class="msg">La estación no contesta (¿se cerró <code>bun run estacion</code>?).</div>'; }
+    try { const st = await (await fetch('/api/state')).json(); chars = st.chars; renderGolds(st.golds); render(); } catch { $('chars').innerHTML = '<div class="msg">La estación no contesta (¿se cerró <code>bun run estacion</code>?).</div>'; }
   }
   poll();
   setInterval(poll, 2000);

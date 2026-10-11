@@ -8,8 +8,8 @@
  */
 import { PANEL_COMMANDS, isPanelCommand } from './panel-protocol';
 import {
-  GoldReporter, HUNT_MAX_MS, HuntExplorer, SCOUT_MAX_MS, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
-  goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, scoutBand, shouldStopHunt, shouldStopScout,
+  GoldReporter, HUNT_MAX_MS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
+  goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt,
   toPanelCycle, validateWarp,
 } from './panel-logic';
 import { parseClientMessage, originAllowed, resolveAssetPath, assetContentType, MAX_CLIENT_MESSAGE_BYTES } from './ws-server';
@@ -165,29 +165,9 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('celdas: recorrido todo, vuelve a empezar sin colgarse', h.visited.size >= 1 && h.visited.size <= 16, h.visited.size);
 }
 
-// --- Buscador: franjas, avisos de dorados, corte ----------------------------------
+// --- Señales de dorados -----------------------------------------------------------
 {
-  ok('franja 1 de 2 = x 0..128', JSON.stringify(scoutBand(1, 2)) === JSON.stringify({ minX: 0, maxX: 128 }), scoutBand(1, 2));
-  ok('franja 2 de 2 = x 128..256', JSON.stringify(scoutBand(2, 2)) === JSON.stringify({ minX: 128, maxX: 256 }), scoutBand(2, 2));
-  ok('franja fuera de rango se acota', scoutBand(5, 2).minX === 128 && scoutBand(0, 2).minX === 0);
-  const ex = new HuntExplorer(25, 45_000, 256, scoutBand(2, 2));
-  ok('franja 2/2: columnas 137..237', JSON.stringify(ex.columns()) === JSON.stringify([137, 162, 187, 212, 237]), ex.columns());
-  const ex1 = new HuntExplorer(25, 45_000, 256, scoutBand(1, 2));
-  ok('franja 1/2: columnas 12..112', JSON.stringify(ex1.columns()) === JSON.stringify([12, 37, 62, 87, 112]), ex1.columns());
-  ok('sin franja: 10 columnas (12..237)', new HuntExplorer().columns().length === 10);
-  ok('franja angosta sin centro: su medio', JSON.stringify(new HuntExplorer(25, 45_000, 256, { minX: 0, maxX: 10 }).columns()) === '[5]');
-  // Arranca en el pueblo (fuera de la franja): todos los destinos caen en la franja, y da vueltas.
-  let inside = true;
-  let x = 30;
-  let y = 30;
-  for (let i = 0; i < 120; i++) {
-    const g = ex.next(x, y, i * 1000);
-    if (g.x < 128 || g.x >= 256) inside = false;
-    x = g.x;
-    y = g.y;
-  }
-  ok('franja 2/2: el recorrido nunca sale de la franja (y vuelve a empezar)', inside);
-
+  ok('celdas: 10 columnas (12..237)', new HuntExplorer().columns().length === 10);
   const g = { id: 77, x: 140, y: 60, name: 'Golden Goblin' };
   ok('aviso: payload exacto', JSON.stringify(goldSighting('Melu', 3, g, 5)) === JSON.stringify({ from: 'Melu', map: 3, x: 140, y: 60, name: 'Golden Goblin', id: 77, at: 5 }));
   const r = new GoldReporter('Melu');
@@ -207,17 +187,6 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   r.update(3, [g], 12_000);
   ok('aviso: clear avisa gone de lo pendiente', r.clear(13_000).length === 1 && r.update(3, [], 14_000).length === 0);
 
-  const since = 1_000_000;
-  const inv = (status: number, maps: [number, number][], at: number) =>
-    ({ ...parseInvasion(Uint8Array.from([0xc1, 7 + maps.length * 3, 0xfd, status, 0, 0, maps.length, ...maps.flatMap(([m, a]) => [m, a >> 8, a & 0xff])]), at)! });
-  ok('buscador: 20 min, no 15', shouldStopScout({ invasion: null, map: 3, since, now: since + HUNT_MAX_MS }) === null &&
-    shouldStopScout({ invasion: null, map: 3, since, now: since + SCOUT_MAX_MS }) !== null);
-  ok('buscador: más de 20 vivos → sigue', shouldStopScout({ invasion: inv(1, [[3, 21]], since + 1), map: 3, since, now: since + 2 }) === null);
-  ok('buscador: 20 o menos vivos → corta (no vale la pena)', shouldStopScout({ invasion: inv(1, [[3, 20]], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: 0 vivos en el mapa → corta', shouldStopScout({ invasion: inv(1, [[3, 0], [2, 4]], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: invasión terminada (status != 1) → corta', shouldStopScout({ invasion: inv(0, [], since + 1), map: 3, since, now: since + 2 }) !== null &&
-    shouldStopScout({ invasion: inv(2, [], since + 1), map: 3, since, now: since + 2 }) !== null);
-  ok('buscador: 0xFD viejo no cuenta', shouldStopScout({ invasion: inv(2, [], since - 1), map: 3, since, now: since + 2 }) === null);
 }
 
 // --- Tickets, dorados, ciclos, warp ---------------------------------------------
