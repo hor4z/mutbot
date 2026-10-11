@@ -799,8 +799,9 @@
   let lastCamp = null;
   // Pistas del atlas de los exploradores (explorer.js en otra pestaña: localStorage `mubot-atlas:<pj>`,
   // compartido entre pestañas del mismo sitio). Usuario: "actualizá el algoritmo de Horaz" con lo que
-  // explora Melu. Cada minuto, por mapa de la ruta: los spots marcados y las 3 zonas con más
-  // monstruos entran a la memoria de campamentos como candidatos (rate = lo normal del tramo × 1,1).
+  // explora Melu. Cada minuto, por mapa de la ruta: los spots marcados (grupos de 6+ monstruos juntos
+  // a la vez, o los que marca el usuario; no zonas con muchas oleadas repetidas) entran a la memoria
+  // de campamentos como candidatos (rate = lo normal del tramo × 1,5).
   // Al usarlos, Horaz mide su exp real y esa medición los corrige (campMem, entrada a <= 4 tiles).
   const WARP_MAP = { 2: 0, 3: 3, 4: 2, 5: 2, 6: 2, 7: 2, 24: 83, 25: 84, 26: 85 };
   ai.importAtlasHints = () => {
@@ -813,8 +814,6 @@
         const ref = ai.tierRef?.[`t${sp[2]}`] ?? 0; if (!ref) continue;
         const hints = [];
         for (const s2 of a.spots ?? []) if (s2.map === map) hints.push({ x: s2.x, z: s2.z, w: 1.5 });
-        const cells = Object.values(a.maps?.[map] ?? {}).map((types) => { const vs = Object.values(types); const tot = vs.reduce((n, v) => n + (v.seen ?? 0), 0); const top = vs.sort((x, y) => (y.seen ?? 0) - (x.seen ?? 0))[0]; return { tot, x: top?.xy?.[0], z: top?.xy?.[1] }; }).filter((c) => c.x != null && c.tot >= 8).sort((x, y) => y.tot - x.tot).slice(0, 3);
-        for (const c of cells) hints.push({ x: c.x, z: c.z, w: 1.1 });
         const list = (ai.campHist[map] ??= []);
         for (const h of hints) if (!list.some((e) => dist(e, h) <= 6)) { list.push({ x: h.x, z: h.z, rate: ref * h.w, n: 1, level: null, hint: k.slice(12) }); added++; }
         list.sort((x, y) => y.rate - x.rate); list.length = Math.min(list.length, 20);
