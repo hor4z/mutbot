@@ -115,7 +115,9 @@ export function chooseFixedRoute(inp: FixedRouteInput, route: readonly RouteTier
   }
   if (inp.crowded) {
     const fresh = tierSpots.filter((s) => s.index !== cur.index && s.reqLevel <= inp.level && inp.now - (inp.crowdedAt.get(s.index) ?? -Infinity) > CROWDED_SPOT_MS);
-    const to = fresh[0] ?? (fb && fb.index !== cur.index ? fb : null);
+    // Como el navegador: Devias lleno desde el 50 → directo al plan B (Arena 1); antes, otra entrada.
+    const plan = fb && fb.index !== cur.index ? fb : null;
+    const to = plan ?? fresh[0];
     if (to) return { ...base, spot: to, reason: 'crowd', what: `${cur.name} con mucha competencia → ${to.name}${to === fb ? ' (plan B)' : ''}`, warp: true };
     return stay(`${cur.name} con competencia pero no hay otra entrada libre`);
   }

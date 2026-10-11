@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, RECONNECT, buildPartyDecline, isExcellentItemData, isObjectMovedPacket, parseItemDropRemoved, parsePartyRequest } from './protocol097';
+import { Backoff, RECONNECT, buildPartyDecline, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -218,6 +218,28 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('con tope', b.next(1000) === RECONNECT.MAX_MS);
   ok('una sesión sana vuelve al primer escalón', b.next(RECONNECT.HEALTHY_MS) === RECONNECT.BASE_MS);
   ok('cuenta todavía conectada: espera más', new Backoff().next(0, true) === RECONNECT.ALREADY_CONNECTED_MS);
+}
+
+// --- Ítems de 5 bytes (bytes reales de Horaz, 2026-10-11) ----------------------------------------
+{
+  const hex = (h: string) => Uint8Array.from(Buffer.from(h, 'hex'));
+  const inv = parseInventory(hex('c400c6f31020000dfc607f0001cdca58200002e16c917f0003015c63ff0004216c41e80005416c78ff0006616c40e80007854879800009ac003080000aa8003180000ba8003180000cd3080180000dd3100180000ed3180180000fce0001800010cd0001800011cd0001800012c40801800013cd0001800014bd0001800016cd0001800017cd0001800018cd0001800019ce000180001ace000180001bce000180001ecd000180001fcb4801800020cb4801800021cb4801800022cb6001800023cb58018000'));
+  ok('inventario 5 bytes: 32 ítems (6 + 32 × 6)', inv?.length === 32, inv?.length);
+  const at = (slot: number) => inv?.find((x) => x.slot === slot);
+  ok('inventario: arma 0/13 +15 excelente', at(0)?.group === 0 && at(0)?.num === 13 && at(0)?.level === 15 && at(0)?.excellent === true, at(0));
+  ok('inventario: escudo 6/13 +9', at(1)?.group === 6 && at(1)?.num === 13 && at(1)?.level === 9, at(1));
+  ok('inventario: armadura 8/1 (bit alto del índice en e[3])', at(3)?.group === 8 && at(3)?.num === 1, at(3));
+  ok('inventario: alas 12/5, colgante 13/12, anillo 13/8', at(7)?.group === 12 && at(7)?.num === 5 && at(9)?.group === 13 && at(9)?.num === 12 && at(10)?.num === 8, [at(7), at(9), at(10)]);
+  ok('inventario: cajas 14/11 en la mochila (+9, +12)', at(32)?.group === 14 && at(32)?.num === 11 && at(32)?.level === 9 && at(34)?.level === 12, [at(32), at(34)]);
+  ok('inventario: largo inesperado → null', parseInventory(hex('c40010f3100300')) === null);
+  const drops = parseItemsDropped(hex('c200322005006d7dc6030a1c000000687dc3660428000000067dc7b10801800000b47ac68a00018000009080c4c900018000'));
+  ok('drops 5 bytes: 5 ítems con id y posición', drops?.length === 5 && drops[0].id === 0x6d && drops[0].x === 125 && drops[0].y === 198 && drops[0].group === 0 && drops[0].num === 3, drops?.[0]);
+  ok('drops: 14/9 al final', drops?.[4].group === 14 && drops?.[4].num === 9, drops?.[4]);
+  const zen = parseItemsDropped(hex('c20015200100d07cc20f011e00d1e0000000000000'));
+  ok('drop de zen en 12 bytes: 14/15', zen?.length === 1 && zen[0].group === 14 && zen[0].num === 15 && zen[0].id === 0xd0, zen);
+  ok('drop: largo inesperado → null', parseItemsDropped(hex('c2000a20010001')) === null);
+  ok('caja 14/11: e[0] = 0xcb con el bit alto en e[3]', JSON.stringify(decodeItem5(Uint8Array.from([0xcb, 0x00, 0x01, 0x80, 0]))) === JSON.stringify({ group: 14, num: 11, level: 0, excellent: false }));
+  ok('ítem agregado de 5 bytes', parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.slot === 20 && parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.num === 11);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS PASARON' : `\n${fails} TEST(S) FALLARON`);

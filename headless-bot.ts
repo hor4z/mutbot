@@ -43,7 +43,7 @@ import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats, SelfReport, pickLo
 import { CAMP, CampManager, CampMemory, Hunger, castCandidate } from './camp';
 import { CORNER, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 import { isSafeZone } from './terrain';
-import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isExcellentItemData, isObjectMovedPacket, parseItemDropRemoved, parsePartyRequest } from './protocol097';
+import { Backoff, PARTY_DECLINE_DELAY_MS, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import { EventBus } from './net/eventBus';
 import { createSocket } from './net/socket';
 import { startStatusServer, type CommandResult, type StatusServer } from './ws-server';
@@ -87,7 +87,6 @@ import {
   CurrentHealthAndShieldPacket,
   CurrentManaAndAbilityPacket,
   CharacterLevelUpdatePacket,
-  ItemsDroppedPacket,
   MoneyDropped075Packet,
   InventoryMoneyUpdatePacket,
   MasterStatsUpdatePacket,
@@ -475,45 +474,8 @@ function parseCharacterInformation097(raw: any) {
 }
 
 // ---------------------------------------------------------------------------
-// Parsers legacy de items y skills (layouts 0.97d, no los del XML)
+// Parsers de skills (layouts 0.97d, no los del XML). Los de ítems (5 bytes) están en protocol097.ts.
 // ---------------------------------------------------------------------------
-// El item serializado del server son 12 bytes. Mirando SerializeItem /
-// DeserializeItem del cliente MU JS (src/common/itemSerializer.ts) (que son el par que usa
-// OpenMU para estos packets): byte[0] = num, byte[5] nibble alto = group.
-const ITEM_DATA_LENGTH = 12;
-
-// Nivel del ítem (+N): bits 3-6 del byte 1 (LevelMask 0x78 del itemSerializer).
-function parseItemData097(itemData: Uint8Array): { group: number; num: number; level: number; excellent: boolean } {
-  return {
-    num: itemData[0],
-    group: (itemData[5] & 0xf0) >> 4,
-    level: (itemData[1] & 0x78) >> 3,
-    excellent: isExcellentItemData(itemData),
-  };
-}
-
-// CharacterInventory (F3/10, header C4): count en byte 5, luego StoredItem[].
-// StoredItem = slot (1 byte) + ItemData de 12 bytes.
-function parseInventory097(raw: any): ItemSlot[] {
-  const bytes = toBytes(raw);
-  const count = bytes[5];
-  const out: ItemSlot[] = [];
-  for (let i = 0; i < count; i++) {
-    const base = 6 + i * (1 + ITEM_DATA_LENGTH);
-    if (base + 1 + ITEM_DATA_LENGTH > bytes.length) break;
-    const { group, num, level, excellent } = parseItemData097(bytes.subarray(base + 1, base + 1 + ITEM_DATA_LENGTH));
-    out.push({ slot: bytes[base], group, num, level, excellent });
-  }
-  return out;
-}
-
-// ItemAddedToInventory (0x22, header C3): slot en byte 3, ItemData desde byte 4.
-function parseItemAdded097(raw: any): ItemSlot | null {
-  const bytes = toBytes(raw);
-  if (bytes.length < 4 + ITEM_DATA_LENGTH) return null;
-  const { group, num, level, excellent } = parseItemData097(bytes.subarray(4, 4 + ITEM_DATA_LENGTH));
-  return { slot: bytes[3], group, num, level, excellent };
-}
 
 // SkillListUpdate (F3/11): count en byte 4 (0xFE = agregó una, 0xFF = quitó una).
   // Los entries empiezan en el offset 6 (el byte 5 es reservado en 0.97d) y son
@@ -585,13 +547,18 @@ function trackWorld() {
   for (const ev of ['SkillListUpdate', 'SkillAdded', 'SkillRemoved']) EventBus.on(ev, onSkills);
 
   EventBus.on('CharacterInventory', (raw: any) => {
+    const items = parseInventory(toBytes(raw));
+    if (!items) {
+      log(`AVISO: inventario con layout inesperado (${toBytes(raw).length} bytes), lo ignoro.`);
+      return;
+    }
     world.inventory.clear();
-    for (const it of parseInventory097(raw)) world.inventory.set(it.slot, it);
+    for (const it of items) world.inventory.set(it.slot, it);
     log(`Inventario: ${world.inventory.size} item(s).`);
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {
-    const it = parseItemAdded097(raw);
+    const it = parseItemAdded(toBytes(raw));
     if (it) world.inventory.set(it.slot, it);
   });
 
@@ -1226,23 +1193,14 @@ const drops = new Map<number, ScopedDrop>();
 // MoneyDropped075 (14 bytes fijos, ver MoneyDropped075Packet).
 function parseDropsPacket(raw: any): ScopedDrop[] {
   const bytes = toBytes(raw);
-  const itemCount = bytes[4];
-  const expectedItemsLen = 5 + itemCount * 16;
-  if (itemCount > 0 && bytes.length === expectedItemsLen) {
-    const p = new ItemsDroppedPacket(raw);
-    return p.getItems(itemCount).map((it) => {
-      // El group/num salen del ItemData de 12 bytes (mismo layout que
-      // ItemAddedToInventory): num = byte 0, group = nibble alto del byte 5.
-      const d = it.ItemData;
-      const excellent = isExcellentItemData(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
-      return { id: it.Id & 0x7fff, x: it.PositionX, y: it.PositionY, group: (d.getUint8(5) & 0xf0) >> 4, num: d.getUint8(0), excellent };
-    });
-  }
+  // Ítems en 5 bytes (o 12, los de zen): parseItemsDropped de protocol097.ts.
+  const items = parseItemsDropped(bytes);
+  if (items) return items.map((it) => ({ ...it, isMoney: it.group === 14 && it.num === 15 }));
   if (bytes.length === 14) {
     const p = new MoneyDropped075Packet(raw);
     return [{ id: p.Id & 0x7fff, x: p.PositionX, y: p.PositionY, group: p.MoneyGroup, num: p.MoneyNumber, isMoney: true, amount: p.Amount }];
   }
-  log(`AVISO: packet de drop con layout inesperado (${bytes.length} bytes, ItemCount=${itemCount}), lo ignoro.`);
+  log(`AVISO: packet de drop con layout inesperado (${bytes.length} bytes, ItemCount=${bytes[4]}), lo ignoro.`);
   return [];
 }
 
@@ -1942,6 +1900,7 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const goldReporter = new GoldReporter(charName);
   // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff.
   let cornerAwayUntil = 0;
+  let devCrowdSince: number | null = null;
   let cornerSince: number | null = null;
   let cornerRouteIdx: number | null = null;
   let cornerRouteAt = 0;
@@ -2225,7 +2184,15 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 5) ¿Cambiar de spot? (ruta fija: tramo nuevo, competencia, hambre). Cada
     //    10 ticks, o ya si hay hambre/competencia; respeta WARP_COOLDOWN_MS.
-    const crowded = hungry.starving || camps.crowdedSpot(now0);
+    // Devias lleno (como el navegador): 3+ jugadores a <= 8 del campamento durante 20 s.
+    const devCrowd = world.map === 2 && world.level < CORNER.minLevel && camps.camp != null &&
+      [...world.players.values()].filter((q) => chebyshev(q.x, q.y, camps.camp!.x, camps.camp!.y) <= 8).length >= 3;
+    if (devCrowd) devCrowdSince ??= now0;
+    else devCrowdSince = null;
+    const devCrowded = devCrowdSince != null && now0 - devCrowdSince > 20_000;
+    if (devCrowded) log(`Devias lleno (3+ jugadores en el campamento hace 20 s): cambio de spot.`);
+    const crowded = hungry.starving || camps.crowdedSpot(now0) || devCrowded;
+    if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
     if (!hunting && (ticks % 10 === 0 || crowded || !currentSpot)) {
       const moved = await maybeChangeSpot({ crowded });
