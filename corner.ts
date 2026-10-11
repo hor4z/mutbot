@@ -156,10 +156,12 @@ export class CornerSides {
    * que ataque el otro"): los lados que él ocupa no se eligen y se cambia ya, sin esperar; el DK
    * (`preferCorner`) se planta en la esquina (2,10) si está libre. El mago con un compañero a la vista
    * (`yieldCorner`) le deja la esquina: no la elige y, si está ahí, se corre ya (Melu se quedaba con la
-   * esquina mientras Horaz reseteaba y Horaz volvía al lado este).
+   * esquina mientras Horaz reseteaba y Horaz volvía al lado este) y va al medio si está libre.
    */
   pick(now: number, players: readonly Pos[], mates: readonly Pos[] = [], preferCorner = false, yieldCorner = false): Side {
     const taken = (s: Side) => (yieldCorner && s === SIDES[0]) || mates.some((m) => dist(m, s) <= SIDE.near);
+    // El mago va al segundo spot (medio, 7,11) si está libre: ahí, con Decay, le gana el sector a los rivales.
+    if (yieldCorner && !taken(SIDES[1])) return this.choose(SIDES[1], now);
     if (yieldCorner && this.side === SIDES[0]) return this.choose(this.bestOf(SIDES.filter((s) => !taken(s)), players), now);
     const free = SIDES.filter((s) => !taken(s));
     if (mates.some((m) => inCorner(m)) && free.length) {

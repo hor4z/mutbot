@@ -48,10 +48,9 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   }
   bot.currentSpot = arena2;
   const me = { x: world.x, y: world.y };
-  // Mago: Evil Spirit (9) limpia rápido sin nadie al lado; con competencia es débil y va Decay (38,
-  // el meteoro verde: 95 de daño contra 45) para ganarles los monstruos.
-  const contested = rivalPlayers().some((q) => Math.hypot(q.x - world.x, q.y - world.y) <= CORNER.crowdDist);
-  const skill = pickAttackSkill(isMage() && contested ? 38 : undefined);
+  // Mago en la esquina: Decay (38, el meteoro verde: 95 de daño contra 45 de Evil Spirit). Usuario:
+  // "Melu molesta muchísimo en el segundo spot con Decay, eso es lo que tiene que lograrse casi siempre".
+  const skill = pickAttackSkill(isMage() ? 38 : undefined);
   const r = spinRange(skill?.number);
   const mons = [...ctx.npcs.values()];
   const here = inCorner(me);

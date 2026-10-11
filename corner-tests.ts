@@ -91,6 +91,7 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('dúo: si el compañero ocupa su lado, cambia ya', dk2.pick(1000, [], [{ x: 2, y: 10 }], true).name !== 'esquina');
   const mage2 = new CornerSides(); // arranca en la esquina (Horaz reseteando)
   ok('dúo: el mago en la esquina con Horaz en el lado este se corre ya', mage2.pick(1000, [], [{ x: 12, y: 11 }], false, true).name === 'medio');
+  ok('dúo: el mago va al segundo spot (medio) aunque el este rinda más', (() => { const c = new CornerSides(); c.stats.set('este', { exp: 9e9, ms: 60_000, rate: 9e9, windows: 3 }); return c.pick(0, [], [{ x: 2, y: 10 }], false, true).name === 'medio'; })());
   ok('dúo: y no vuelve a la esquina después de los 40 s', mage2.pick(200_000, [], [{ x: 12, y: 11 }], false, true).name !== 'esquina');
   ok('solo (sin compañero): elige normal y respeta los 40 s', new CornerSides().pick(0, [], [], true).name === 'esquina');
 }
