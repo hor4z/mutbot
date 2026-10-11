@@ -305,6 +305,8 @@ const world = {
   npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
   // Otros jugadores en scope (para no competirles el objetivo, ver farming.ts).
   players: new Map<number, { x: number; y: number }>(),
+  resets: null as number | null, // CharacterResets del server (packet propio)
+  grandResets: 0,
   // NPC de pueblo/servicio (TypeNumber 200-299) en scope: candidatos para
   // descubrir merchants. Antes no se guardaban en ningún lado y
   // discoverMerchant() sondeaba monstruos.
@@ -2584,7 +2586,7 @@ function buildPanelState(now: number): PanelState {
     char: {
       name: charName,
       level: world.level,
-      resets: LEARN_ENABLED ? learning.resets : null,
+      resets: world.resets ?? (LEARN_ENABLED && learning.resets ? learning.resets : null),
       ...(world.classId != null ? { classId: world.classId } : {}),
       hp: [world.hp, world.maxHp],
       mp: [world.mana, world.maxMana],
@@ -2638,6 +2640,9 @@ function pollEvents() {
 }
 
 // Listeners de los packets que solo usa el panel (una vez, con trackWorld).
+const seenUnrouted = new Set<number>();
+// Código del packet CharacterResets del cliente web (layout: resets u16 BE, grand u8). Ver el log "Packet propio".
+const RESETS_CODE = 0xfe; // visto: c1 06 fe 00 13 00 = 19 resets (Melu)
 function trackPanelPackets() {
   EventBus.on('MiniGameOpeningState', (raw: any) => {
     const t = parseOpeningState(toBytes(raw), Date.now());
@@ -2647,6 +2652,10 @@ function trackPanelPackets() {
   // net/socket.ts lo emite crudo como 'UnroutedPacket'.
   EventBus.on('UnroutedPacket', (raw: any) => {
     const b = toBytes(raw);
+    // Packets propios del server que el cliente web sí lee y el bot no conocía: se anotan una vez
+    // (código y bytes) para identificarlos; CharacterResets = resets u16 BE en [3..4], grand en [5].
+    if (b[0] === 0xc1 && b[2] !== 0xfd && b[2] !== RESETS_CODE && !seenUnrouted.has(b[2])) { seenUnrouted.add(b[2]); log(`Packet propio 0x${b[2].toString(16)}: ${[...b.slice(0, 12)].map((x) => x.toString(16).padStart(2, '0')).join(' ')}`); }
+    if (b[0] === 0xc1 && b[2] === RESETS_CODE && b.length >= 6) { world.resets = (b[3] << 8) | b[4]; world.grandResets = b[5]; return; }
     if (b[0] !== 0xc1 || b[2] !== 0xfd) return;
     const inv = parseInvasion(b, Date.now());
     if (!inv) return;
@@ -2688,6 +2697,8 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastCastAt = 0;
+  let lastPotionTrip = 0;
+  let lastBarrierAt = 0;
   // Fase de la iteración anterior: el tiempo hasta la próxima se le atribuye.
   let phase: TimeKind = 'other';
   let phaseAt = Date.now();
@@ -2853,7 +2864,22 @@ async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 0) Reponer pociones cada tanto aunque haya otra acción posible: las
     //    compras son caras de confirmar y no queremos spamearlas.
     if (!atlasRun && ticks % 25 === 0 && !haveHealingPotions()) {
+      // Sin pociones no se farmea (Melu murió en Arena 4 sin ninguna, 2026-10-11): a Lorencia a comprar
+      // y el cambio de spot la devuelve a su mapa. Como mucho una vez cada 5 min.
+      if (Date.now() - lastPotionTrip > 5 * 60_000) {
+        lastPotionTrip = Date.now();
+        const r = await stockAtlasPotions(40);
+        panelLog(r.bought ? `Pociones: compré ${r.bought} en Lorencia.` : 'Pociones: no pude comprar (sigo sin pociones).');
+        if (world.map === ATLAS_SAFE_MAP) { currentSpot = null; canAdopt = false; }
+        continue;
+      }
       await ensurePotions();
+    }
+    // 0b) Mago: Soul Barrier (16, escudo de maná) cada ~50 s, como el agente del navegador.
+    if (isMage() && world.skills.has(16) && Date.now() - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && Date.now() - lastCastAt > SKILL_PACE_MS) {
+      lastBarrierAt = Date.now(); lastCastAt = Date.now();
+      sendTargetedSkill(world.skills.get(16)!.index, playerId);
+      await sleep(SKILL_PACE_MS);
     }
     // 1) Sobrevivir tiene prioridad absoluta.
     if (checkSurvival()) {

@@ -92,7 +92,10 @@ nació). `net/`, `packets/` y `data/` son copias de su `src/`:
   tenía helpers "reescritos" con otra firma (`GetByteValue` con los argumentos
   invertidos, `ArrayCopy` distinto): el `Count` de `SkillListUpdate` daba siempre 0
   y el SimpleModulus se rompía. No se notaba porque el bot todavía importaba de
-  `../src/`. No reescribirlos.
+  `../src/`. No reescribirlos. Única excepción: `Counter.Increase()` de
+  `simpleModulus.ts` vuelve a 0 después de 255 (`& 0xff`). Sin eso, desde el
+  paquete C3 número 256 todos daban "can't decrypt packet" y el bot quedaba ciego
+  a la exp, la vida y el respawn (2026-10-11).
 - `net/socket.ts` resuelve los packets con la tabla completa de S2C del cliente
   (`packets/routes.ts`) y el mismo `find` que su `createSocket`, así que los
   nombres de evento son idénticos (varias trampas de abajo dependen de eso).
