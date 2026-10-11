@@ -216,8 +216,19 @@
     if (dist(pe.transform.pos, ai.explore) < 4) { ai.explore = null; ai.arrivedAt = 0; }
   }, 500);
   (window.__mubotTimers ??= []).push(h.lingerTimer);
+  // Cajas en el piso: nada de saltar de entrada, girar de mapa ni cortar la cacería hasta levantarlas.
+  // 2026-10-11 00:50: mató un Golden Dragon en Devias y saltó a la entrada 5 con dos Cajas de Kundun
+  // (+5 y +2) todavía en el piso; se perdieron.
+  const lootPending = () => {
+    if (ai.looting) return true;
+    const w = W(), pe = w?.playerEntity; if (!pe || !ai.isValuable) return false;
+    for (const e of w.byNetId.values()) if (e.droppedItem && ai.isValuable(e.droppedItem) && !ai.lootSkip?.has(e.netId) && dist(pe.transform.pos, e.transform.pos) <= (ai.cfg.lootRadius ?? 10) + 4) return true;
+    return false;
+  };
+  h.lootPending = lootPending;
   h.pollTimer = window.setInterval(() => {
     if (!h.on && !h.auto) return; pollGold(); if (!h.on) return;
+    if (lootPending()) return;
     // Gira de dragón: arrancada la invasión, si en CFG.tourSec no hay dorados a la vista, saltar al
     // siguiente mapa de h.tour (Melu: Lorencia → Noria). Se vuelve a medir en cada mapa.
     { const w = W(); let inView = false; if (w) for (const e of w.byNetId.values()) if (isGold(e)) { inView = true; break; }
@@ -240,6 +251,7 @@
   // Cada 5 s: arrancar sola con la invasión y cortar cuando no queda nada que cazar.
   h.timer = window.setInterval(() => {
     if (!ai.on || ai.busy || S.uiState !== 5) return;
+    if (lootPending()) return;
     const inv = window.__invasion, active = inv?.status === 1 && Date.now() - inv.at < 120000, lvl = S.playerData.level;
     // Aviso de un buscador (usuario: "si Melu detecta algo, mandá a Horaz al instante"): con o sin
     // invasión, si el mapa está al alcance. Corta cuando ese dorado ya no aparece (45 s sin avisos ni
