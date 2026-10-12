@@ -2,10 +2,11 @@
  * Loot: los drops en scope (ItemsDropped / ItemDropRemoved) y el paso de ir a levantar uno valioso
  * (cajas, joyas, excelentes, guantes 10/1). El zen y el equipo común no se levantan.
  */
-import { MoneyDropped075Packet, PickupItemRequest075Packet } from './packets';
+import { MoneyDropped075Packet } from './packets';
 import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
-import { step } from './actions';
+import { step, sendPickup } from './actions';
+import { itemInfo } from './panel-logic';
 import { pickLoot } from './farming';
 import { journal } from './journal';
 import { EventBus } from './net/eventBus';
@@ -74,6 +75,13 @@ export function watchDrops(): () => void {
 // en LOOT_TIMEOUT_MS se olvida.
 const LOOT_RADIUS = 12;
 const LOOT_TIMEOUT_MS = 8000;
+// Equipo solo con lugar en el inventario (casillas libres de las 64): que siempre entren zen y pociones.
+const LOOT_GEAR_MIN_FREE = 12;
+function bagRoom(): number {
+  let used = 0;
+  for (const it of world.inventory.values()) if (it.slot >= 12 && it.slot < 76) { const i = itemInfo(it.group, it.num); used += i.w * i.h; }
+  return 64 - used;
+}
 
 // Devuelve true si hizo algo (un paso o el pickup).
 export async function lootStep(fresh = false): Promise<boolean> {
@@ -90,7 +98,7 @@ export async function lootStep(fresh = false): Promise<boolean> {
     }
     lootState.looting = null;
   }
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS, fresh);
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS, fresh, fresh && bagRoom() >= LOOT_GEAR_MIN_FREE);
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });
@@ -103,9 +111,7 @@ export async function lootStep(fresh = false): Promise<boolean> {
   }
   drops.delete(d.id);
   lootState.looting = null;
-  const p = PickupItemRequest075Packet.createPacket();
-  p.ItemId = d.id;
-  sendToGS(p.buffer);
+  sendPickup(d.id);
   lootState.count++;
   log(`Levanto ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`);
   await sleep(300);

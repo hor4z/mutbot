@@ -217,6 +217,10 @@ const hpOf = (t: number) => HP[t] ?? null;
   const box = { isMoney: false, group: 14, num: 11 } as any;
   ok('loot: con resets ni zen ni pociones (como siempre)', !isValuableDrop(money) && !isValuableDrop(potion) && isValuableDrop(box));
   ok('loot: personaje nuevo levanta zen, pociones y cajas', isValuableDrop(money, true) && isValuableDrop(potion, true) && isValuableDrop(box, true));
+  const zenItem = { isMoney: false, group: 14, num: 15 } as any;
+  const sword = { isMoney: false, group: 0, num: 1 } as any;
+  ok('loot: zen como ítem 14/15 y joyas (nuevo)', isValuableDrop(zenItem, true) && isValuableDrop({ isMoney: false, group: 14, num: 13 } as any, true));
+  ok('loot: equipo solo con lugar (gear)', isValuableDrop(sword, true, true) && !isValuableDrop(sword, true, false) && !isValuableDrop(sword));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE FARMEO PASARON' : `\n${fails} TEST(S) DE FARMEO FALLARON`);

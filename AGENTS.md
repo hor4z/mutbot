@@ -460,6 +460,14 @@ Leer un `ItemData` de 12 bytes de ahí tiraba el proceso entero. Se arregló
 distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
 ítems, 14 fijo para dinero) antes de elegir qué clase usar.
 
+### Levantar drops y zen
+
+- Levantar: **`C3 05 22 <id BE>`** (`sendPickup`, PickupItemRequest cifrado), como el cliente web. El
+  bot mandaba `PickupItemRequest075` (C1 22) y el server lo ignoraba: nunca levantó nada.
+- Respuesta: `C3 22 <casilla> <ítem 5 bytes>` (ítem al inventario), **`C3 08 22 FE <zen total u32 BE>`**
+  (zen levantado: no llega InventoryMoneyUpdate) o `C3 04 22 FF` (no se pudo). El zen del suelo llega
+  como ítem 14/15 en `ItemsDropped`.
+
 ### Reaparición tras morir
 
 `RespawnAfterDeath075` (C1 F3 04, 22 bytes en este server): X @4, Y @5, mapa @6. **No se manejaba**:

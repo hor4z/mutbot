@@ -491,21 +491,26 @@ export type DropInfo = { group: number; num: number; isMoney?: boolean; excellen
 // Solo cajas (14/11: Box of Luck / de Kundun). Usuario 2026-10-11: las joyas se compran en Lorencia y
 // llenaban el inventario; los excelentes que caen no sirven (y al tirarlos se volvían a levantar).
 /**
- * `fresh` (personaje nuevo, sin resets): además el zen y las pociones (manzana y pociones de vida,
- * 14/0-3). Sin zen no puede pagar el warp a Devias (2.500) ni comprar nada: Hume llegó a nivel 27 con 0.
+ * `fresh` (personaje nuevo, sin resets): además el zen (en este server llega como ítem 14/15), las
+ * pociones (manzana y pociones de vida, 14/0-3), las joyas y, si `gear`, el equipo (grupos 0-11: armas,
+ * escudos, armaduras) para equiparse o venderlo. Sin zen no paga el warp a Devias (2.500) ni compra
+ * nada: Hume llegó a nivel 27 con 0.
  */
-export function isValuableDrop(d: DropInfo, fresh = false): boolean {
+export const JEWELS = new Set([13, 14, 16, 22, 31]);
+export function isValuableDrop(d: DropInfo, fresh = false, gear = false): boolean {
   if (d.isMoney) return fresh;
-  if (fresh && d.group === 14 && d.num <= 3) return true;
+  if (fresh && d.group === 14 && (d.num <= 3 || d.num === 15 || JEWELS.has(d.num))) return true;
+  if (fresh && d.group === 12 && d.num === 15) return true; // Jewel of Chaos
+  if (fresh && gear && d.group <= 11) return true;
   return d.group === 14 && d.num === 11;
 }
 
 // El drop valioso más cercano a <= radius (o null).
-export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false): D | null {
+export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false): D | null {
   let best: D | null = null;
   let bd = Infinity;
   for (const d of drops) {
-    if (!isValuableDrop(d, fresh)) continue;
+    if (!isValuableDrop(d, fresh, gear)) continue;
     const dd = cheb(me, d);
     if (dd <= radius && dd < bd) {
       bd = dd;

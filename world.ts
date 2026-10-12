@@ -242,7 +242,14 @@ export function trackWorld() {
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {
-    const it = parseItemAdded(toBytes(raw));
+    const b = toBytes(raw);
+    // Zen levantado: C3 08 22 FE <zen total u32 BE> (no llega InventoryMoneyUpdate). FF = no se pudo.
+    if (b[3] === 0xfe && b.length >= 8) {
+      bot.lastMoney = ((b[4] << 24) >>> 0) + (b[5] << 16) + (b[6] << 8) + b[7];
+      return;
+    }
+    if (b[3] === 0xff) return;
+    const it = parseItemAdded(b);
     if (it) world.inventory.set(it.slot, it);
   });
 
