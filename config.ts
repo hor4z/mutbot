@@ -45,6 +45,9 @@ export const CHAR_NAME = args.get('--char') ?? process.env.MUBOT_CHAR ?? 'test1D
 // Personaje nuevo (lo escribe la estación en el .env): si CHAR_NAME no está en la cuenta, se crea
 // con esta clase (dk, dw, elf, mg). Sin esto, entra con el primero de la lista, como siempre.
 export const CREATE_CLASS = process.env.MUBOT_CREATE_CLASS ?? '';
+// Personaje pedido a propósito (--char o MUBOT_CHAR): si no está en la cuenta y no hay que crearlo,
+// el bot corta en vez de entrar con otro (un nombre mal escrito jugaba con el primero de la lista).
+export const CHAR_EXPLICIT = args.has('--char') || !!process.env.MUBOT_CHAR;
 const ALLOW_REMOTE = args.has('--allow-remote');
 
 const LOCAL = /^(127\.|localhost$|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;

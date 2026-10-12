@@ -18,7 +18,7 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
+import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
 import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
 import { journal } from './journal';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
@@ -454,7 +454,7 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
-/** El server no dejó crear el personaje (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
+/** El personaje pedido no está en la cuenta, o el server no dejó crearlo (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
 export class CreateCharacterError extends Error {}
 
 /**
@@ -487,6 +487,9 @@ export async function selectCharacter(charListBytes: any) {
 
   let target = characters.find((c: any) => c.Name === CHAR_NAME);
   if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
+  if (!target && CHAR_EXPLICIT && characters.length) {
+    throw new CreateCharacterError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}) y no tengo clase para crearlo.`);
+  }
   target ??= characters[0];
   if (!target) throw new Error('La cuenta no tiene personajes');
 

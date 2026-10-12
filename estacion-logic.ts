@@ -8,7 +8,7 @@ import { validCharName } from './names';
 
 /**
  * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
- * almacén de cuentas (`accounts.ts`, `envFile` null; `cls` si hay que crearlo al entrar).
+ * de la base (`estacion-db.ts`; `envFile` = de qué `.env` se importó; `cls` si hay que crearlo al entrar).
  */
 export type CharConfig = { key: string; envFile: string | null; user: string; char: string; cls?: CharClassKey };
 
@@ -101,7 +101,7 @@ export type CharStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fa
 
 /** Cómo se lee la salida del bot. */
 export function exitStatus(code: number | null): { status: CharStatus; msg: string } {
-  if (code === 6) return { status: 'failed', msg: 'el server no dejó crear el personaje (¿nombre tomado o clase bloqueada?). Mirá la consola.' };
+  if (code === 6) return { status: 'failed', msg: 'el personaje no está en la cuenta (¿nombre mal escrito?) o el server no dejó crearlo (¿nombre tomado o clase bloqueada?). Mirá la consola.' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
   if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá el .env del personaje.' };
@@ -119,13 +119,13 @@ export type StationRequest =
   | { action: 'disconnect'; char: string }
   | { action: 'routine'; char: string; routine: Routine }
   | NewCharRequest
-  | { action: 'add'; user: string; char: string; cls: CharClassKey };
+  | { action: 'add'; user: string; char: string; cls: CharClassKey | null };
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
  * clase. Va al almacén de cuentas (`accounts.ts`) y el bot crea el personaje al entrar.
  */
-export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey; existing: boolean };
+export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey | null; existing: boolean };
 
 /**
  * Clases que se pueden crear en este server (0.97d) y su número de red (`CharacterClassNumber` del
@@ -156,13 +156,14 @@ export function parseStationRequest(v: unknown): StationRequest | null {
     const keys = Object.keys(r).sort().join();
     if (keys !== 'action,char,cls,existing,pass,user') return null;
     if (typeof r.user !== 'string' || typeof r.pass !== 'string' || typeof r.char !== 'string' || typeof r.existing !== 'boolean') return null;
-    if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !isCharClass(r.cls)) return null;
+    // Clase null = el personaje ya existe en el server (solo con una cuenta que ya existe).
+    if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !(isCharClass(r.cls) || (r.cls === null && r.existing))) return null;
     return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
   }
   // Otro personaje en una cuenta que ya está en la base: la clave la pone la estación.
   if (r.action === 'add') {
     if (Object.keys(r).sort().join() !== 'action,char,cls,user') return null;
-    if (typeof r.user !== 'string' || !/^[A-Za-z0-9]{4,10}$/.test(r.user) || typeof r.char !== 'string' || !validCharName(r.char) || !isCharClass(r.cls)) return null;
+    if (typeof r.user !== 'string' || !/^[A-Za-z0-9]{4,10}$/.test(r.user) || typeof r.char !== 'string' || !validCharName(r.char) || !(isCharClass(r.cls) || r.cls === null)) return null;
     return { action: 'add', user: r.user, char: r.char, cls: r.cls };
   }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;

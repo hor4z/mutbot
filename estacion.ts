@@ -370,9 +370,10 @@ async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string
   refreshSlots();
   const s = slots.get(r.char.toLowerCase());
   if (!s) return { ok: false, msg: `guardé a ${r.char} pero no lo encuentro en la base` };
-  say(`personaje nuevo ${r.char} (${CHAR_CLASSES[r.cls].label}) en la cuenta ${r.user}`);
+  say(`personaje ${r.char} (${r.cls ? CHAR_CLASSES[r.cls].label : 'ya existente'}) en la cuenta ${r.user}`);
   const c = connect(s, { kind: 'pause' });
-  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Guardado' : 'Cuenta creada'}. Conectando a ${r.char}: el bot lo crea al entrar y lo deja en pausa.` : c.msg };
+  const what = r.cls ? 'el bot lo crea al entrar y lo deja en pausa' : 'entra con el personaje que ya tenés y queda en pausa';
+  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Guardado' : 'Cuenta creada'}. Conectando a ${r.char}: ${what}.` : c.msg };
 }
 
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {

@@ -222,6 +222,9 @@ function NewCharacter({
   const [user, setUser] = useState(account ?? "");
   const [pass, setPass] = useState("");
   const [existing, setExisting] = useState(false);
+  // El personaje ya está creado en el server: no hace falta clase y el bot no crea nada.
+  const [charExists, setCharExists] = useState(false);
+  const known = (!!account || existing) && charExists;
   const [cls, setCls] = useState<CharClassKey>("dk");
   const [char, setChar] = useState("");
   const [names, setNames] = useState<string[]>([]);
@@ -246,10 +249,11 @@ function NewCharacter({
         : "";
   async function create() {
     setBusy(true);
+    const c = known ? null : cls;
     const ok = await act(
       account
-        ? { action: "add", user: account, char, cls }
-        : { action: "create", user, pass, char, cls, existing },
+        ? { action: "add", user: account, char, cls: c }
+        : { action: "create", user, pass, char, cls: c, existing },
     );
     setBusy(false);
     if (ok) {
@@ -289,34 +293,49 @@ function NewCharacter({
       </label>
         </>
       )}
-      <div className="field">
-        <span>Clase</span>
-        <Choice label="Clase" value={cls} onChange={(v) => setCls(v as CharClassKey)} items={classes} />
-      </div>
+      {(account || existing) && (
+        <label className="check">
+          <input type="checkbox" checked={charExists} onChange={(e) => {
+            setCharExists(e.target.checked);
+            if (e.target.checked && names.includes(char)) setChar("");
+          }} />
+          El personaje ya existe (entrar con él, no crearlo)
+        </label>
+      )}
+      {!known && (
+        <div className="field">
+          <span>Clase</span>
+          <Choice label="Clase" value={cls} onChange={(v) => setCls(v as CharClassKey)} items={classes} />
+        </div>
+      )}
       <label className="field">
-        <span>Nombre</span>
+        <span>{known ? "Nombre exacto del personaje" : "Nombre"}</span>
         <span className="input-action">
           <input className="field-input" value={char} maxLength={10} onChange={(e) => setChar(e.target.value.trim())} />
-          <Action className="quiet" aria-label="Otros nombres" onClick={() => void roll()}>
-            <Dices size={15} />
-          </Action>
+          {!known && (
+            <Action className="quiet" aria-label="Otros nombres" onClick={() => void roll()}>
+              <Dices size={15} />
+            </Action>
+          )}
         </span>
       </label>
-      <div className="name-chips">
+      {!known && <div className="name-chips">
         {names.map((n) => (
           <button key={n} className={`chip ${n === char ? "active" : ""}`} onClick={() => setChar(n)}>
             {n}
           </button>
         ))}
-      </div>
+      </div>}
       {problem && (user || pass || char) && <p className="warning">{problem}</p>}
       <p className="muted">
         {account ? "" : "La cuenta y la clave quedan en la base local (~/.mubot/mubot.db, solo en esta máquina). "}
-        El personaje se crea al conectar y queda en pausa en Lorencia.
+        {known
+          ? "Al conectar entra con ese personaje y queda en pausa. Si el nombre no está en la cuenta, no entra con otro: avisa."
+          : "El personaje se crea al conectar y queda en pausa en Lorencia."}
       </p>
       <div className="manage-actions">
         <Action className="primary" disabled={busy || !!problem} onClick={() => void create()}>
-          {busy ? "Creando…" : account || existing ? "Crear personaje" : "Crear cuenta y personaje"}
+          {busy ? "Guardando…" : known ? "Agregar personaje" : account || existing ? "Crear personaje" : "Crear cuenta y personaje"}
         </Action>
         <Action className="quiet" disabled={busy} onClick={() => setOpen(false)}>
           Cancelar

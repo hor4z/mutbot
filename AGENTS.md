@@ -612,6 +612,9 @@ su consola.
     Con "ya tengo la cuenta" (`existing`) no registra.
   - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles. Nombre de 4
     a 10 letras o números.
+  - **Personaje que ya existe** (cuenta existente + "El personaje ya existe"): `cls: null`, no se crea
+    nada; si el nombre no está en la cuenta el bot sale con código 6 en vez de entrar con otro
+    (`CHAR_EXPLICIT`: con `--char`/`MUBOT_CHAR` ya no cae al primero de la lista).
   - Guarda cuenta y personaje en la base (clase dk, dw, elf, mg) y lo conecta en pausa. La clave no se
     loguea ni vuelve al navegador. `{action:'add', user, char, cls}` suma un personaje a una cuenta ya
     guardada (la clave la pone la estación).
