@@ -19,12 +19,13 @@ import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
+import { canFight } from './power';
 import { attackerOf, ownAreaSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
-import { SelfReport } from './farming';
+import { SelfReport, classFamily, isFreshChar } from './farming';
 import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
 import { lootState, drops, lootStep, watchDrops } from './loot';
@@ -461,7 +462,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //     primero); mientras tanto y 15 s después (cajas) no se resetea, no se cambia de spot ni se
     //     vuelve a la esquina.
     const nowG = Date.now();
-    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t), nowG);
+    // Personaje nuevo: solo los dorados con los que puede según sus stats (power.ts). Hume (nivel 10)
+    // fue por un Golden Dragon y lo mató (2026-10-12). Horaz y Melu siguen yendo por todos.
+    const weak = isFreshChar(world.resets, world.stats);
+    const me = weak ? { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp } : null;
+    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowG);
     const goldHold = !bot.hunting && golden.holding(nowG);
     if (gold && ctx.target !== gold.id) {
       if (!goldAnnounced.has(gold.id)) {
@@ -521,7 +526,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     //     vez por invasión (hunter.js del navegador).
     // Carrera de resets: el prioritario (Horaz) no sale a cazar; los dorados son de Melu.
     const racing = isPriorityChar(bot.charName);
-    if (AUTO_HUNT_ON && !racing && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
+    // Un personaje nuevo no sale a cazar dorados: no puede con ellos.
+    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
       const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);

@@ -39,6 +39,10 @@ export { dist, type Pos };
 export const INITIAL = {
   untilLevel: 20,
   scan: 20,
+  /** el campamento se mantiene mientras haya atacables a <= esto de él */
+  keepNear: 8,
+  /** ...salvo que aparezca un grupo de al menos esto */
+  moveForGroup: 3,
   town: { x: 135, y: 128 } as Pos,
   /** campos de menor a mayor: zona a recorrer, por dónde se entra y qué monstruos salen (tipos) */
   fields: [
@@ -73,10 +77,14 @@ export const inField = (p: Pos, f = INITIAL.fields[0]) => p.x >= f.x1 && p.x <= 
  */
 export function initialCamp<M extends Pos>(inp: { me: Pos; field: Field; monsters: readonly M[]; prev: Pos | null; rand: () => number; walkable?: (p: Pos) => boolean }): { camp: Pos; why: string } {
   const near = inp.monsters.filter((m) => dist(m, inp.me) <= INITIAL.scan);
-  const big = biggestCluster(near);
+  // Empate (todos sueltos): el más cercano. Antes ganaba el primero de la lista, que cambia cada
+  // tick, y Hume iba y venía entre monstruos sueltos (2026-10-12).
+  const big = biggestCluster(near, EARLY.clusterR, inp.me);
   if (big) {
-    if (inp.prev && dist(inp.prev, big.at) <= EARLY.recenterAt) return { camp: inp.prev, why: `grupo de ${big.n} de mi nivel` };
-    return { camp: big.at, why: `grupo de ${big.n} de mi nivel` };
+    if (inp.prev && dist(inp.prev, big.at) <= EARLY.recenterAt) return { camp: inp.prev, why: `grupo de ${big.n} atacable(s)` };
+    // Se queda mientras tenga atacables cerca del campamento; se muda solo por un grupo de verdad.
+    if (inp.prev && big.n < INITIAL.moveForGroup && near.some((m) => dist(m, inp.prev!) <= INITIAL.keepNear)) return { camp: inp.prev, why: 'sigo en el campamento' };
+    return { camp: big.at, why: `grupo de ${big.n} atacable(s)` };
   }
   if (inp.prev) return { camp: inp.prev, why: 'sigo en el campamento' };
   const F = inp.field;
@@ -114,12 +122,13 @@ export const EARLY = {
 
 
 /** Centro del grupo más grande (monstruo con más vecinos a <= r) entre `pool`, con su tamaño. */
-export function biggestCluster<M extends Pos>(pool: readonly M[], r: number = EARLY.clusterR): { at: Pos; n: number } | null {
+export function biggestCluster<M extends Pos>(pool: readonly M[], r: number = EARLY.clusterR, me?: Pos): { at: Pos; n: number } | null {
   let best: Pos | null = null;
   let bn = 0;
   for (const m of pool) {
     const n = pool.filter((o) => dist(o, m) <= r).length;
-    if (n > bn) { bn = n; best = m; }
+    // Con `me`, en un empate gana el más cercano (sin `me`, el primero, como antes).
+    if (n > bn || (me && best && n === bn && dist(m, me) < dist(best, me))) { bn = n; best = m; }
   }
   return best ? { at: { x: Math.round(best.x), y: Math.round(best.y) }, n: bn } : null;
 }

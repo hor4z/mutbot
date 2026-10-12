@@ -32,6 +32,13 @@ const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
   const far = initialCamp({ me, field: F0, monsters: [{ x: 135, y: 160 }], prev: null, rand: () => 0.5 });
   ok('inicial: un monstruo a más de scan no cuenta', far.why.startsWith('sin monstruos'), far);
   ok('inicial: dura hasta el 20', INITIAL.untilLevel === 20);
+  const solos = [{ x: 180, y: 140 }, { x: 160, y: 131 }, { x: 175, y: 115 }];
+  const nearest = initialCamp({ me: { x: 158, y: 130 }, field: F0, monsters: solos, prev: null, rand: () => 0.5 });
+  ok('inicial: todos sueltos → el más cercano (no el primero de la lista)', nearest.camp.x === 160 && nearest.camp.y === 131, nearest);
+  const stay = initialCamp({ me: { x: 160, y: 131 }, field: F0, monsters: [{ x: 163, y: 133 }, { x: 175, y: 115 }], prev: { x: 160, y: 131 }, rand: () => 0.5 });
+  ok('inicial: con atacables cerca del campamento no se muda por uno suelto', stay.camp.x === 160 && stay.camp.y === 131, stay);
+  const go = initialCamp({ me: { x: 160, y: 131 }, field: F0, monsters: [{ x: 163, y: 133 }, { x: 170, y: 122 }, { x: 171, y: 123 }, { x: 169, y: 123 }], prev: { x: 160, y: 131 }, rand: () => 0.5 });
+  ok('inicial: se muda por un grupo de 3', dist(go.camp, { x: 170, y: 122 }) <= 2, go);
   // El campo sale de con qué puede, no del nivel.
   const lv = (t: number) => ({ 3: 2, 2: 4, 0: 6, 1: 9, 4: 12, 6: 14 } as Record<number, number>)[t];
   ok('campo: solo arañas → este', fieldFor((t) => t === 3, lv) === INITIAL.fields[0]);
