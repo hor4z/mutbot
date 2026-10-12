@@ -39,7 +39,7 @@ reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, 
 código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
 
 `--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
-sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal); la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
+sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal), y el personaje nuevo que el server no deja crear con código 6; la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
 la sesión vieja del propio bot). Lo pasa la estación.
 
 ## Estructura
@@ -595,10 +595,26 @@ navegador, les pone una rutina y muestra adentro el panel de cada bot (iframe a 
 su consola.
 
 - **Personajes:** cada `.env` / `.env.<nombre>` de la raíz con `MUBOT_USER`, `MUBOT_PASS` y
-  `MUBOT_CHAR` (`.env.example` no cuenta). La estación no lee ni pasa la contraseña: lanza
+  `MUBOT_CHAR` (`.env.example` no cuenta). La estación no lee ni pasa la contraseña (salvo al escribir
+  el `.env` de un personaje nuevo, ver abajo): lanza
   `bun --env-file=<archivo> run headless-bot.ts --allow-remote --proxy … --auto-seconds 0
   --ws-port 879x --exit-if-in-use` sin heredar ningún `MUBOT_*` propio. Servidor por defecto el
   de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` / `MUBOT_CS_PORT` lo cambian.
+- **Personaje nuevo** (botón "Nuevo personaje" en Personajes; `POST /api/do {action:'create', user, pass, char, cls, existing}`):
+  - Registra la cuenta con el mismo endpoint que "Crear cuenta" del cliente web: `POST https://<host del
+    proxy>/api/register {username, password}` (`MUBOT_REGISTER_URL` lo cambia). Errores `taken` / `throttled`.
+    Con "ya tengo la cuenta" (`existing`) no registra.
+  - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles, y además sin
+    comillas, `\`, `$` ni `#` (cambian cómo Bun lee el env). Nombre de 4 a 10 letras o números.
+  - Escribe `.env.<cuenta>` (modo 600, falla si ya existe) con `MUBOT_CREATE_CLASS` (dk, dw, elf, mg) y lo
+    conecta en pausa. Es la única vez que la estación toca una clave: no la loguea ni la devuelve.
+  - El bot (`world.ts:createCharacter`), si `MUBOT_CHAR` no está en la cuenta y hay `MUBOT_CREATE_CLASS`,
+    manda `C1 0F F3 01 <nombre 10 bytes> <clase << 2>` (número de red: DW 0, DK 4, Elf 8, MG 12; el
+    adaptador del 0.97d no lo toca) y espera F3/01: byte 4 = 1 creado. Éxito y error comparten código y
+    llegan como `CharacterCreationSuccessful`. Si falla sale con **código 6** y no reintenta. MG pide
+    desbloqueo (`UnlockFlags` del CharacterList). **Sin verificar en vivo.**
+  - `GET /api/names`: 8 nombres sugeridos (`names.ts`: raíces + finales de fantasía, siempre de 4 a 10
+    letras, sin repetir los personajes de la estación).
 - **Puertos:** estación 8787 (`ESTACION_PORT`), agente del navegador 8788, bots 8791, 8792…
   (por orden alfabético del archivo de env).
 - **Rutinas** (`estacion-logic.ts:routineCommands`): se traducen a órdenes del panel y se mandan por

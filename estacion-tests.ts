@@ -10,7 +10,9 @@ import {
   GOLD_TTL_MS, applyGoldSignal, freshGolds,
   DEFAULT_SERVER, botArgs, charFromEnv, exitStatus, isCharEnvFile, isRoutine, parseEnvFile, parseStationRequest,
   processRunsAccount, routineCommands, type CharConfig,
+  accountProblem, newCharEnvFile, newCharEnvText, type NewCharRequest,
 } from './estacion-logic';
+import { coolName, coolNames, joinParts, validCharName } from './names';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -102,4 +104,36 @@ ok('salida: 4 = cuenta bloqueada', exitStatus(4).status === 'failed' && exitStat
 ok('salida: 5 = login rechazado', exitStatus(5).status === 'failed' && exitStatus(5).msg.includes('rechazó'));
 
 console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
+// --- Personaje nuevo ----------------------------------------------------------------------
+{
+  const base = { action: 'create', user: 'cuenta9', pass: 'cl4ve!', char: 'Umbrion', cls: 'dk', existing: false };
+  const r = parseStationRequest(base);
+  ok('crear: pedido válido', r?.action === 'create' && (r as NewCharRequest).cls === 'dk', r);
+  ok('crear: clase desconocida', parseStationRequest({ ...base, cls: 'sum' }) === null);
+  ok('crear: nombre corto o raro', parseStationRequest({ ...base, char: 'Abc' }) === null && parseStationRequest({ ...base, char: 'Ñandú1' }) === null);
+  ok('crear: campo de más', parseStationRequest({ ...base, x: 1 }) === null);
+  ok('crear: sin existing', parseStationRequest({ action: 'create', user: 'cuenta9', pass: 'cl4ve!', char: 'Umbrion', cls: 'dk' }) === null);
+  ok('cuenta: largo y caracteres', accountProblem('abc', 'clave') !== null && accountProblem('cuenta9', 'abc') !== null && accountProblem('cuenta 9', 'clave') !== null);
+  ok('cuenta: clave sin comillas/$/#', ["cla've", 'cla$e', 'cla#e', 'cla"e', 'cla\\e'].every((p) => accountProblem('cuenta9', p) !== null));
+  ok('cuenta: válida', accountProblem('cuenta9', 'cl4ve!') === null);
+  const text = newCharEnvText(r as NewCharRequest);
+  const back = charFromEnv(newCharEnvFile('Cuenta9'), text);
+  ok('crear: el .env se vuelve a leer como personaje', back?.char === 'Umbrion' && back.user === 'cuenta9' && back.envFile === '.env.cuenta9', back);
+  ok('crear: el .env trae la clase y la clave', parseEnvFile(text).MUBOT_CREATE_CLASS === 'dk' && parseEnvFile(text).MUBOT_PASS === 'cl4ve!');
+  ok('crear: archivo de personaje', isCharEnvFile(newCharEnvFile('Cuenta9')));
+}
+
+// --- Nombres ------------------------------------------------------------------------------
+{
+  ok('nombres: unir sin vocales dobles', joinParts('umbra', 'ion') === 'Umbrion' && joinParts('drak', 'ar') === 'Drakar', [joinParts('umbra', 'ion'), joinParts('drak', 'ar')]);
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const many = Array.from({ length: 500 }, () => coolName(rand));
+  ok('nombres: todos válidos para el server', many.every(validCharName), many.filter((n) => !validCharName(n)));
+  const list = coolNames(8, ['Umbrion'], rand);
+  ok('nombres: 8 distintos', list.length === 8 && new Set(list.map((n) => n.toLowerCase())).size === 8, list);
+  ok('nombres: no repite los tomados', coolNames(50, many.slice(0, 40), rand).every((n) => !many.slice(0, 40).includes(n)));
+  ok('nombres: azar extremo también vale', validCharName(coolName(() => 0)) && validCharName(coolName(() => 0.9999)));
+}
+
 if (fails) process.exit(1);

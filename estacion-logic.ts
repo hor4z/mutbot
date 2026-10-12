@@ -4,6 +4,7 @@
  * procesos: se testea en estacion-tests.ts.
  */
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
+import { validCharName } from './names';
 
 /** Un personaje = un archivo de env (`.env`, `.env.melu`, ...) con MUBOT_USER/PASS/CHAR. */
 export type CharConfig = { key: string; envFile: string; user: string; char: string };
@@ -94,6 +95,7 @@ export type CharStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fa
 
 /** Cómo se lee la salida del bot. */
 export function exitStatus(code: number | null): { status: CharStatus; msg: string } {
+  if (code === 6) return { status: 'failed', msg: 'el server no dejó crear el personaje (¿nombre tomado o clase bloqueada?). Mirá la consola.' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
   if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá el .env del personaje.' };
@@ -109,11 +111,67 @@ export function exitStatus(code: number | null): { status: CharStatus; msg: stri
 export type StationRequest =
   | { action: 'connect'; char: string; routine: Routine }
   | { action: 'disconnect'; char: string }
-  | { action: 'routine'; char: string; routine: Routine };
+  | { action: 'routine'; char: string; routine: Routine }
+  | NewCharRequest;
+
+/**
+ * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
+ * clase. La estación escribe su `.env.<cuenta>` y el bot crea el personaje al entrar.
+ */
+export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey; existing: boolean };
+
+/**
+ * Clases que se pueden crear en este server (0.97d) y su número de red (`CharacterClassNumber` del
+ * cliente; el packet lo lleva corrido 2 bits). MG pide un personaje de nivel alto en la cuenta.
+ */
+export const CHAR_CLASSES = {
+  dk: { id: 4, label: 'Dark Knight' },
+  dw: { id: 0, label: 'Dark Wizard' },
+  elf: { id: 8, label: 'Fairy Elf' },
+  mg: { id: 12, label: 'Magic Gladiator' },
+} as const;
+export type CharClassKey = keyof typeof CHAR_CLASSES;
+export const isCharClass = (v: unknown): v is CharClassKey => typeof v === 'string' && Object.hasOwn(CHAR_CLASSES, v);
+
+/**
+ * Cuenta y clave como las valida el registro del cliente web: usuario de 4 a 10 letras o números,
+ * clave de 4 a 10 caracteres visibles. Además, sin comillas, `\`, `$` ni `#`: la clave va a un
+ * archivo de env y esos caracteres cambian cómo lo lee Bun. Devuelve el motivo o null.
+ */
+export function accountProblem(user: string, pass: string): string | null {
+  if (!/^[A-Za-z0-9]{4,10}$/.test(user)) return 'la cuenta tiene que tener de 4 a 10 letras o números';
+  if (pass.length < 4 || pass.length > 10) return 'la clave tiene que tener de 4 a 10 caracteres';
+  if (!/^[!-~]+$/.test(pass)) return 'la clave solo puede tener caracteres visibles, sin espacios ni acentos';
+  if (/['"`\\$#]/.test(pass)) return 'la clave no puede tener comillas, \\, $ ni #';
+  return null;
+}
+
+/** Archivo de env de un personaje nuevo: uno por cuenta. */
+export const newCharEnvFile = (user: string) => `.env.${user.toLowerCase()}`;
+
+/** Contenido de ese archivo. La clave va entre comillas simples (Bun no la expande). */
+export function newCharEnvText(r: NewCharRequest): string {
+  return [
+    `# Creado por la estación el ${new Date().toISOString().slice(0, 10)}.`,
+    `MUBOT_USER=${r.user}`,
+    `MUBOT_PASS='${r.pass}'`,
+    `MUBOT_CHAR=${r.char}`,
+    `# Si el personaje no existe en la cuenta, el bot lo crea con esta clase.`,
+    `MUBOT_CREATE_CLASS=${r.cls}`,
+    '',
+  ].join('\n');
+}
 
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
+  if (r.action === 'create') {
+    const keys = Object.keys(r).sort().join();
+    if (keys !== 'action,char,cls,existing,pass,user') return null;
+    if (typeof r.user !== 'string' || typeof r.pass !== 'string' || typeof r.char !== 'string' || typeof r.existing !== 'boolean') return null;
+    if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !isCharClass(r.cls)) return null;
+    return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
+  }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;

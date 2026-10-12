@@ -1572,3 +1572,68 @@ time {
   text-align: center;
   pointer-events: none;
 }
+
+/* Personaje nuevo (estación) */
+.new-char-open {
+  width: 100%;
+  justify-content: center;
+}
+.new-char h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--gold);
+}
+.new-char .field {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.field-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #373b41;
+  border-radius: 7px;
+  background: #1e2125;
+  color: inherit;
+  font-size: 13px;
+}
+.field-input:focus {
+  outline: 1px solid var(--gold);
+}
+.new-char .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 12px;
+  font-size: 12px;
+}
+.name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.name-chips .chip {
+  padding: 4px 9px;
+  border: 1px solid #373b41;
+  border-radius: 999px;
+  background: #1e2125;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.name-chips .chip.active,
+.name-chips .chip:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.new-char code {
+  font-size: 11px;
+}

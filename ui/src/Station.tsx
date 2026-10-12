@@ -12,8 +12,10 @@ import {
   Settings2,
   Sparkles,
   Trophy,
+  UserPlus,
+  Dices,
 } from "lucide-react";
-import type { Routine, StationRequest } from "../../estacion-logic";
+import type { CharClassKey, Routine, StationRequest } from "../../estacion-logic";
 import { Action, Badge, Choice, compact, fmt } from "./components";
 import knight from "../../assets/ui/knight-alpha.webp";
 export type Character = {
@@ -195,6 +197,112 @@ function Ranking({ mine }: { mine: string[] }) {
     </div>
   );
 }
+const classes: { value: CharClassKey; label: string }[] = [
+  { value: "dk", label: "Dark Knight" },
+  { value: "dw", label: "Dark Wizard" },
+  { value: "elf", label: "Fairy Elf" },
+  { value: "mg", label: "Magic Gladiator (pide un personaje alto)" },
+];
+// Personaje nuevo: cuenta (se registra en el server), clase y nombre, con sugerencias de nombres.
+function NewCharacter({ act }: { act: (r: StationRequest) => Promise<boolean> }) {
+  const [open, setOpen] = useState(false);
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [existing, setExisting] = useState(false);
+  const [cls, setCls] = useState<CharClassKey>("dk");
+  const [char, setChar] = useState("");
+  const [names, setNames] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  async function roll() {
+    try {
+      const r = await fetch("/api/names", { cache: "no-store" });
+      const j = (await r.json()) as { names: string[] };
+      setNames(j.names);
+      setChar((old) => old || j.names[0] || "");
+    } catch {}
+  }
+  useEffect(() => {
+    if (open && !names.length) void roll();
+  }, [open]);
+  const problem = !/^[A-Za-z0-9]{4,10}$/.test(user)
+    ? "Cuenta: 4 a 10 letras o números."
+    : !/^[!-~]{4,10}$/.test(pass) || /['"`\\$#]/.test(pass)
+      ? "Clave: 4 a 10 caracteres, sin espacios, comillas, \\, $ ni #."
+      : !/^[A-Za-z0-9]{4,10}$/.test(char)
+        ? "Nombre: 4 a 10 letras o números."
+        : "";
+  async function create() {
+    setBusy(true);
+    const ok = await act({ action: "create", user, pass, char, cls, existing });
+    setBusy(false);
+    if (ok) {
+      setOpen(false);
+      setUser("");
+      setPass("");
+      setChar("");
+      setNames([]);
+    }
+  }
+  if (!open)
+    return (
+      <Action className="quiet new-char-open" onClick={() => setOpen(true)}>
+        <UserPlus size={15} />
+        Nuevo personaje
+      </Action>
+    );
+  return (
+    <div className="manage-character new-char">
+      <h3>
+        <UserPlus size={16} />
+        Nuevo personaje
+      </h3>
+      <label className="field">
+        <span>Cuenta</span>
+        <input className="field-input" value={user} maxLength={10} autoComplete="off" onChange={(e) => setUser(e.target.value.trim())} />
+      </label>
+      <label className="field">
+        <span>Clave</span>
+        <input className="field-input" type="password" value={pass} maxLength={10} autoComplete="new-password" onChange={(e) => setPass(e.target.value)} />
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+        Ya tengo la cuenta (no registrarla)
+      </label>
+      <div className="field">
+        <span>Clase</span>
+        <Choice label="Clase" value={cls} onChange={(v) => setCls(v as CharClassKey)} items={classes} />
+      </div>
+      <label className="field">
+        <span>Nombre</span>
+        <span className="input-action">
+          <input className="field-input" value={char} maxLength={10} onChange={(e) => setChar(e.target.value.trim())} />
+          <Action className="quiet" aria-label="Otros nombres" onClick={() => void roll()}>
+            <Dices size={15} />
+          </Action>
+        </span>
+      </label>
+      <div className="name-chips">
+        {names.map((n) => (
+          <button key={n} className={`chip ${n === char ? "active" : ""}`} onClick={() => setChar(n)}>
+            {n}
+          </button>
+        ))}
+      </div>
+      {problem && (user || pass || char) && <p className="warning">{problem}</p>}
+      <p className="muted">
+        La clave queda en <code>.env.{user.toLowerCase() || "cuenta"}</code> (solo en esta máquina). El personaje se crea al conectar y queda en pausa en Lorencia.
+      </p>
+      <div className="manage-actions">
+        <Action className="primary" disabled={busy || !!problem} onClick={() => void create()}>
+          {busy ? "Creando…" : existing ? "Crear personaje" : "Crear cuenta y personaje"}
+        </Action>
+        <Action className="quiet" disabled={busy} onClick={() => setOpen(false)}>
+          Cancelar
+        </Action>
+      </div>
+    </div>
+  );
+}
 function ManageCharacter({
   c,
   selected,
@@ -204,7 +312,7 @@ function ManageCharacter({
   c: Character;
   selected: boolean;
   onSelect: () => void;
-  act: (r: StationRequest) => Promise<void>;
+  act: (r: StationRequest) => Promise<boolean>;
 }) {
   const [routine, setRoutine] = useState(fromRoutine(c.routine ?? c.pending));
   const [settings, setSettings] = useState(false);
@@ -362,6 +470,7 @@ export function Station() {
   }, [selected, tab]);
   async function act(body: StationRequest) {
     let msg = "La estación no contesta.";
+    let ok = false;
     try {
       const r = await fetch("/api/do", {
         method: "POST",
@@ -370,11 +479,13 @@ export function Station() {
       });
       const j = await r.json();
       msg = j.msg ?? msg;
+      ok = r.ok && j.ok !== false;
     } catch {}
-    if (!live.current) return;
+    if (!live.current) return ok;
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 4500);
+    toastTimer.current = setTimeout(() => setToast(""), 6000);
+    return ok;
   }
   const c = chars.find((c) => c.key === selected);
   const running = chars.filter((c) => c.pid != null);
@@ -446,6 +557,7 @@ export function Station() {
                     No hay personajes configurados todavía.
                   </p>
                 )}
+                <NewCharacter act={act} />
                 <p className="connection-note">
                   Antes de conectar un personaje, cerrá su sesión en el juego.
                 </p>

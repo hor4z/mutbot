@@ -42,6 +42,9 @@ export const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
 export const USERNAME = args.get('--user') ?? process.env.MUBOT_USER ?? 'test1';
 export const PASSWORD = args.get('--pass') ?? process.env.MUBOT_PASS ?? 'test1';
 export const CHAR_NAME = args.get('--char') ?? process.env.MUBOT_CHAR ?? 'test1Dk';
+// Personaje nuevo (lo escribe la estación en el .env): si CHAR_NAME no está en la cuenta, se crea
+// con esta clase (dk, dw, elf, mg). Sin esto, entra con el primero de la lista, como siempre.
+export const CREATE_CLASS = process.env.MUBOT_CREATE_CLASS ?? '';
 const ALLOW_REMOTE = args.has('--allow-remote');
 
 const LOCAL = /^(127\.|localhost$|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;

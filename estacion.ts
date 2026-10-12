@@ -15,11 +15,13 @@ import { serveRadarAsset } from './radar-assets';
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync, writeFileSync } from 'node:fs';
+import { coolNames } from './names';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
+  CHAR_CLASSES, newCharEnvFile, newCharEnvText, type NewCharRequest,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
@@ -306,6 +308,50 @@ function disconnect(s: Slot): { ok: boolean; msg: string } {
   return { ok: true, msg: `desconectando a ${s.cfg.char}` };
 }
 
+// --- Personaje nuevo -------------------------------------------------------------------------
+// Registro de cuentas del server: el mismo endpoint que el formulario "Crear cuenta" del cliente web
+// (su perfil no trae dominio propio, así que usa `/api/register` del mismo host, como el ranking).
+const REGISTER_URL = process.env.MUBOT_REGISTER_URL ?? `https://${new URL(SERVER.proxy).host}/api/register`;
+
+/**
+ * Registra la cuenta (salvo que ya exista), escribe su `.env.<cuenta>` (solo legible por el
+ * usuario) y la conecta en pausa: el bot crea el personaje al entrar (MUBOT_CREATE_CLASS). La clave
+ * no se loguea ni vuelve al navegador.
+ */
+async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string }> {
+  if (slots.has(r.char.toLowerCase())) return { ok: false, msg: `ya hay un personaje ${r.char} en la estación` };
+  const file = newCharEnvFile(r.user);
+  if (existsSync(join(ROOT, file))) return { ok: false, msg: `ya existe ${file}: esa cuenta ya tiene personaje en la estación` };
+  if (!r.existing) {
+    try {
+      const res = await fetch(REGISTER_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: r.user, password: r.pass }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const j = (await res.json().catch(() => ({}))) as { code?: string; error?: string };
+      if (!res.ok) {
+        const why = j.code === 'taken' ? 'esa cuenta ya existe (si es tuya, marcá "ya tengo la cuenta")'
+          : j.code === 'throttled' ? 'el server frenó los registros por un rato: probá en unos minutos'
+          : (j.error ?? `HTTP ${res.status}`);
+        say(`registro de ${r.user}: ${why}`);
+        return { ok: false, msg: `No se pudo crear la cuenta: ${why}` };
+      }
+      say(`cuenta ${r.user} registrada`);
+    } catch {
+      return { ok: false, msg: 'No se pudo crear la cuenta: el registro del server no contesta' };
+    }
+  }
+  writeFileSync(join(ROOT, file), newCharEnvText(r), { mode: 0o600, flag: 'wx' });
+  refreshSlots();
+  const s = slots.get(r.char.toLowerCase());
+  if (!s) return { ok: false, msg: `escribí ${file} pero no lo pude leer` };
+  say(`personaje nuevo ${r.char} (${CHAR_CLASSES[r.cls].label}) en ${file}`);
+  const c = connect(s, { kind: 'pause' });
+  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Cuenta' : 'Cuenta creada'}. Conectando a ${r.char}: el bot lo crea al entrar y lo deja en pausa.` : c.msg };
+}
+
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
   if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
   if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
@@ -407,6 +453,8 @@ Bun.serve({
       if (url.pathname === '/api/ranking') return json(await ranking());
       // Equipo: dónde está cada personaje y los pedidos de ayuda vigentes (los bots lo consultan).
       if (url.pathname === '/api/team') return json(team());
+      // Nombres sugeridos para un personaje nuevo (sin repetir los que ya hay en la estación).
+      if (url.pathname === '/api/names') return json({ names: coolNames(8, [...slots.values()].map((s) => s.cfg.char)) });
       if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -448,6 +496,10 @@ Bun.serve({
       const r = parseStationRequest(raw);
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       refreshSlots();
+      if (r.action === 'create') {
+        const res = await createChar(r);
+        return json(res, res.ok ? 200 : 409);
+      }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);

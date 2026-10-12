@@ -67,7 +67,7 @@ import { Backoff } from './protocol097';
 import { loadLearningState } from './route';
 import { bot, world } from './state';
 import { log, sleep } from './util';
-import { loginAndSelectCharacter, trackWorld } from './world';
+import { CreateCharacterError, loginAndSelectCharacter, trackWorld } from './world';
 import { startStatusServer } from './ws-server';
 
 // ---------------------------------------------------------------------------
@@ -83,6 +83,8 @@ const EXIT_IN_USE = 3;
 // Login rechazado sin arreglo reintentando: 4 = cuenta bloqueada, 5 = clave, cuenta o versión mal.
 const EXIT_BLOCKED = 4;
 const EXIT_LOGIN_REFUSED = 5;
+// No se pudo crear el personaje nuevo (MUBOT_CREATE_CLASS): la estación lo muestra.
+const EXIT_CREATE_FAILED = 6;
 
 // Tras una sesión trabada (ciego), esto antes de volver a entrar.
 const BLIND_WAIT_MS = 5_000;
@@ -167,6 +169,11 @@ async function main() {
       const r = await session(deadline);
       for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
     } catch (e) {
+      if (e instanceof CreateCharacterError) {
+        console.error(`${e.message} No reintento.`);
+        closeSockets();
+        process.exit(EXIT_CREATE_FAILED);
+      }
       if (e instanceof LoginError && FATAL_LOGIN.has(e.result)) {
         console.error(`${e.message}: no reintento.`);
         closeSockets();

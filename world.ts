@@ -18,7 +18,9 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_NAME, PASSWORD, USERNAME } from './config';
+import { CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
+import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
+import { journal } from './journal';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
 import { scheduleEventPolls } from './events';
 import { isMonsterType, isTownNpcType } from './explore';
@@ -452,13 +454,40 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
+/** El server no dejó crear el personaje (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
+export class CreateCharacterError extends Error {}
+
+/**
+ * Crea el personaje en la cuenta: `C1 0F F3 01 <nombre 10 bytes> <clase << 2>`, igual que el
+ * cliente web (el adaptador del 0.97d no lo reescribe). Contesta F3/01 con el resultado en el
+ * byte 4 (1 = creado); éxito y error comparten código, así que llegan los dos como
+ * `CharacterCreationSuccessful` (el primero de la tabla). Máximo 5 personajes por cuenta.
+ */
+async function createCharacter(name: string, cls: CharClassKey, count: number) {
+  if (count >= 5) throw new CreateCharacterError(`La cuenta ya tiene 5 personajes: no puedo crear a ${name}.`);
+  const p = new Uint8Array(15);
+  p.set([0xc1, 15, 0xf3, 0x01]);
+  for (let i = 0; i < name.length; i++) p[4 + i] = name.charCodeAt(i);
+  p[14] = CHAR_CLASSES[cls].id << 2;
+  log(`${name} no está en la cuenta: lo creo (${CHAR_CLASSES[cls].label}).`);
+  const reply = waitFor(['CharacterCreationSuccessful', 'CharacterCreationFailed']);
+  sendToGS(new DataView(p.buffer));
+  const bytes = toBytes(await reply);
+  if (bytes[4] !== 1) throw new CreateCharacterError(`El server no dejó crear a ${name} (respuesta ${bytes[4]}): nombre tomado o clase bloqueada.`);
+  log(`Personaje ${name} creado.`);
+  journal('decide', `Personaje nuevo: ${name} (${CHAR_CLASSES[cls].label})`);
+  return { SlotIndex: bytes[15] ?? count, Name: name, Level: 1, ClassId: CHAR_CLASSES[cls].id };
+}
+
 export async function selectCharacter(charListBytes: any) {
   const characters = parseCharacterList097(charListBytes);
   log(
     `Personajes: ${characters.map((c: any) => `${c.Name}(lv.${c.Level})`).join(', ')}`,
   );
 
-  const target = characters.find((c: any) => c.Name === CHAR_NAME) ?? characters[0];
+  let target = characters.find((c: any) => c.Name === CHAR_NAME);
+  if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
+  target ??= characters[0];
   if (!target) throw new Error('La cuenta no tiene personajes');
 
   const selP = SelectCharacterPacket.createPacket();
