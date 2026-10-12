@@ -536,6 +536,9 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
     Hound; sur: Lich), eligiendo campo y monstruos con `power.ts` (sus stats, no el nivel). Campamento
     estable: empate → el más cercano; se muda solo por un grupo de 3+.
   - No ataca dorados con los que no puede ni sale a cazar en las invasiones.
+  - Levanta zen y pociones (14/0-3), además de las cajas.
+  - No se va de Lorencia (la ruta no lo mueve) hasta nivel 20 + 5.000 zen (warp a Devias 4: 2.500) +
+    poder con el Lich (`readyToLeave`). Hume en el 27 con 0 zen intentaba el warp y volvía al Lich.
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
   - **Farmeo inicial** (personaje nuevo, nivel 1 a 9 en Lorencia, `INITIAL` en `early.ts`): solo monstruos de hasta 3 niveles más que él (nivel de `data/monsters.json`; sin dato, no). Acampa en el grupo más grande de esos a ≤ 20 tiles y, sin ninguno a la vista, se aleja del pueblo (135,128) hacia el Lich en proporción al nivel. En el 10 pasa al farmeo avanzado: el plan del Lich.
   - Lorencia (10-19): directo al Lich (134,202 ±3) con una salida variada en cada reset.

@@ -623,7 +623,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const earlyDry = earlyStarving && rivalsNear === 0;
     if (devCrowded) devCrowdSince = null;
     // Cazando no se cambia de spot: manda la cacería.
-    if (!bot.hunting && !goldHold && (ticks % 10 === 0 || crowded || earlyDry || !bot.currentSpot)) {
+    // Farmeo inicial (personaje nuevo en Lorencia): la ruta no lo mueve hasta que esté listo (early-step).
+    if (!bot.hunting && !goldHold && !early.initial() && (ticks % 10 === 0 || crowded || earlyDry || !bot.currentSpot)) {
       if (earlyDry && bot.currentSpot) dryAt.set(bot.currentSpot.index, now0); // no volver enseguida (rebote entre entradas)
       const moved = await maybeChangeSpot({ crowded, mapDead: earlyDry });
       if (moved) {
@@ -644,7 +645,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const npcs = ctx.npcs;
     const targetInMeleeRange =
       ctx.target != null && npcs.has(ctx.target) && chebyshev(world.x, world.y, npcs.get(ctx.target)!.x, npcs.get(ctx.target)!.y) <= 1;
-    if (!targetInMeleeRange && (await lootStep())) {
+    if (!targetInMeleeRange && (await lootStep(weak))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;
@@ -878,7 +879,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await walkTowards(ctx, g.x, g.y);
       continue;
     }
-    if (explorer.isDry(now)) {
+    if (explorer.isDry(now) && !early.initial()) {
       const where = bot.currentSpot?.name ?? `map ${world.map}`;
       log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${where}: busco otro spot.`);
       if (bot.currentSpot) dryAt.set(bot.currentSpot.index, now);

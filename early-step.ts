@@ -33,7 +33,15 @@ export class EarlyPlanner {
 
   /** ¿Farmeo inicial? (personaje nuevo en Lorencia por debajo de INITIAL.untilLevel). */
   initial(): boolean {
-    return world.map === EARLY.lorencia.map && world.level < INITIAL.untilLevel && isFreshChar(world.resets, world.stats);
+    return world.map === EARLY.lorencia.map && isFreshChar(world.resets, world.stats) && !this.readyToLeave();
+  }
+
+  /**
+   * ¿Puede dejar Lorencia? Nivel >= untilLevel, zen para el warp a Devias (sin eso el warp falla: Hume
+   * en el 27 con 0 zen) y que pueda con el Lich (lo más fuerte del mapa). Sus stats deciden, no el nivel.
+   */
+  readyToLeave(): boolean {
+    return world.level >= INITIAL.untilLevel && bot.lastMoney >= INITIAL.leaveZen && canFight(this.fighter(), INITIAL.lichType);
   }
 
   /** El personaje como lo ve power.ts (stats reales, vida máxima, clase). */

@@ -76,7 +76,7 @@ const LOOT_RADIUS = 12;
 const LOOT_TIMEOUT_MS = 8000;
 
 // Devuelve true si hizo algo (un paso o el pickup).
-export async function lootStep(): Promise<boolean> {
+export async function lootStep(fresh = false): Promise<boolean> {
   if (!drops.size) {
     lootState.looting = null;
     return false;
@@ -90,7 +90,7 @@ export async function lootStep(): Promise<boolean> {
     }
     lootState.looting = null;
   }
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS);
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS, fresh);
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });

@@ -210,5 +210,14 @@ const hpOf = (t: number) => HP[t] ?? null;
     && !isFreshChar(120, { str: 28, agi: 20, vit: 25, ene: 10 }) && !isFreshChar(null, { str: 65535, agi: 100, vit: 100, ene: 65535 }));
 }
 
+// --- Personaje nuevo: también zen y pociones -----------------------------------------------
+{
+  const money = { isMoney: true, group: 0, num: 0 } as any;
+  const potion = { isMoney: false, group: 14, num: 1 } as any;
+  const box = { isMoney: false, group: 14, num: 11 } as any;
+  ok('loot: con resets ni zen ni pociones (como siempre)', !isValuableDrop(money) && !isValuableDrop(potion) && isValuableDrop(box));
+  ok('loot: personaje nuevo levanta zen, pociones y cajas', isValuableDrop(money, true) && isValuableDrop(potion, true) && isValuableDrop(box, true));
+}
+
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE FARMEO PASARON' : `\n${fails} TEST(S) DE FARMEO FALLARON`);
 process.exit(fails ? 1 : 0);

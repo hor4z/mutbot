@@ -38,6 +38,10 @@ export { dist, type Pos };
  */
 export const INITIAL = {
   untilLevel: 20,
+  /** zen para irse de Lorencia: el warp a Devias 4 cuesta 2.500 (más un resto para pociones) */
+  leaveZen: 5000,
+  /** el Lich: hay que poder con él antes de irse */
+  lichType: 6,
   scan: 20,
   /** el campamento se mantiene mientras haya atacables a <= esto de él */
   keepNear: 8,
