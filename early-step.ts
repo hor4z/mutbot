@@ -70,7 +70,9 @@ export class EarlyPlanner {
   /** ¿Manda el arranque ahora? */
   active(): boolean {
     if (bot.hunting || bot.pinnedSpot || world.level >= CORNER.minLevel) return false;
-    if (world.map === EARLY.lorencia.map) return world.level < EARLY.lorencia.maxLevel && this.lichOffFor !== bot.lastArrivalAt;
+    // Personaje nuevo sin terminar el farmeo inicial: manda el arranque aunque pase el 20 (Hume en el 27
+    // caía al farmeo de siempre, iba al Lich por la cripta y lo mataba un Skeleton).
+    if (world.map === EARLY.lorencia.map) return this.initial() || (world.level < EARLY.lorencia.maxLevel && this.lichOffFor !== bot.lastArrivalAt);
     return world.map === EARLY.devias.map && bot.currentSpot != null && DEVIAS_WARPS.includes(bot.currentSpot.index);
   }
 

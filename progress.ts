@@ -23,7 +23,7 @@ const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit',
 // Si el server no los toma (stat en el tope: Melu con fuerza y energía en 65535), los puntos vuelven a
 // aparecer en el próximo CharacterLevelUpdate y el bot repetía los /add cada pocos segundos sin pelear
 // (2026-10-11: +13 niveles en 15 min). Si después de un reparto los puntos no bajaron, 15 min sin repartir.
-let statTry: { points: number; at: number } | null = null;
+let statTry: { points: number; at: number; level: number } | null = null;
 let statOffUntil = 0;
 /**
  * El seguimiento del último reparto (para detectar que el server no lo tomó: stats en el tope) arranca
@@ -42,6 +42,9 @@ export async function investStatPoints(force = false): Promise<number> {
   const fresh = !BUILD_ARG && family != null && isFreshChar(world.resets, world.stats);
   if (points <= 0 || (!force && !fresh && points < STAT_BATCH_MIN)) return 0;
   if (!force && Date.now() < statOffUntil) return 0;
+  // Si subió de nivel desde el reparto, los puntos que hay son nuevos (no es que el server no lo tomó):
+  // a un personaje nuevo que sube varios niveles por minuto lo frenaba 15 min sin repartir.
+  if (statTry && world.level !== statTry.level) statTry = null;
   if (statTry && Date.now() - statTry.at > 3000 && points >= statTry.points) {
     statTry = null; statOffUntil = Date.now() + 15 * 60_000;
     log(`Stats: el server no tomó el reparto (siguen ${points} puntos libres; ¿stats en el tope?): no reparto por 15 min.`);
@@ -68,7 +71,7 @@ export async function investStatPoints(force = false): Promise<number> {
     plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
   }
   journal('stat', plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '), { points, plan: Object.fromEntries(plan) });
-  statTry = { points, at: Date.now() };
+  statTry = { points, at: Date.now(), level: world.level };
   let spent = 0;
   for (const [name, n] of plan) {
     if (n <= 0) continue;
