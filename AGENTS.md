@@ -67,6 +67,7 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
 | `power.ts` | ¿Puede el personaje con este monstruo? Daño y defensa con sus stats reales y la clase contra vida/daño/defensa de `monsters.json`: lo mata en <= 6 s perdiendo <= 35 % de la vida. Decide qué ataca y a qué campo va un personaje nuevo, y si va por un dorado. Tests en `early-tests.ts`. |
+| `equip.ts` | Equiparse con lo que levanta (personaje nuevo). Tests en `equip-tests.ts`. |
 | `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
@@ -468,6 +469,13 @@ distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
   (zen levantado: no llega InventoryMoneyUpdate) o `C3 04 22 FF` (no se pudo). El zen del suelo llega
   como ítem 14/15 en `ItemsDropped`.
 
+### Mover ítems (equiparse)
+
+`C3 0C 24 <depósito> <casilla> <ítem 5 bytes> <depósito> <casilla>` (adaptador del cliente web para el
+0x24 de 19 bytes de season6; depósito 0 = inventario, equipo 0-11, bolsa 12-75). Respuesta `ItemMoved`
+(C3 24): byte 3 = casilla nueva o 0xFF (no se pudo: requisitos, clase o lugar). `equip.ts` lo usa con
+los 5 bytes crudos que ahora guarda el inventario (`raw`). **Probado en vivo** (Hume, 2026-10-12).
+
 ### Reaparición tras morir
 
 `RespawnAfterDeath075` (C1 F3 04, 22 bytes en este server): X @4, Y @5, mapa @6. **No se manejaba**:
@@ -544,7 +552,8 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
     Hound; sur: Lich), eligiendo campo y monstruos con `power.ts` (sus stats, no el nivel). Campamento
     estable: empate → el más cercano; se muda solo por un grupo de 3+.
   - No ataca dorados con los que no puede ni sale a cazar en las invasiones.
-  - Levanta zen y pociones (14/0-3), además de las cajas.
+  - Levanta zen, pociones (14/0-3), joyas y, con lugar en la bolsa, equipo; se equipa solo lo mejor
+    (`equip.ts`: lo intenta y si el server lo rechaza no lo vuelve a probar).
   - No se va de Lorencia (la ruta no lo mueve) hasta nivel 20 + 5.000 zen (warp a Devias 4: 2.500) +
     poder con el Lich (`readyToLeave`). Hume en el 27 con 0 zen intentaba el warp y volvía al Lich.
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:

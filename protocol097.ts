@@ -103,7 +103,7 @@ export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): b
 //   12 bytes (itemSerializer del cliente): número e[0], grupo nibble alto de e[5], nivel igual.
 // ---------------------------------------------------------------------------
 export type ItemInfo = { group: number; num: number; level: number; excellent: boolean };
-export type ItemSlot = ItemInfo & { slot: number };
+export type ItemSlot = ItemInfo & { slot: number; raw?: Uint8Array };
 export type ItemDrop = ItemInfo & { id: number; x: number; y: number };
 
 export function decodeItem5(e: Uint8Array): ItemInfo {
@@ -132,7 +132,8 @@ export function parseInventory(raw: Uint8Array | DataView | ArrayBuffer): ItemSl
   const out: ItemSlot[] = [];
   for (let i = 0; i < count; i++) {
     const o = 6 + i * (1 + size);
-    out.push({ slot: b[o], ...decode(size, b.subarray(o + 1, o + 1 + size)) });
+    const e = b.subarray(o + 1, o + 1 + size);
+    out.push({ slot: b[o], ...decode(size, e), ...(size === 5 ? { raw: e.slice() } : {}) });
   }
   return out;
 }
@@ -155,7 +156,7 @@ export function parseItemsDropped(raw: Uint8Array | DataView | ArrayBuffer): Ite
 export function parseItemAdded(raw: Uint8Array | DataView | ArrayBuffer): ItemSlot | null {
   const b = u8(raw);
   if (b.length >= 4 + 12) return { slot: b[3], ...decodeItem12(b.subarray(4, 16)) };
-  if (b.length >= 4 + 5) return { slot: b[3], ...decodeItem5(b.subarray(4, 9)) };
+  if (b.length >= 4 + 5) return { slot: b[3], ...decodeItem5(b.subarray(4, 9)), raw: b.slice(4, 9) };
   return null;
 }
 

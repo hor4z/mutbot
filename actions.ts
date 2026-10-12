@@ -14,7 +14,7 @@ import { DIR_DELTA, log } from './util';
 // WalkRequest075 (code 0x10), que además empuja TargetRotation en el nibble alto
 // del mismo byte que StepCount. Con 0xD4 el server ignora el paso en silencio.
 // Un packet armado byte a byte, listo para sendToGS.
-function rawPacket(bytes: number[]): DataView {
+export function rawPacket(bytes: number[]): DataView {
   return new DataView(Uint8Array.from(bytes, (b) => b & 0xff).buffer);
 }
 

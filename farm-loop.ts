@@ -20,6 +20,7 @@ import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
 import { canFight } from './power';
+import { equipStep } from './equip';
 import { attackerOf, ownAreaSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS } from './route';
@@ -283,6 +284,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastAnyNpcAt = Date.now();
   let devCrowdSince: number | null = null;
   const early = new EarlyPlanner();
+  let lastEquipTry = 0;
   // Regla fuerte de dorados (golden.ts) y los ya avisados.
   const golden = new GoldenRule();
   const goldAnnounced = new Set<number>();
@@ -645,6 +647,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const npcs = ctx.npcs;
     const targetInMeleeRange =
       ctx.target != null && npcs.has(ctx.target) && chebyshev(world.x, world.y, npcs.get(ctx.target)!.x, npcs.get(ctx.target)!.y) <= 1;
+    // Personaje nuevo: equiparse con lo que levantó (equip.ts), cada 8 s, en segundo plano.
+    if (weak && Date.now() - lastEquipTry > 8000) {
+      lastEquipTry = Date.now();
+      void equipStep().catch(() => {});
+    }
     if (!targetInMeleeRange && (await lootStep(weak))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;

@@ -67,7 +67,8 @@ const MONSTER_MAX_HP = new Map<number, number>(
 );
 
 export type ScopedNpc = { id: number; type: number; x: number; y: number };
-export type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean };
+/** `raw`: los 5 bytes del ítem tal como llegaron (el packet de mover ítem los lleva). */
+export type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean; raw?: Uint8Array };
 export type SkillInfo = { index: number; number: number; level: number };
 
 export const isGolden = (n: ScopedNpc) => GOLDEN_TYPES.has(n.type);
