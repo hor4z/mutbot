@@ -66,7 +66,7 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
-| `early.ts` | El arranque hasta el 100: salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
+| `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
@@ -524,7 +524,8 @@ quedan fijas en el C#.
 Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
-  - Lorencia: directo al Lich (134,202 ±3) con una salida variada en cada reset.
+  - **Farmeo inicial** (personaje nuevo, nivel 1 a 9 en Lorencia, `INITIAL` en `early.ts`): solo monstruos de hasta 3 niveles más que él (nivel de `data/monsters.json`; sin dato, no). Acampa en el grupo más grande de esos a ≤ 20 tiles y, sin ninguno a la vista, se aleja del pueblo (135,128) hacia el Lich en proporción al nivel. En el 10 pasa al farmeo avanzado: el plan del Lich.
+  - Lorencia (10-19): directo al Lich (134,202 ±3) con una salida variada en cada reset.
   - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181, solo si está a ≤ 25 de la llegada: desde Devias 3 Horaz cruzaba el mapa a pie); objetivos a ≤ 8 del campamento.
   - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena; sin nadie, como mapa vacío. En los dos casos va primero a otra entrada de Devias y solo a Arena 1 (rinde ~0,4M/min) si todas están llenas.
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:

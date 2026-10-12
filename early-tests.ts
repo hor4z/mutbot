@@ -3,7 +3,7 @@
  *
  *   bun run early-tests.ts
  */
-import { EARLY, biggestCluster, deviasCamp, dist, leashedTarget, lorenciaPlan } from './early';
+import { EARLY, INITIAL, biggestCluster, deviasCamp, dist, initialCamp, initialEligible, leashedTarget, lorenciaPlan } from './early';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -11,6 +11,26 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   if (!cond) fails++;
 };
 const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
+
+// --- Farmeo inicial ---------------------------------------------------------------------------------
+{
+  ok('inicial: nivel 1 ataca hasta nivel 4 (Budge Dragon sí, Bull Fighter 6 no)', initialEligible(1, 4) && !initialEligible(1, 6));
+  ok('inicial: monstruo sin nivel conocido → no', !initialEligible(5, undefined));
+  const me = { x: 135, y: 130 };
+  const grp = [{ x: 140, y: 140 }, { x: 141, y: 141 }, { x: 139, y: 141 }, { x: 170, y: 170 }];
+  const c = initialCamp({ me, myLevel: 3, monsters: grp, prev: null, rand: () => 0.5 });
+  ok('inicial: campamento en el grupo de su nivel más grande a la vista', dist(c.camp, { x: 140, y: 140 }) <= 1 && c.why.startsWith('grupo de 3'), c);
+  const keep = initialCamp({ me, myLevel: 3, monsters: grp, prev: { x: 141, y: 142 }, rand: () => 0.5 });
+  ok('inicial: no se recentra por un corrimiento chico', keep.camp.x === 141 && keep.camp.y === 142, keep);
+  const lvl1 = initialCamp({ me, myLevel: 1, monsters: [], prev: null, rand: () => 0.5 });
+  ok('inicial: nivel 1 sin monstruos → junto al pueblo', lvl1.camp.x === INITIAL.town.x && lvl1.camp.y === INITIAL.town.y, lvl1);
+  const top = initialCamp({ me, myLevel: INITIAL.untilLevel, monsters: [], prev: null, rand: () => 0.5 });
+  ok('inicial: al tope sin monstruos → el Lich', top.camp.x === EARLY.lorencia.lich.x && top.camp.y === EARLY.lorencia.lich.y, top);
+  const mid = initialCamp({ me, myLevel: 5, monsters: [], prev: null, rand: () => 0.5 });
+  ok('inicial: nivel medio → entre el pueblo y el Lich', mid.camp.y > INITIAL.town.y && mid.camp.y < EARLY.lorencia.lich.y, mid);
+  const far = initialCamp({ me, myLevel: 3, monsters: [{ x: 135, y: 160 }], prev: null, rand: () => 0.5 });
+  ok('inicial: un monstruo a más de scan no cuenta', far.why.startsWith('sin monstruos'), far);
+}
 
 // --- Lorencia --------------------------------------------------------------------------------------
 {

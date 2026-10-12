@@ -16,6 +16,47 @@
 import { dist, type Pos } from './corner';
 export { dist, type Pos };
 
+/**
+ * Farmeo inicial (personaje nuevo, nivel 1 a `untilLevel` en Lorencia): solo monstruos de hasta
+ * `margin` niveles más que el personaje, campamento en el grupo más grande de esos a <= `scan` de mí;
+ * sin ninguno a la vista, se aleja del pueblo hacia el Lich en proporción al nivel. Al llegar a
+ * `untilLevel` pasa al farmeo avanzado (la ruta: Lich, Devias, Arenas).
+ */
+export const INITIAL = {
+  untilLevel: 10,
+  margin: 3,
+  scan: 20,
+  town: { x: 135, y: 128 } as Pos,
+  jitter: 4,
+} as const;
+
+/** ¿Le conviene ese monstruo en el farmeo inicial? `level` = nivel del monstruo (undefined = desconocido: no). */
+export function initialEligible(myLevel: number, level: number | undefined): boolean {
+  return level != null && level <= myLevel + INITIAL.margin;
+}
+
+/**
+ * Campamento del farmeo inicial. `monsters` ya filtrados por `initialEligible`. `prev` = el actual
+ * (se mantiene salvo que el grupo se haya corrido más de `recenterAt`). Sin monstruos a la vista: un
+ * punto entre el pueblo y el Lich según el nivel (nivel 1 junto al pueblo, `untilLevel` en el Lich).
+ */
+export function initialCamp<M extends Pos>(inp: { me: Pos; myLevel: number; monsters: readonly M[]; prev: Pos | null; rand: () => number; walkable?: (p: Pos) => boolean }): { camp: Pos; why: string } {
+  const near = inp.monsters.filter((m) => dist(m, inp.me) <= INITIAL.scan);
+  const big = biggestCluster(near);
+  if (big) {
+    if (inp.prev && dist(inp.prev, big.at) <= EARLY.recenterAt) return { camp: inp.prev, why: `grupo de ${big.n} de mi nivel` };
+    return { camp: big.at, why: `grupo de ${big.n} de mi nivel` };
+  }
+  if (inp.prev) return { camp: inp.prev, why: 'sigo en el campamento' };
+  const f = Math.min(1, Math.max(0, (inp.myLevel - 1) / (INITIAL.untilLevel - 1)));
+  const T = INITIAL.town;
+  const L = EARLY.lorencia.lich;
+  const r = (n: number) => Math.round((inp.rand() * 2 - 1) * n);
+  let camp = { x: Math.round(T.x + (L.x - T.x) * f) + r(INITIAL.jitter), y: Math.round(T.y + (L.y - T.y) * f) + r(INITIAL.jitter) };
+  if (inp.walkable && !inp.walkable(camp)) camp = { x: Math.round(T.x + (L.x - T.x) * f), y: Math.round(T.y + (L.y - T.y) * f) };
+  return { camp, why: `sin monstruos de mi nivel a la vista: me alejo del pueblo (${Math.round(f * 100)} % hacia el Lich)` };
+}
+
 export const EARLY = {
   lorencia: { map: 0, maxLevel: 20, lich: { x: 134, y: 202 } as Pos, jitter: 3 },
   devias: { map: 2, maxLevel: 100, spot: { x: 69, y: 181 } as Pos },

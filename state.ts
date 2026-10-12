@@ -30,6 +30,7 @@ type MonsterRow = {
   Move: number;
   AttType: number;
   HP: number;
+  Level: number;
   AttSpeed: number;
 };
 // Move es el rango de patrulla, no la velocidad: monstruos reales llegan a ~22
@@ -71,6 +72,9 @@ export type SkillInfo = { index: number; number: number; level: number };
 
 export const isGolden = (n: ScopedNpc) => GOLDEN_TYPES.has(n.type);
 export const monsterName = (type: number) => MONSTER_NAMES.get(type) ?? `tipo ${type}`;
+// Nivel por TypeNumber (farmeo inicial: solo monstruos acordes al personaje). Custom >= 300: sin dato.
+const MONSTER_LEVELS = new Map<number, number>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Level]));
+export const monsterLevel = (type: number): number | undefined => MONSTER_LEVELS.get(type);
 
 // ---------------------------------------------------------------------------
 // Estado del mundo (lo que el bot cree de sí mismo) — se actualiza con los

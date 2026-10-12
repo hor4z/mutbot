@@ -7,8 +7,8 @@
  */
 import { decide } from './journal';
 import { CORNER, type Pos } from './corner';
-import { EARLY, deviasCamp, dist, lorenciaPlan } from './early';
-import { bot, world, type ScopedNpc } from './state';
+import { EARLY, INITIAL, deviasCamp, dist, initialCamp, initialEligible, lorenciaPlan } from './early';
+import { bot, monsterLevel, world, type ScopedNpc } from './state';
 import { isWalkable } from './terrain';
 
 // Entradas de Devias de la ruta (Devias 4, 3, 2): el arranque manda ahí; en Arena 1 (plan B), no.
@@ -28,6 +28,20 @@ export class EarlyPlanner {
   // exploración) hasta el 20.
   private lichEmptySince: number | null = null;
   private lichOffFor = -1;
+
+  /** ¿Farmeo inicial? (personaje nuevo en Lorencia por debajo de INITIAL.untilLevel). */
+  initial(): boolean {
+    return world.map === EARLY.lorencia.map && world.level < INITIAL.untilLevel;
+  }
+
+  /** Los atacables en este tick: en el farmeo inicial, solo los de su nivel. */
+  targets<N extends ScopedNpc>(npcs: Iterable<N>): N[] {
+    const all = [...npcs];
+    return this.initial() ? all.filter((n) => initialEligible(world.level, monsterLevel(n.type))) : all;
+  }
+
+  private initialPrev: Pos | null = null;
+  private initialLogged = false;
 
   /** ¿Manda el arranque ahora? */
   active(): boolean {
@@ -68,10 +82,26 @@ export class EarlyPlanner {
       this.camp = null;
       this.poorSince = null;
       this.lorPlan = null;
-      if (world.map === EARLY.lorencia.map) {
+      if (world.map === EARLY.lorencia.map && !this.initial()) {
         this.lorPlan = lorenciaPlan(Math.random, (q) => isWalkable(0, q.x, q.y));
         decide(`Arranque: salida de Lorencia ${this.lorPlan.via ? `por (${this.lorPlan.via.x},${this.lorPlan.via.y})` : 'directa'} al Lich (${this.lorPlan.camp.x},${this.lorPlan.camp.y}).`);
       }
+    }
+    if (this.initial()) {
+      const r = initialCamp({ me, myLevel: world.level, monsters: this.targets(npcs), prev: this.initialPrev, rand: Math.random, walkable: (q) => isWalkable(0, q.x, q.y) });
+      if (!this.initialPrev || r.camp.x !== this.initialPrev.x || r.camp.y !== this.initialPrev.y) decide(`Farmeo inicial (nivel ${world.level}): campamento (${r.camp.x},${r.camp.y}): ${r.why}.`);
+      // Sin monstruos de su nivel: el punto de paseo se suelta al llegar, para elegir otro.
+      this.initialPrev = r.why.startsWith('sin monstruos') && dist(me, r.camp) <= 2 ? null : r.camp;
+      this.camp = r.camp;
+      this.initialLogged = true;
+      return { camp: r.camp, goal: r.camp };
+    }
+    if (world.map === EARLY.lorencia.map && this.initialLogged) {
+      // Fin del farmeo inicial: plan del Lich desde donde está (pasa al farmeo avanzado).
+      this.initialLogged = false;
+      this.initialPrev = null;
+      this.lorPlan = lorenciaPlan(Math.random, (q) => isWalkable(0, q.x, q.y));
+      decide(`Farmeo inicial terminado (nivel ${world.level}): paso al farmeo avanzado, al Lich (${this.lorPlan.camp.x},${this.lorPlan.camp.y}).`);
     }
     if (world.map === EARLY.lorencia.map && this.lorPlan) {
       if (this.lorPlan.via && dist(me, this.lorPlan.via) <= EARLY.viaReached) this.lorPlan.via = null;

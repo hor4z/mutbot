@@ -708,7 +708,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const cur = ctx.target != null ? ctx.npcs.get(ctx.target) : null;
       if (cur && dist(cur, camp) > EARLY.dropTargetAt) ctx.target = null;
       if (ctx.target == null && !early.viaPending()) {
-        const t = leashedTarget({ x: world.x, y: world.y }, camp, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)));
+        const t = leashedTarget({ x: world.x, y: world.y }, camp, early.targets([...ctx.npcs.values()].filter((n) => !unreachable.has(n.id))));
         if (t) {
           ctx.target = t.id;
           targetType = t.type;
