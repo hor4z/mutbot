@@ -178,7 +178,7 @@ export function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `cacería ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null) },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `cacería ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!bot.pinnedSpot },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,

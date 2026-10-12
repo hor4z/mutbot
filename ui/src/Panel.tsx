@@ -263,16 +263,31 @@ function Controls({
     [advanced, setAdvanced] = useState(false);
   return (
     <Section title="Acciones">
+      {/* Solo lo que cambia algo: farmeando por la ruta no se ofrece "Farmear". */}
+      <p className="muted action-now">
+        {s?.mode === "paused"
+          ? "En pausa."
+          : s?.mode === "hunt"
+            ? `Cazando dorados${s.where.spot ? ` (${s.where.spot.replace(/^cacería /, "")})` : ""}.`
+            : s?.where.pinned
+              ? `Farmeando fijo en ${s.where.spot ?? "un spot"}.`
+              : s?.mode === "farm"
+                ? "Farmeando por la ruta."
+                : ""}
+      </p>
       <div className="main-actions">
+        {(s?.mode === "hunt" || s?.where.pinned) && (
+          <Action
+            className="primary"
+            disabled={disabled}
+            onClick={() => send({ cmd: "farm" })}
+          >
+            <Swords size={15} />
+            {s?.mode === "hunt" ? "Dejar de cazar" : "Volver a la ruta"}
+          </Action>
+        )}
         <Action
-          className="primary"
-          disabled={disabled}
-          onClick={() => send({ cmd: "farm" })}
-        >
-          <Swords size={15} />
-          Farmear
-        </Action>
-        <Action
+          className={s?.mode === "paused" ? "primary" : ""}
           disabled={disabled}
           onClick={() =>
             send({ cmd: s?.mode === "paused" ? "resume" : "pause" })

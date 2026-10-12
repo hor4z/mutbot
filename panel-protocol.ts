@@ -60,7 +60,8 @@ export type PanelState = {
     stats: { str: number; agi: number; vit: number; ene: number; cmd?: number };
     points: number; zen: number | null;
   };
-  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null };
+  /** pinned: spot fijo elegido desde el panel (la ruta no lo cambia hasta "farm") */
+  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null; pinned?: boolean };
   exp: { perMin1: number; perMin5: number };
   cycle: CycleRecord | null;
   cycles: CycleRecord[];
