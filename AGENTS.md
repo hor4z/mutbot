@@ -682,6 +682,10 @@ página abierta en el navegador podía mandarle órdenes al bot). Clientes sin
 cacería), `command-result` y `decision` (el diario).
 
 `panel-state` sale de lo que el bot ya trackea:
+- `equipment` (slots 0-11) e `inventory` (12-75, grilla de 8×8): grupo, número, nivel, excelente, nombre
+  y tamaño (`itemInfo`, de `data/items.json`). El panel los dibuja en "Personaje" con los íconos de
+  `assets/items/item_<grupo>_<número>_<nivel>[_e].png` (servidos en `/radar-assets/items/...`; no van al
+  repo). Hay íconos por escalón de nivel (0, 3, 5…15): se prueba el nivel exacto, el escalón y el 0.
 - `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
   (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
   primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).

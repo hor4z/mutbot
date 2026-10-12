@@ -73,6 +73,8 @@ export type PanelState = {
   nearby: { monsters: number; players: number };
   /** slots de equipo 0-11 ocupados (del inventario que trackea el bot) */
   equipment?: EquippedItem[];
+  /** inventario (slots 12-75) */
+  inventory?: EquippedItem[];
   /** últimas ~60 posiciones (una cada 2 s), solo del mapa actual */
   trail?: [number, number][];
   /** campamento / punto al que va el bot ahora, si tiene uno */
@@ -90,7 +92,8 @@ export type PanelState = {
   session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
 };
 
-export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean };
+/** Ítem del personaje. `slot`: 0-11 equipo, 12-75 inventario (grilla de 8×8 desde el 12). `w`×`h`: casillas que ocupa. */
+export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean; name?: string; w?: number; h?: number };
 
 /** Órdenes que acepta el bot. Cualquier otra se rechaza. */
 export type PanelCommand =

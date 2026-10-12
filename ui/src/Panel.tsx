@@ -16,7 +16,7 @@ import {
   MessageSquare,
   Send,
 } from "lucide-react";
-import type { PanelCommand, PanelState } from "../../panel-protocol";
+import type { EquippedItem, PanelCommand, PanelState } from "../../panel-protocol";
 import {
   Action,
   Badge,
@@ -28,6 +28,62 @@ import {
   compact,
 } from "./components";
 import { Radar } from "./Radar";
+// Equipo e inventario: íconos del cliente (assets/items, servidos por el bot en /radar-assets/items).
+const SLOT_NAMES = ["Arma", "Escudo / 2ª arma", "Casco", "Armadura", "Pantalones", "Guantes", "Botas", "Alas", "Mascota", "Collar", "Anillo", "Anillo"];
+const ICON_TIERS = [15, 13, 11, 9, 7, 5, 3, 0];
+function iconSources(it: EquippedItem): string[] {
+  const tier = ICON_TIERS.find((t) => it.level >= t) ?? 0;
+  const base = (lv: number, e: boolean) => `/radar-assets/items/item_${it.group}_${it.num}_${lv}${e ? "_e" : ""}.png`;
+  const list = [base(it.level, it.excellent), base(tier, it.excellent), base(0, it.excellent), base(it.level, false), base(tier, false), base(0, false)];
+  return [...new Set(list)];
+}
+function ItemIcon({ it }: { it: EquippedItem }) {
+  const sources = iconSources(it);
+  const [i, setI] = useState(0);
+  useEffect(() => setI(0), [sources[0]]);
+  const title = `${it.name ?? `${it.group}/${it.num}`}${it.level ? ` +${it.level}` : ""}${it.excellent ? " (excelente)" : ""}`;
+  if (i >= sources.length) return <span className="item-name" title={title}>{it.name ?? `${it.group}/${it.num}`}</span>;
+  return <img className="item-icon" src={sources[i]} alt={title} title={title} onError={() => setI(i + 1)} />;
+}
+function Equipment({ items }: { items: EquippedItem[] }) {
+  return (
+    <div className="equipment">
+      {SLOT_NAMES.map((label, slot) => {
+        const it = items.find((x) => x.slot === slot);
+        return (
+          <div key={slot} className={`equip-slot ${it ? "filled" : ""} ${it?.excellent ? "exc" : ""}`}>
+            <div className="equip-icon">{it && <ItemIcon it={it} />}</div>
+            <div className="equip-text">
+              <small>{label}</small>
+              <strong>{it ? `${it.name}${it.level ? ` +${it.level}` : ""}` : "—"}</strong>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function Inventory({ items }: { items: EquippedItem[] }) {
+  return (
+    <div className="inventory-grid">
+      {Array.from({ length: 64 }, (_, i) => (
+        <div key={`c${i}`} className="inv-cell" style={{ gridColumn: (i % 8) + 1, gridRow: Math.floor(i / 8) + 1 }} />
+      ))}
+      {items.map((it) => {
+        const pos = it.slot - 12;
+        return (
+          <div
+            key={it.slot}
+            className={`inv-item ${it.excellent ? "exc" : ""}`}
+            style={{ gridColumn: `${(pos % 8) + 1} / span ${Math.min(it.w ?? 1, 8 - (pos % 8))}`, gridRow: `${Math.floor(pos / 8) + 1} / span ${it.h ?? 1}` }}
+          >
+            <ItemIcon it={it} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 import knight from "../../assets/ui/knight-alpha.webp";
 type Log = { at: number; text: string; kind: string };
 // Decisiones del bot (el diario): viajes, reset, órdenes, cambios de modo y decisiones con motivo.
@@ -614,6 +670,15 @@ export function Panel() {
                   <strong>{s.where.spot}</strong>
                 </div>
               )}
+            </Section>
+            <Section title="Equipo">
+              <Equipment items={s?.equipment ?? []} />
+            </Section>
+            <Section
+              title="Inventario"
+              extra={<small>{(s?.inventory ?? []).length} objetos · {fmt(s?.char.zen)} zen</small>}
+            >
+              <Inventory items={s?.inventory ?? []} />
             </Section>
             <Section
               title="Esta sesión"

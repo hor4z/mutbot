@@ -10,8 +10,7 @@ import { journal, panelLog } from './journal';
 import { drops, lootState } from './loot';
 import {
   EVENT_KEYS, GOLD_URL, HuntExplorer, chooseHuntMap, countTickets, mapName, resetsPerDay, toPanelCycle,
-  validateWarp, type GoldGone, type GoldSighting,
-} from './panel-logic';
+  validateWarp, type GoldGone, type GoldSighting, itemInfo } from './panel-logic';
 import type { BotMode, EventTimer, PanelCommand, PanelState } from './panel-protocol';
 import { WARP_SPOTS } from './route';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
@@ -159,10 +158,11 @@ function buildPanelEntities(): NonNullable<PanelState['entities']> {
 export function buildPanelState(now: number): PanelState {
   const cycleLog = learned.cycleLog;
   const cycles = cycleLog.done.slice(-20).map((c) => toPanelCycle(c));
-  const equipment = [...world.inventory.values()]
-    .filter((it) => it.slot >= 0 && it.slot <= 11)
+  const items = [...world.inventory.values()]
     .sort((a, b) => a.slot - b.slot)
-    .map((it) => ({ slot: it.slot, group: it.group, num: it.num, level: it.level ?? 0, excellent: !!it.excellent }));
+    .map((it) => ({ slot: it.slot, group: it.group, num: it.num, level: it.level ?? 0, excellent: !!it.excellent, ...itemInfo(it.group, it.num) }));
+  const equipment = items.filter((it) => it.slot >= 0 && it.slot <= 11);
+  const inventory = items.filter((it) => it.slot >= 12 && it.slot < 76);
   return {
     at: now,
     mode: currentMode(),
@@ -191,6 +191,7 @@ export function buildPanelState(now: number): PanelState {
       players: world.players.size,
     },
     equipment,
+    inventory,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: bot.goalPoint,
     entities: buildPanelEntities(),

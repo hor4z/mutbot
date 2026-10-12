@@ -5,6 +5,7 @@
  * recorrido del mapa en celdas. Fuera de `headless-bot.ts` para poder testearlo
  * offline (`panel-tests.ts`): importar el bot lo arranca.
  */
+import itemsData from './data/items.json';
 import type { CycleRecord, EventKey, EventTimer, Invasion, MapName } from './panel-protocol';
 
 const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
@@ -81,6 +82,15 @@ export function parseInvasion(raw: Uint8Array | DataView | ArrayBuffer, now: num
 }
 
 // ---------------------------------------------------------------------------
+// Ítems: nombre y tamaño en la grilla del inventario (data/items.json del cliente).
+const ITEM_INFO = new Map<number, { name: string; w: number; h: number }>(
+  (itemsData as { Group: number; Index: number; ItemName: string; X: number; Y: number }[])
+    .map((i) => [i.Group * 512 + i.Index, { name: i.ItemName, w: i.X || 1, h: i.Y || 1 }]),
+);
+export function itemInfo(group: number, num: number): { name: string; w: number; h: number } {
+  return ITEM_INFO.get(group * 512 + num) ?? { name: `ítem ${group}/${num}`, w: 1, h: 1 };
+}
+
 // Tickets de eventos en el inventario (group/num de data/items.json).
 // ---------------------------------------------------------------------------
 export type InvItem = { group: number; num: number; level?: number };
