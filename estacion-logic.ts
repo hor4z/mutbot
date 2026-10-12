@@ -6,8 +6,11 @@
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
 import { validCharName } from './names';
 
-/** Un personaje = un archivo de env (`.env`, `.env.melu`, ...) con MUBOT_USER/PASS/CHAR. */
-export type CharConfig = { key: string; envFile: string; user: string; char: string };
+/**
+ * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
+ * almacén de cuentas (`accounts.ts`, `envFile` null; `cls` si hay que crearlo al entrar).
+ */
+export type CharConfig = { key: string; envFile: string | null; user: string; char: string; cls?: CharClassKey };
 
 /**
  * Lee un archivo de env (formato de Bun: KEY=valor, comentarios con #, comillas opcionales).
@@ -44,14 +47,17 @@ export type GameServer = { proxy: string; csHost: string; csPort: number };
 export const DEFAULT_SERVER: GameServer = { proxy: 'wss://mu.mormon.garden/ws', csHost: 'mu.mormon.garden', csPort: 44405 };
 
 /**
- * Argumentos de `bun` para lanzar el bot de un personaje. Las credenciales van por --env-file
- * (nunca en la línea de comandos, que se ve en `ps`). `--exit-if-in-use`: si la cuenta ya está
+ * Argumentos de `bun` para lanzar el bot de un personaje. La clave nunca va en la línea de comandos
+ * (se ve en `ps`): la estación la pasa por MUBOT_PASS. `--exit-if-in-use`: si la cuenta ya está
  * conectada (la pestaña del navegador), el bot sale con código 3 en vez de insistir. Sin él (recién
  * desconectado desde la estación) espera y reintenta: el server tarda en soltar la sesión vieja.
  */
 export function botArgs(c: CharConfig, wsPort: number, server: GameServer, botFile: string, exitIfInUse = true): string[] {
+  // Cuenta y personaje de la base (estacion-db.ts) en la línea de comandos (no son secretos); la clave
+  // va por MUBOT_PASS. `--env-file=/dev/null` para que Bun no cargue el `.env` de la raíz (otro personaje).
+  const who = ['--env-file=/dev/null', 'run', botFile, '--user', c.user, '--char', c.char];
   return [
-    `--env-file=${c.envFile}`, 'run', botFile,
+    ...who,
     '--allow-remote', '--proxy', server.proxy, '--cs-host', server.csHost, '--cs-port', String(server.csPort),
     '--auto-seconds', '0', '--ws-port', String(wsPort), ...(exitIfInUse ? ['--exit-if-in-use'] : []),
   ];
@@ -112,11 +118,12 @@ export type StationRequest =
   | { action: 'connect'; char: string; routine: Routine }
   | { action: 'disconnect'; char: string }
   | { action: 'routine'; char: string; routine: Routine }
-  | NewCharRequest;
+  | NewCharRequest
+  | { action: 'add'; user: string; char: string; cls: CharClassKey };
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
- * clase. La estación escribe su `.env.<cuenta>` y el bot crea el personaje al entrar.
+ * clase. Va al almacén de cuentas (`accounts.ts`) y el bot crea el personaje al entrar.
  */
 export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey; existing: boolean };
 
@@ -133,34 +140,14 @@ export const CHAR_CLASSES = {
 export type CharClassKey = keyof typeof CHAR_CLASSES;
 export const isCharClass = (v: unknown): v is CharClassKey => typeof v === 'string' && Object.hasOwn(CHAR_CLASSES, v);
 
-/**
- * Cuenta y clave como las valida el registro del cliente web: usuario de 4 a 10 letras o números,
- * clave de 4 a 10 caracteres visibles. Además, sin comillas, `\`, `$` ni `#`: la clave va a un
- * archivo de env y esos caracteres cambian cómo lo lee Bun. Devuelve el motivo o null.
- */
+/** Cuenta y clave como las valida el registro del cliente web. Devuelve el motivo o null. */
 export function accountProblem(user: string, pass: string): string | null {
   if (!/^[A-Za-z0-9]{4,10}$/.test(user)) return 'la cuenta tiene que tener de 4 a 10 letras o números';
   if (pass.length < 4 || pass.length > 10) return 'la clave tiene que tener de 4 a 10 caracteres';
   if (!/^[!-~]+$/.test(pass)) return 'la clave solo puede tener caracteres visibles, sin espacios ni acentos';
-  if (/['"`\\$#]/.test(pass)) return 'la clave no puede tener comillas, \\, $ ni #';
   return null;
 }
 
-/** Archivo de env de un personaje nuevo: uno por cuenta. */
-export const newCharEnvFile = (user: string) => `.env.${user.toLowerCase()}`;
-
-/** Contenido de ese archivo. La clave va entre comillas simples (Bun no la expande). */
-export function newCharEnvText(r: NewCharRequest): string {
-  return [
-    `# Creado por la estación el ${new Date().toISOString().slice(0, 10)}.`,
-    `MUBOT_USER=${r.user}`,
-    `MUBOT_PASS='${r.pass}'`,
-    `MUBOT_CHAR=${r.char}`,
-    `# Si el personaje no existe en la cuenta, el bot lo crea con esta clase.`,
-    `MUBOT_CREATE_CLASS=${r.cls}`,
-    '',
-  ].join('\n');
-}
 
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
@@ -171,6 +158,12 @@ export function parseStationRequest(v: unknown): StationRequest | null {
     if (typeof r.user !== 'string' || typeof r.pass !== 'string' || typeof r.char !== 'string' || typeof r.existing !== 'boolean') return null;
     if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !isCharClass(r.cls)) return null;
     return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
+  }
+  // Otro personaje en una cuenta que ya está en la base: la clave la pone la estación.
+  if (r.action === 'add') {
+    if (Object.keys(r).sort().join() !== 'action,char,cls,user') return null;
+    if (typeof r.user !== 'string' || !/^[A-Za-z0-9]{4,10}$/.test(r.user) || typeof r.char !== 'string' || !validCharName(r.char) || !isCharClass(r.cls)) return null;
+    return { action: 'add', user: r.user, char: r.char, cls: r.cls };
   }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
@@ -194,7 +187,10 @@ export const BOT_PORT_BASE = 8791;
 export function processRunsAccount(cmdline: string[], environ: string[], c: CharConfig): boolean {
   if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) return false;
   const u = cmdline.indexOf('--user');
-  if (u >= 0) return cmdline[u + 1] === c.user;
+  if (u >= 0) {
+    const ch = cmdline.indexOf('--char');
+    return cmdline[u + 1] === c.user && (ch < 0 || cmdline[ch + 1] === c.char);
+  }
   const ef = cmdline.findIndex((a) => a === '--env-file' || a.startsWith('--env-file='));
   if (ef >= 0) {
     const file = cmdline[ef].includes('=') ? cmdline[ef].slice('--env-file='.length) : cmdline[ef + 1] ?? '';

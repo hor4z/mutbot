@@ -10,9 +10,10 @@ import {
   GOLD_TTL_MS, applyGoldSignal, freshGolds,
   DEFAULT_SERVER, botArgs, charFromEnv, exitStatus, isCharEnvFile, isRoutine, parseEnvFile, parseStationRequest,
   processRunsAccount, routineCommands, type CharConfig,
-  accountProblem, newCharEnvFile, newCharEnvText, type NewCharRequest,
+  accountProblem, type NewCharRequest,
 } from './estacion-logic';
 import { coolName, coolNames, joinParts, validCharName } from './names';
+import { EstacionDb, MAX_CHARS_PER_ACCOUNT } from './estacion-db';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -34,7 +35,7 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
 const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char: 'Horaz' };
 {
   const a = botArgs(horaz, 8791, DEFAULT_SERVER, 'headless-bot.ts');
-  ok('args: env-file primero (credenciales fuera de la línea de comandos)', a[0] === '--env-file=.env' && !a.some((x) => /pass/i.test(x)), a);
+  ok('args: sin .env de la raíz, cuenta y personaje sin clave', a[0] === '--env-file=/dev/null' && a.join(' ').includes('--user cuenta1 --char Horaz') && !a.some((x) => /pass/i.test(x)), a);
   ok('args: panel, sin límite, remoto y salir si la cuenta está en uso',
     a.join(' ').includes('--ws-port 8791') && a.join(' ').includes('--auto-seconds 0') && a.includes('--allow-remote') && a.includes('--exit-if-in-use'), a);
   ok('args: recién desconectado no sale por cuenta en uso', !botArgs(horaz, 8791, DEFAULT_SERVER, 'headless-bot.ts', false).includes('--exit-if-in-use'));
@@ -71,6 +72,8 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char
     && !processRunsAccount(['bun', '--env-file=.env.melu', ...bot.slice(1)], [], horaz));
   ok('proc: --env-file con ruta', processRunsAccount(['bun', '--env-file', '/home/x/mubot/.env.melu', ...bot.slice(1)], [], melu));
   ok('proc: --user manda', processRunsAccount([...bot, '--user', 'cuenta2'], ['MUBOT_USER=cuenta1'], melu));
+  ok('proc: --user y --char distinguen personajes de la misma cuenta',
+    processRunsAccount([...bot, '--user', 'cuenta2', '--char', 'Melu'], [], melu) && !processRunsAccount([...bot, '--user', 'cuenta2', '--char', 'Otro'], [], melu));
   ok('proc: MUBOT_USER del entorno', processRunsAccount(bot, ['MUBOT_USER=cuenta2'], melu) && !processRunsAccount(bot, ['MUBOT_USER=cuenta2'], horaz));
   ok('proc: sin nada = .env de la raíz', processRunsAccount(bot, [], horaz) && !processRunsAccount(bot, [], melu));
 }
@@ -112,15 +115,11 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   ok('crear: clase desconocida', parseStationRequest({ ...base, cls: 'sum' }) === null);
   ok('crear: nombre corto o raro', parseStationRequest({ ...base, char: 'Abc' }) === null && parseStationRequest({ ...base, char: 'Ñandú1' }) === null);
   ok('crear: campo de más', parseStationRequest({ ...base, x: 1 }) === null);
+  ok('sumar: personaje a cuenta guardada (sin clave)', parseStationRequest({ action: 'add', user: 'cuenta9', char: 'Lythgard', cls: 'elf' })?.action === 'add');
+  ok('sumar: con clave de más se rechaza', parseStationRequest({ action: 'add', user: 'cuenta9', pass: 'x', char: 'Lythgard', cls: 'elf' }) === null);
   ok('crear: sin existing', parseStationRequest({ action: 'create', user: 'cuenta9', pass: 'cl4ve!', char: 'Umbrion', cls: 'dk' }) === null);
   ok('cuenta: largo y caracteres', accountProblem('abc', 'clave') !== null && accountProblem('cuenta9', 'abc') !== null && accountProblem('cuenta 9', 'clave') !== null);
-  ok('cuenta: clave sin comillas/$/#', ["cla've", 'cla$e', 'cla#e', 'cla"e', 'cla\\e'].every((p) => accountProblem('cuenta9', p) !== null));
   ok('cuenta: válida', accountProblem('cuenta9', 'cl4ve!') === null);
-  const text = newCharEnvText(r as NewCharRequest);
-  const back = charFromEnv(newCharEnvFile('Cuenta9'), text);
-  ok('crear: el .env se vuelve a leer como personaje', back?.char === 'Umbrion' && back.user === 'cuenta9' && back.envFile === '.env.cuenta9', back);
-  ok('crear: el .env trae la clase y la clave', parseEnvFile(text).MUBOT_CREATE_CLASS === 'dk' && parseEnvFile(text).MUBOT_PASS === 'cl4ve!');
-  ok('crear: archivo de personaje', isCharEnvFile(newCharEnvFile('Cuenta9')));
 }
 
 // --- Nombres ------------------------------------------------------------------------------
@@ -134,6 +133,33 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   ok('nombres: 8 distintos', list.length === 8 && new Set(list.map((n) => n.toLowerCase())).size === 8, list);
   ok('nombres: no repite los tomados', coolNames(50, many.slice(0, 40), rand).every((n) => !many.slice(0, 40).includes(n)));
   ok('nombres: azar extremo también vale', validCharName(coolName(() => 0)) && validCharName(coolName(() => 0.9999)));
+}
+
+// --- Base local (SQLite en memoria) -------------------------------------------------------
+{
+  const db = new EstacionDb(DEFAULT_SERVER, ':memory:');
+  ok('db: esquema migrado', db.version === 1, db.version);
+  const imported = db.importEnv([
+    { envFile: '.env', user: 'cuenta1', pass: 'x1', char: 'Horaz' },
+    { envFile: '.env.melu', user: 'cuenta2', pass: 'x2', char: 'Melu' },
+  ]);
+  ok('db: importa los .env', imported.join() === 'Horaz,Melu', imported);
+  ok('db: importar de nuevo no duplica', db.importEnv([{ envFile: '.env', user: 'cuenta1', pass: 'x1', char: 'Horaz' }]).length === 0 && db.chars().length === 2);
+  const h = db.chars().find((c) => c.char === 'Horaz');
+  ok('db: personaje importado (origen, sin clase, activa)', h?.envFile === '.env' && h.cls === undefined && h.status === 'active' && h.key === 'horaz', h);
+  ok('db: clave por personaje', db.passFor('Horaz') === 'x1' && db.passFor('melu') === 'x2' && db.passFor('Nadie') === null);
+  ok('db: nuevo personaje en cuenta nueva', db.addChar('cuenta9', 'cl4ve', 'Cinderax', 'dk') === null && db.chars().find((c) => c.char === 'Cinderax')?.cls === 'dk');
+  ok('db: nombre repetido (sin importar mayúsculas)', db.addChar('cuenta9', 'cl4ve', 'CINDERAX', 'dw') !== null);
+  ok('db: cuenta existente con otra clave', db.addChar('Cuenta9', 'otra', 'Lythgard', 'dw') !== null);
+  ok('db: segundo personaje en la misma cuenta', db.addChar('Cuenta9', 'cl4ve', 'Lythgard', 'elf') === null && db.chars().filter((c) => c.user === 'cuenta9').length === 2);
+  for (const n of ['Tyrael', 'Drakgar', 'Duskon']) db.addChar('cuenta9', 'cl4ve', n, 'dk');
+  ok('db: tope de personajes por cuenta', db.addChar('cuenta9', 'cl4ve', 'Sexto', 'dk') !== null && db.chars().filter((c) => c.user === 'cuenta9').length === MAX_CHARS_PER_ACCOUNT);
+  db.setAccountStatus('CUENTA1', 'blocked');
+  ok('db: cuenta bloqueada', db.chars().find((c) => c.char === 'Horaz')?.status === 'blocked' && db.chars().find((c) => c.char === 'Melu')?.status === 'active');
+  db.setRoutine('Horaz', { kind: 'spot', warp: 24 });
+  ok('db: última rutina', JSON.stringify(db.chars().find((c) => c.char === 'Horaz')?.lastRoutine) === '{"kind":"spot","warp":24}');
+  ok('db: nombre inválido', db.addChar('cuenta8', 'clave', 'ab', 'dk') !== null);
+  db.close();
 }
 
 if (fails) process.exit(1);

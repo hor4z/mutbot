@@ -594,20 +594,27 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 navegador, les pone una rutina y muestra adentro el panel de cada bot (iframe a su `--ws-port`) o
 su consola.
 
-- **Personajes:** cada `.env` / `.env.<nombre>` de la raíz con `MUBOT_USER`, `MUBOT_PASS` y
-  `MUBOT_CHAR` (`.env.example` no cuenta). La estación no lee ni pasa la contraseña (salvo al escribir
-  el `.env` de un personaje nuevo, ver abajo): lanza
-  `bun --env-file=<archivo> run headless-bot.ts --allow-remote --proxy … --auto-seconds 0
-  --ws-port 879x --exit-if-in-use` sin heredar ningún `MUBOT_*` propio. Servidor por defecto el
-  de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` / `MUBOT_CS_PORT` lo cambian.
+- **Personajes:** salen de la base SQLite `~/.mubot/mubot.db` (`estacion-db.ts`, ver "Base de cuentas"
+  en README.md): `servers`, `accounts` (con `status` active/blocked) y `characters`. Los `.env` /
+  `.env.<nombre>` de la raíz se importan solos al arrancar (idempotente; `.env.example` no cuenta) y
+  después manda la base. La estación lanza `bun --env-file=/dev/null run headless-bot.ts --user <u> --char
+  <C> --allow-remote --proxy … --auto-seconds 0 --ws-port 879x --exit-if-in-use` con `MUBOT_PASS` (y
+  `MUBOT_CREATE_CLASS` si tiene clase) por entorno, sin heredar ningún `MUBOT_*` propio; `/dev/null`
+  evita que Bun cargue el `.env` de la raíz (otro personaje). Una cuenta juega con un solo personaje a
+  la vez (`connect` lo rechaza). Código 4 (AccountBlocked) marca la cuenta `blocked`; entrar al mundo,
+  `active`. Servidor por defecto el de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` /
+  `MUBOT_CS_PORT` lo cambian.
+- **Flujo de la interfaz:** sin nada elegido al abrir; primero la cuenta (con su estado), después el
+  personaje (o uno nuevo), después el panel. Arriba, una miga de pan vuelve a cada paso.
 - **Personaje nuevo** (botón "Nuevo personaje" en Personajes; `POST /api/do {action:'create', user, pass, char, cls, existing}`):
   - Registra la cuenta con el mismo endpoint que "Crear cuenta" del cliente web: `POST https://<host del
     proxy>/api/register {username, password}` (`MUBOT_REGISTER_URL` lo cambia). Errores `taken` / `throttled`.
     Con "ya tengo la cuenta" (`existing`) no registra.
-  - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles, y además sin
-    comillas, `\`, `$` ni `#` (cambian cómo Bun lee el env). Nombre de 4 a 10 letras o números.
-  - Escribe `.env.<cuenta>` (modo 600, falla si ya existe) con `MUBOT_CREATE_CLASS` (dk, dw, elf, mg) y lo
-    conecta en pausa. Es la única vez que la estación toca una clave: no la loguea ni la devuelve.
+  - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles. Nombre de 4
+    a 10 letras o números.
+  - Guarda cuenta y personaje en la base (clase dk, dw, elf, mg) y lo conecta en pausa. La clave no se
+    loguea ni vuelve al navegador. `{action:'add', user, char, cls}` suma un personaje a una cuenta ya
+    guardada (la clave la pone la estación).
   - El bot (`world.ts:createCharacter`), si `MUBOT_CHAR` no está en la cuenta y hay `MUBOT_CREATE_CLASS`,
     manda `C1 0F F3 01 <nombre 10 bytes> <clase << 2>` (número de red: DW 0, DK 4, Elf 8, MG 12; el
     adaptador del 0.97d no lo toca) y espera F3/01: byte 4 = 1 creado. Éxito y error comparten código y
@@ -616,7 +623,7 @@ su consola.
   - `GET /api/names`: 8 nombres sugeridos (`names.ts`: raíces + finales de fantasía, siempre de 4 a 10
     letras, sin repetir los personajes de la estación).
 - **Puertos:** estación 8787 (`ESTACION_PORT`), agente del navegador 8788, bots 8791, 8792…
-  (por orden alfabético del archivo de env).
+  (por orden alfabético del personaje).
 - **Rutinas** (`estacion-logic.ts:routineCommands`): se traducen a órdenes del panel y se mandan por
   el WebSocket del bot cuando entra al mundo (`mode` ≠ `connecting` y nivel > 0). Farmear = `farm`;
   spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); pausa = `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en

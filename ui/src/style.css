@@ -1637,3 +1637,100 @@ time {
 .new-char code {
   font-size: 11px;
 }
+
+/* Flujo de la estación: cuenta → personaje */
+.badge.active {
+  color: #a2dfbe;
+  background: #24372e;
+}
+.badge.blocked {
+  color: #efa5b0;
+  background: #3a292f;
+}
+.picker {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 40px 16px;
+  overflow: auto;
+  height: 100%;
+}
+.picker h1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  letter-spacing: -1px;
+  font-weight: 500;
+  margin: 10px 0 20px;
+}
+.picker-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.picker-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid #30343a;
+  border-radius: 10px;
+  background: #1d2024;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.picker-card:hover {
+  border-color: #78684c;
+}
+.picker-main {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.picker-main small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.picker-back:hover,
+.breadcrumb button:hover {
+  color: var(--gold);
+}
+.breadcrumb button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.breadcrumb strong {
+  color: #e9e9e7;
+}
+.account-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+.welcome .manage-character {
+  max-width: 360px;
+}

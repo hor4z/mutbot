@@ -6,8 +6,8 @@ import { serveRadarAsset } from './radar-assets';
  *
  *   bun run estacion            → http://127.0.0.1:8787
  *
- * - Personajes: cada `.env` / `.env.<algo>` de la raíz con MUBOT_USER/PASS/CHAR. La contraseña no
- *   pasa por la estación: el bot la lee de su `--env-file`.
+ * - Cuentas y personajes: en la base SQLite (`estacion-db.ts`, ~/.mubot/mubot.db). Los `.env` de la
+ *   raíz se importan solos al arrancar. La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
  * - Los bots corren en su propia sesión (`setsid`) y escriben en ~/.mubot/logs/<personaje>.log:
  *   cerrar o reiniciar la estación NO los desconecta. Al arrancar, la estación adopta los que ya
  *   corren (los busca en /proc por cuenta y lee su --ws-port).
@@ -15,13 +15,14 @@ import { serveRadarAsset } from './radar-assets';
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
 import { coolNames } from './names';
+import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
-  CHAR_CLASSES, newCharEnvFile, newCharEnvText, type NewCharRequest,
+  CHAR_CLASSES, parseEnvFile, type NewCharRequest,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
@@ -42,7 +43,7 @@ const SERVER: GameServer = {
 };
 
 type Slot = {
-  cfg: CharConfig;
+  cfg: DbChar;
   port: number;
   pid: number | null;
   status: CharStatus;
@@ -61,18 +62,24 @@ type Slot = {
   connectTimer: ReturnType<typeof setTimeout> | null;
 };
 const slots = new Map<string, Slot>();
+// Cuentas y personajes (SQLite, ~/.mubot/mubot.db): ver estacion-db.ts.
+const db = new EstacionDb(SERVER);
 const say = (...a: unknown[]) => console.log('[estación]', ...a);
 
 // --- Personajes -----------------------------------------------------------------------------
-function discover(): CharConfig[] {
-  const out: CharConfig[] = [];
+function discover() {
+  // Los `.env` de la raíz (Horaz, Melu) se importan a la base la primera vez; después manda la base.
+  const envs: { envFile: string; user: string; pass: string; char: string }[] = [];
   for (const f of readdirSync(ROOT).filter(isCharEnvFile).sort()) {
     try {
       const c = charFromEnv(f, readFileSync(join(ROOT, f), 'utf8'));
-      if (c && !out.some((o) => o.key === c.key)) out.push(c);
+      const pass = c && parseEnvFile(readFileSync(join(ROOT, f), 'utf8')).MUBOT_PASS;
+      if (c && pass && c.envFile) envs.push({ envFile: c.envFile, user: c.user, pass, char: c.char });
     } catch {}
   }
-  return out;
+  const imported = db.importEnv(envs);
+  if (imported.length) say(`importé a la base: ${imported.join(', ')}`);
+  return db.chars();
 }
 
 function refreshSlots() {
@@ -144,7 +151,12 @@ function attachWs(s: Slot, port: number) {
     try { m = JSON.parse(String(ev.data)); } catch { return; }
     if (m.type === 'panel-state') {
       s.state = m.state;
-      if (s.status === 'starting' && m.state.mode !== 'connecting') { s.status = 'on'; s.msg = 'en el juego'; }
+      if (s.status === 'starting' && m.state.mode !== 'connecting') {
+        s.status = 'on';
+        s.msg = 'en el juego';
+        // Entró: la cuenta anda (por si estaba marcada como bloqueada).
+        if (s.cfg.status !== 'active') { db.setAccountStatus(s.cfg.user, 'active'); refreshSlots(); }
+      }
       if (s.pending && m.state.mode !== 'connecting' && m.state.char.level > 0) {
         const r = s.pending;
         s.pending = null;
@@ -248,6 +260,11 @@ function dbEnv(): Record<string, string> {
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
+  // Una cuenta juega con un solo personaje a la vez.
+  const sibling = [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase());
+  if (sibling) return { ok: false, msg: `la cuenta ${s.cfg.user} ya está jugando con ${sibling.cfg.char}: desconectalo primero` };
+  const pass = db.passFor(s.cfg.char);
+  if (!pass) return { ok: false, msg: `no tengo la clave de ${s.cfg.char} en la base` };
   // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba
   // "fantasma" (sin muertes ni exp). Se espera RECONNECT_GAP_MS desde la desconexión y se conecta solo.
   const waitMs = s.stoppedAt + RECONNECT_GAP_MS - Date.now();
@@ -269,6 +286,9 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
   env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
+  // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
+  env.MUBOT_PASS = pass;
+  if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
   const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
@@ -281,6 +301,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   s.msg = 'conectando…';
   s.routine = null;
   s.pending = routine;
+  db.setRoutine(s.cfg.char, routine);
   say(`conecto a ${s.cfg.char} (pid ${proc.pid}, panel ${s.port}, rutina: ${routineLabel(routine)})`);
   void proc.exited.then((code) => {
     ownExits.delete(proc.pid);
@@ -291,6 +312,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
     s.msg = st.msg;
     s.pending = null;
     detachWs(s);
+    if (code === 4) { db.setAccountStatus(s.cfg.user, 'blocked'); refreshSlots(); }
     say(`${s.cfg.char} salió (código ${code}): ${st.msg}`);
   });
   setTimeout(() => { if (s.pid === proc.pid && !s.ws) attachWs(s, s.port); }, 1500);
@@ -314,14 +336,14 @@ function disconnect(s: Slot): { ok: boolean; msg: string } {
 const REGISTER_URL = process.env.MUBOT_REGISTER_URL ?? `https://${new URL(SERVER.proxy).host}/api/register`;
 
 /**
- * Registra la cuenta (salvo que ya exista), escribe su `.env.<cuenta>` (solo legible por el
- * usuario) y la conecta en pausa: el bot crea el personaje al entrar (MUBOT_CREATE_CLASS). La clave
- * no se loguea ni vuelve al navegador.
+ * Registra la cuenta (salvo que ya exista), guarda cuenta y personaje en la base y lo conecta en
+ * pausa: el bot crea el personaje al entrar (MUBOT_CREATE_CLASS). La clave no se loguea ni vuelve
+ * al navegador.
  */
 async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string }> {
   if (slots.has(r.char.toLowerCase())) return { ok: false, msg: `ya hay un personaje ${r.char} en la estación` };
-  const file = newCharEnvFile(r.user);
-  if (existsSync(join(ROOT, file))) return { ok: false, msg: `ya existe ${file}: esa cuenta ya tiene personaje en la estación` };
+  const busy = [...slots.values()].find((x) => x.pid != null && x.cfg.user.toLowerCase() === r.user.toLowerCase());
+  if (busy) return { ok: false, msg: `la cuenta ${r.user} está jugando con ${busy.cfg.char}: desconectalo primero` };
   if (!r.existing) {
     try {
       const res = await fetch(REGISTER_URL, {
@@ -343,13 +365,14 @@ async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string
       return { ok: false, msg: 'No se pudo crear la cuenta: el registro del server no contesta' };
     }
   }
-  writeFileSync(join(ROOT, file), newCharEnvText(r), { mode: 0o600, flag: 'wx' });
+  const err = db.addChar(r.user, r.pass, r.char, r.cls);
+  if (err) return { ok: false, msg: r.existing ? err : `Cuenta creada, pero no guardé el personaje: ${err}` };
   refreshSlots();
   const s = slots.get(r.char.toLowerCase());
-  if (!s) return { ok: false, msg: `escribí ${file} pero no lo pude leer` };
-  say(`personaje nuevo ${r.char} (${CHAR_CLASSES[r.cls].label}) en ${file}`);
+  if (!s) return { ok: false, msg: `guardé a ${r.char} pero no lo encuentro en la base` };
+  say(`personaje nuevo ${r.char} (${CHAR_CLASSES[r.cls].label}) en la cuenta ${r.user}`);
   const c = connect(s, { kind: 'pause' });
-  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Cuenta' : 'Cuenta creada'}. Conectando a ${r.char}: el bot lo crea al entrar y lo deja en pausa.` : c.msg };
+  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Guardado' : 'Cuenta creada'}. Conectando a ${r.char}: el bot lo crea al entrar y lo deja en pausa.` : c.msg };
 }
 
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
@@ -368,7 +391,7 @@ function view() {
   return [...slots.values()].map((s) => {
     const st = s.state;
     return {
-      key: s.cfg.key, char: s.cfg.char, status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
+      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine, status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
@@ -496,8 +519,10 @@ Bun.serve({
       const r = parseStationRequest(raw);
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       refreshSlots();
-      if (r.action === 'create') {
-        const res = await createChar(r);
+      if (r.action === 'create' || r.action === 'add') {
+        const pass = r.action === 'add' ? db.passOfAccount(r.user) : null;
+        if (r.action === 'add' && !pass) return json({ ok: false, msg: `no tengo la cuenta ${r.user} en la base` }, 404);
+        const res = await createChar(r.action === 'add' ? { action: 'create', user: r.user, pass: pass!, char: r.char, cls: r.cls, existing: true } : r);
         return json(res, res.ok ? 200 : 409);
       }
       const s = slots.get(r.char);

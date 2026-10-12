@@ -30,6 +30,8 @@ export const modes: Record<string, string> = {
   failed: "Error",
   "in-use": "Cuenta abierta",
   external: "Sin panel",
+  active: "Activa",
+  blocked: "Bloqueada",
 };
 export function Action({
   children,
