@@ -5,7 +5,7 @@
  *
  *   bun run farming-tests.ts
  */
-import { CycleLog, ExpLog, ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, isValuableDrop, median, pickLoot, pickTarget, planStats, capStats, targetRate } from './farming';
+import { CycleLog, ExpLog, ExpSplitTracker, FARM, MonsterTypeStats, SelfReport, isValuableDrop, median, pickLoot, pickTarget, planStats, capStats, targetRate, classFamily, isFreshChar, planFreshStats } from './farming';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -196,6 +196,18 @@ const hpOf = (t: number) => HP[t] ?? null;
   ];
   ok('la caja más cercana a <= 12', pickLoot(me, ds)?.id === 3);
   ok('nada valioso cerca: null', pickLoot(me, [ds[0], ds[3]]) === null);
+}
+
+// --- Personaje nuevo: reparto por clase ---------------------------------------------------
+{
+  const dk = planFreshStats(45, 'knight');
+  ok('nuevo: DK sobre todo fuerza, sin energía, reparte todo', dk.str > dk.agi && dk.agi > 0 && dk.ene === 0 && dk.str + dk.agi + dk.vit === 45, dk);
+  const dw = planFreshStats(5, 'wizard');
+  ok('nuevo: mago energía primero', dw.ene >= 3 && dw.str === 0 && dw.ene + dw.agi + dw.vit === 5, dw);
+  ok('nuevo: clase por classId (DK 4, BK 6, DW 0, SM 2, Elf 8, MG 12)', classFamily(4) === 'knight' && classFamily(6) === 'knight' && classFamily(0) === 'wizard' && classFamily(2) === 'wizard' && classFamily(8) === 'elf' && classFamily(12) === 'gladiator' && classFamily(null) === null);
+  ok('nuevo: sin resets y pocos stats sí; con resets o stats altos no',
+    isFreshChar(0, { str: 28, agi: 20, vit: 25, ene: 10 }) && isFreshChar(null, { str: 28, agi: 20, vit: 25, ene: 10 })
+    && !isFreshChar(120, { str: 28, agi: 20, vit: 25, ene: 10 }) && !isFreshChar(null, { str: 65535, agi: 100, vit: 100, ene: 65535 }));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE FARMEO PASARON' : `\n${fails} TEST(S) DE FARMEO FALLARON`);

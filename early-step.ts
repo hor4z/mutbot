@@ -7,8 +7,10 @@
  */
 import { decide } from './journal';
 import { CORNER, type Pos } from './corner';
-import { EARLY, INITIAL, deviasCamp, dist, initialCamp, initialEligible, lorenciaPlan } from './early';
+import { EARLY, INITIAL, deviasCamp, dist, fieldFor, initialCamp, lorenciaPlan, type Field } from './early';
+import { canFight, type Fighter } from './power';
 import { bot, monsterLevel, world, type ScopedNpc } from './state';
+import { classFamily, isFreshChar } from './farming';
 import { isWalkable } from './terrain';
 
 // Entradas de Devias de la ruta (Devias 4, 3, 2): el arranque manda ahí; en Arena 1 (plan B), no.
@@ -31,14 +33,28 @@ export class EarlyPlanner {
 
   /** ¿Farmeo inicial? (personaje nuevo en Lorencia por debajo de INITIAL.untilLevel). */
   initial(): boolean {
-    return world.map === EARLY.lorencia.map && world.level < INITIAL.untilLevel;
+    return world.map === EARLY.lorencia.map && world.level < INITIAL.untilLevel && isFreshChar(world.resets, world.stats);
   }
 
-  /** Los atacables en este tick: en el farmeo inicial, solo los de su nivel. */
+  /** El personaje como lo ve power.ts (stats reales, vida máxima, clase). */
+  private fighter(): Fighter {
+    return { family: classFamily(world.classId) ?? 'knight', stats: world.stats, maxHp: world.maxHp };
+  }
+
+  /** Los atacables en este tick: en el farmeo inicial, solo con los que puede según sus stats. */
   targets<N extends ScopedNpc>(npcs: Iterable<N>): N[] {
     const all = [...npcs];
-    return this.initial() ? all.filter((n) => initialEligible(world.level, monsterLevel(n.type))) : all;
+    if (!this.initial()) return all;
+    const f = this.fighter();
+    return all.filter((n) => canFight(f, n.type));
   }
+
+  /** El campo que le toca según sus stats (power.ts), no según el nivel. */
+  private field(): Field {
+    const f = this.fighter();
+    return fieldFor((t) => canFight(f, t), monsterLevel);
+  }
+  private lastField: Field | null = null;
 
   private initialPrev: Pos | null = null;
   private initialLogged = false;
@@ -88,7 +104,14 @@ export class EarlyPlanner {
       }
     }
     if (this.initial()) {
-      const r = initialCamp({ me, myLevel: world.level, monsters: this.targets(npcs), prev: this.initialPrev, rand: Math.random, walkable: (q) => isWalkable(0, q.x, q.y) });
+      const field = this.field();
+      if (field !== this.lastField) {
+        decide(`Farmeo inicial: con fuerza ${world.stats.str}, agilidad ${world.stats.agi} y ${world.maxHp} de vida me toca ${field.name}.`);
+        // Subió de campo: el campamento viejo (del campo anterior) se suelta.
+        if (this.lastField) this.initialPrev = null;
+        this.lastField = field;
+      }
+      const r = initialCamp({ me, field, monsters: this.targets(npcs), prev: this.initialPrev, rand: Math.random, walkable: (q) => isWalkable(0, q.x, q.y) });
       if (!this.initialPrev || r.camp.x !== this.initialPrev.x || r.camp.y !== this.initialPrev.y) decide(`Farmeo inicial (nivel ${world.level}): campamento (${r.camp.x},${r.camp.y}): ${r.why}.`);
       // Sin monstruos de su nivel: el punto de paseo se suelta al llegar, para elegir otro.
       this.initialPrev = r.why.startsWith('sin monstruos') && dist(me, r.camp) <= 2 ? null : r.camp;

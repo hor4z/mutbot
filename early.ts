@@ -17,30 +17,61 @@ import { dist, type Pos } from './corner';
 export { dist, type Pos };
 
 /**
- * Farmeo inicial (personaje nuevo, nivel 1 a `untilLevel` en Lorencia): solo monstruos de hasta
- * `margin` niveles más que el personaje, campamento en el grupo más grande de esos a <= `scan` de mí;
- * sin ninguno a la vista, se aleja del pueblo hacia el Lich en proporción al nivel. Al llegar a
- * `untilLevel` pasa al farmeo avanzado (la ruta: Lich, Devias, Arenas).
+ * Farmeo inicial (personaje nuevo, hasta `untilLevel` en Lorencia): solo monstruos con los que puede
+ * según SUS stats (`power.ts`: los mata en pocos segundos sin perder mucha vida), campamento en el
+ * grupo más grande de esos a <= `scan` de mí; sin ninguno a la vista, va al campo más alto donde haya
+ * alguno con el que pueda (`fields`, spawns de Lorencia en OpenMU, Lorencia.cs):
+ *   este:  Spider (2) y Budge Dragon (4)          x 180-226, y 90-244
+ *   norte: Bull Fighter (6) y Budge Dragon (4)    x 135-240, y 20-88
+ *   oeste: Hound (9) y Elite Bull Fighter (12)    x 8-94,    y 11-244
+ *   sur:   Lich (14)                              x 95-175,  y 168-244
+ * Ya en el campo, lo recorre. El nivel no decide: un personaje con más fuerza o resets sube de campo
+ * antes (usuario: "la estrategia sale de los stats del personaje"). Al llegar a `untilLevel` pasa al farmeo avanzado
+ * (Devias, Arenas). Solo para personajes nuevos (`isFreshChar`): después de un reset, con stats
+ * enormes, va directo al Lich como siempre.
+ *
+ * Hume (2026-10-12) salió del inicial en el 10 directo al Lich, sin puntos repartidos, y lo mató:
+ * ahora sigue hasta el 20, sube de campo en campo y ataca solo monstruos de hasta 1 nivel más.
+ *
+ * Antes iba "del pueblo al Lich según el nivel": en nivel 1 eso es el centro del pueblo (zona segura,
+ * sin monstruos de su nivel) y Hume se quedó parado ahí (2026-10-12).
  */
 export const INITIAL = {
-  untilLevel: 10,
-  margin: 3,
+  untilLevel: 20,
   scan: 20,
   town: { x: 135, y: 128 } as Pos,
+  /** campos de menor a mayor: zona a recorrer, por dónde se entra y qué monstruos salen (tipos) */
+  fields: [
+    { name: 'el campo de arañas y Budge Dragon (este)', monsters: [3, 2], x1: 182, x2: 212, y1: 105, y2: 150, entry: { x: 186, y: 128 } },
+    { name: 'el campo de Bull Fighter (norte)', monsters: [0, 2], x1: 145, x2: 200, y1: 45, y2: 85, entry: { x: 170, y: 80 } },
+    { name: 'el campo de Hound (oeste)', monsters: [1, 4], x1: 50, x2: 92, y1: 100, y2: 150, entry: { x: 85, y: 128 } },
+    { name: 'el campo del Lich (sur)', monsters: [6], x1: 115, x2: 160, y1: 180, y2: 225, entry: { x: 134, y: 190 } },
+  ] as Field[],
   jitter: 4,
 } as const;
 
-/** ¿Le conviene ese monstruo en el farmeo inicial? `level` = nivel del monstruo (undefined = desconocido: no). */
-export function initialEligible(myLevel: number, level: number | undefined): boolean {
-  return level != null && level <= myLevel + INITIAL.margin;
+export type Field = { name: string; monsters: number[]; x1: number; x2: number; y1: number; y2: number; entry: Pos };
+/**
+ * El campo que le toca: el que tiene el monstruo más fuerte (más nivel) con el que puede. Si no puede
+ * con ninguno, el primero (arañas). `levelOf`: nivel por tipo (monsters.json).
+ */
+export function fieldFor(canFight: (type: number) => boolean, levelOf: (type: number) => number | undefined): Field {
+  let best = INITIAL.fields[0];
+  let bestLevel = -1;
+  for (const f of INITIAL.fields) {
+    const top = Math.max(-1, ...f.monsters.filter(canFight).map((t) => levelOf(t) ?? -1));
+    if (top > bestLevel) { best = f; bestLevel = top; }
+  }
+  return best;
 }
+export const inField = (p: Pos, f = INITIAL.fields[0]) => p.x >= f.x1 && p.x <= f.x2 && p.y >= f.y1 && p.y <= f.y2;
 
 /**
- * Campamento del farmeo inicial. `monsters` ya filtrados por `initialEligible`. `prev` = el actual
- * (se mantiene salvo que el grupo se haya corrido más de `recenterAt`). Sin monstruos a la vista: un
- * punto entre el pueblo y el Lich según el nivel (nivel 1 junto al pueblo, `untilLevel` en el Lich).
+ * Campamento del farmeo inicial. `monsters` ya filtrados por `canFight`. `prev` = el actual (se
+ * mantiene salvo que el grupo se haya corrido más de `recenterAt`). Sin monstruos a la vista: `field`
+ * (el de `fieldFor`).
  */
-export function initialCamp<M extends Pos>(inp: { me: Pos; myLevel: number; monsters: readonly M[]; prev: Pos | null; rand: () => number; walkable?: (p: Pos) => boolean }): { camp: Pos; why: string } {
+export function initialCamp<M extends Pos>(inp: { me: Pos; field: Field; monsters: readonly M[]; prev: Pos | null; rand: () => number; walkable?: (p: Pos) => boolean }): { camp: Pos; why: string } {
   const near = inp.monsters.filter((m) => dist(m, inp.me) <= INITIAL.scan);
   const big = biggestCluster(near);
   if (big) {
@@ -48,13 +79,21 @@ export function initialCamp<M extends Pos>(inp: { me: Pos; myLevel: number; mons
     return { camp: big.at, why: `grupo de ${big.n} de mi nivel` };
   }
   if (inp.prev) return { camp: inp.prev, why: 'sigo en el campamento' };
-  const f = Math.min(1, Math.max(0, (inp.myLevel - 1) / (INITIAL.untilLevel - 1)));
-  const T = INITIAL.town;
-  const L = EARLY.lorencia.lich;
-  const r = (n: number) => Math.round((inp.rand() * 2 - 1) * n);
-  let camp = { x: Math.round(T.x + (L.x - T.x) * f) + r(INITIAL.jitter), y: Math.round(T.y + (L.y - T.y) * f) + r(INITIAL.jitter) };
-  if (inp.walkable && !inp.walkable(camp)) camp = { x: Math.round(T.x + (L.x - T.x) * f), y: Math.round(T.y + (L.y - T.y) * f) };
-  return { camp, why: `sin monstruos de mi nivel a la vista: me alejo del pueblo (${Math.round(f * 100)} % hacia el Lich)` };
+  const F = inp.field;
+  const ok = (p: Pos) => !inp.walkable || inp.walkable(p);
+  const where = F.name;
+  if (!inField(inp.me, F)) {
+    const r = (n: number) => Math.round((inp.rand() * 2 - 1) * n);
+    const e = F.entry;
+    const camp = { x: e.x + r(INITIAL.jitter), y: e.y + r(INITIAL.jitter) };
+    return { camp: ok(camp) ? camp : e, why: `sin monstruos de mi nivel a la vista: voy a ${where}` };
+  }
+  // Ya en el campo: un punto al azar adentro (hasta 5 intentos caminables).
+  for (let i = 0; i < 5; i++) {
+    const camp = { x: Math.round(F.x1 + inp.rand() * (F.x2 - F.x1)), y: Math.round(F.y1 + inp.rand() * (F.y2 - F.y1)) };
+    if (ok(camp)) return { camp, why: 'sin monstruos de mi nivel a la vista: recorro el campo' };
+  }
+  return { camp: F.entry, why: 'sin monstruos de mi nivel a la vista: recorro el campo' };
 }
 
 export const EARLY = {

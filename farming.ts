@@ -420,6 +420,41 @@ export function planStats(points: number, str: number, ene: number, p = STATS_PL
   return { ene: toEne + half, str: left - half, vit };
 }
 
+// ---------------------------------------------------------------------------
+// Personaje nuevo (sin resets, con pocos puntos): reparte apenas tiene puntos, según la clase. El
+// plan de arriba es para el DK con resets (Twisting Slash, decenas de miles de puntos); un DK recién
+// creado con 28 de fuerza y un Small Axe necesita fuerza para pegar y agilidad para defenderse.
+// Hume (2026-10-12) llegó a nivel 10 con 45 puntos sin repartir porque se esperaba a juntar 200.
+// ---------------------------------------------------------------------------
+export const FRESH_STATS: Record<'knight' | 'wizard' | 'elf' | 'gladiator', Partial<StatValues>> = {
+  knight: { str: 0.55, agi: 0.25, vit: 0.2 },
+  wizard: { ene: 0.55, agi: 0.25, vit: 0.2 },
+  elf: { agi: 0.55, str: 0.2, vit: 0.25 },
+  gladiator: { str: 0.45, ene: 0.3, agi: 0.15, vit: 0.1 },
+};
+/** Base de la clase por `classId` del CharacterList (DarkWizard 0, DarkKnight 4, FairyElf 8, MagicGladiator 12; +1/+2 evoluciones). */
+export function classFamily(classId: number | null | undefined): keyof typeof FRESH_STATS | null {
+  if (classId == null) return null;
+  return (['wizard', 'knight', 'elf', 'gladiator'] as const)[classId >> 2] ?? null;
+}
+/** ¿Personaje nuevo? Sin resets y con pocos puntos (si el server todavía no mandó los resets, por los stats). */
+export const FRESH_MAX_STATS = 3000;
+export function isFreshChar(resets: number | null | undefined, stats: StatValues): boolean {
+  if (resets != null && resets > 0) return false;
+  return stats.str + stats.agi + stats.vit + stats.ene < FRESH_MAX_STATS;
+}
+export function planFreshStats(points: number, family: keyof typeof FRESH_STATS): StatValues {
+  const share = FRESH_STATS[family];
+  const out: StatValues = { str: 0, agi: 0, vit: 0, ene: 0 };
+  if (!(points > 0)) return out;
+  const keys = (['str', 'agi', 'vit', 'ene'] as const).filter((k) => share[k]);
+  for (const k of keys) out[k] = Math.floor(points * share[k]!);
+  // lo que sobra del redondeo, a la principal (la de más peso)
+  const main = keys.reduce((a, b) => (share[b]! > share[a]! ? b : a));
+  out[main] += points - keys.reduce((n, k) => n + out[k], 0);
+  return out;
+}
+
 // Tope del server: 65535 por stat ("Se ha alcanzado el máximo de 65535 Base Energy"). Con fuerza y
 // energía al tope /add las rechaza y los puntos no bajan. Cada stat recibe como mucho lo que le falta
 // para el tope; lo que no entra va a agilidad (velocidad de ataque del DK) y después a vitalidad, como

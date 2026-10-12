@@ -5,7 +5,7 @@
 import { BUILD_ARG, BUILD_WEIGHTS, CHAR_NAME, CHAT_PACE_MS, MAX_STAT, STAT_BATCH_MIN, type StatName } from './config';
 import { requestCharacterList, waitFor } from './connection';
 import { sayChat } from './actions';
-import { capStats, planStats } from './farming';
+import { capStats, planStats, classFamily, isFreshChar, planFreshStats } from './farming';
 import { journal } from './journal';
 import { LORENCIA_WARP, WARP_SPOTS, crowdedAt, persistLearning, warpAndWait } from './route';
 import { bot, learned, world } from './state';
@@ -37,7 +37,10 @@ export function resetStatTracking() {
 
 export async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
-  if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  const family = classFamily(world.classId);
+  // Personaje nuevo: reparte apenas tiene puntos (no espera a juntar STAT_BATCH_MIN).
+  const fresh = !BUILD_ARG && family != null && isFreshChar(world.resets, world.stats);
+  if (points <= 0 || (!force && !fresh && points < STAT_BATCH_MIN)) return 0;
   if (!force && Date.now() < statOffUntil) return 0;
   if (statTry && Date.now() - statTry.at > 3000 && points >= statTry.points) {
     statTry = null; statOffUntil = Date.now() + 15 * 60_000;
@@ -45,7 +48,11 @@ export async function investStatPoints(force = false): Promise<number> {
     return 0;
   }
   let plan: Array<[StatName, number]>;
-  if (!BUILD_ARG) {
+  if (fresh) {
+    const capped = capStats(planFreshStats(points, family!), world.stats);
+    plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
+    if (!plan.length) return 0;
+  } else if (!BUILD_ARG) {
     // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
     // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
     // Tope de 65535 por stat como el navegador (capStats): lo que no entra va a agilidad y vitalidad.

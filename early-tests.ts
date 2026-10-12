@@ -3,7 +3,8 @@
  *
  *   bun run early-tests.ts
  */
-import { EARLY, INITIAL, biggestCluster, deviasCamp, dist, initialCamp, initialEligible, leashedTarget, lorenciaPlan } from './early';
+import { EARLY, INITIAL, biggestCluster, deviasCamp, dist, fieldFor, inField, initialCamp, leashedTarget, lorenciaPlan } from './early';
+import { canFight, damageRange, estimateFight, monsterCombat } from './power';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -14,22 +15,44 @@ const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
 
 // --- Farmeo inicial ---------------------------------------------------------------------------------
 {
-  ok('inicial: nivel 1 ataca hasta nivel 4 (Budge Dragon sí, Bull Fighter 6 no)', initialEligible(1, 4) && !initialEligible(1, 6));
-  ok('inicial: monstruo sin nivel conocido → no', !initialEligible(5, undefined));
+  const F0 = INITIAL.fields[0];
   const me = { x: 135, y: 130 };
   const grp = [{ x: 140, y: 140 }, { x: 141, y: 141 }, { x: 139, y: 141 }, { x: 170, y: 170 }];
-  const c = initialCamp({ me, myLevel: 3, monsters: grp, prev: null, rand: () => 0.5 });
-  ok('inicial: campamento en el grupo de su nivel más grande a la vista', dist(c.camp, { x: 140, y: 140 }) <= 1 && c.why.startsWith('grupo de 3'), c);
-  const keep = initialCamp({ me, myLevel: 3, monsters: grp, prev: { x: 141, y: 142 }, rand: () => 0.5 });
+  const c = initialCamp({ me, field: F0, monsters: grp, prev: null, rand: () => 0.5 });
+  ok('inicial: campamento en el grupo atacable más grande a la vista', dist(c.camp, { x: 140, y: 140 }) <= 1 && c.why.startsWith('grupo de 3'), c);
+  const keep = initialCamp({ me, field: F0, monsters: grp, prev: { x: 141, y: 142 }, rand: () => 0.5 });
   ok('inicial: no se recentra por un corrimiento chico', keep.camp.x === 141 && keep.camp.y === 142, keep);
-  const lvl1 = initialCamp({ me, myLevel: 1, monsters: [], prev: null, rand: () => 0.5 });
-  ok('inicial: nivel 1 sin monstruos → junto al pueblo', lvl1.camp.x === INITIAL.town.x && lvl1.camp.y === INITIAL.town.y, lvl1);
-  const top = initialCamp({ me, myLevel: INITIAL.untilLevel, monsters: [], prev: null, rand: () => 0.5 });
-  ok('inicial: al tope sin monstruos → el Lich', top.camp.x === EARLY.lorencia.lich.x && top.camp.y === EARLY.lorencia.lich.y, top);
-  const mid = initialCamp({ me, myLevel: 5, monsters: [], prev: null, rand: () => 0.5 });
-  ok('inicial: nivel medio → entre el pueblo y el Lich', mid.camp.y > INITIAL.town.y && mid.camp.y < EARLY.lorencia.lich.y, mid);
-  const far = initialCamp({ me, myLevel: 3, monsters: [{ x: 135, y: 160 }], prev: null, rand: () => 0.5 });
+  const lvl1 = initialCamp({ me: INITIAL.town, field: F0, monsters: [], prev: null, rand: () => 0.5 });
+  ok('inicial: en el pueblo sin atacables → al campo (no se queda en zona segura)',
+    lvl1.camp.x === F0.entry.x && lvl1.camp.y === F0.entry.y && dist(lvl1.camp, INITIAL.town) > 40, lvl1);
+  const roam = initialCamp({ me: { x: 195, y: 130 }, field: F0, monsters: [], prev: null, rand: () => 0.9 });
+  ok('inicial: ya en el campo sin monstruos → otro punto del campo', inField(roam.camp, F0) && roam.why.includes('recorro'), roam);
+  const blocked = initialCamp({ me: INITIAL.town, field: F0, monsters: [], prev: null, rand: () => 0.9, walkable: () => false });
+  ok('inicial: punto no caminable → la entrada del campo', blocked.camp.x === F0.entry.x && blocked.camp.y === F0.entry.y, blocked);
+  const far = initialCamp({ me, field: F0, monsters: [{ x: 135, y: 160 }], prev: null, rand: () => 0.5 });
   ok('inicial: un monstruo a más de scan no cuenta', far.why.startsWith('sin monstruos'), far);
+  ok('inicial: dura hasta el 20', INITIAL.untilLevel === 20);
+  // El campo sale de con qué puede, no del nivel.
+  const lv = (t: number) => ({ 3: 2, 2: 4, 0: 6, 1: 9, 4: 12, 6: 14 } as Record<number, number>)[t];
+  ok('campo: solo arañas → este', fieldFor((t) => t === 3, lv) === INITIAL.fields[0]);
+  ok('campo: hasta Bull Fighter → norte', fieldFor((t) => [3, 2, 0].includes(t), lv) === INITIAL.fields[1]);
+  ok('campo: con Hound → oeste', fieldFor((t) => [3, 2, 0, 1].includes(t), lv) === INITIAL.fields[2]);
+  ok('campo: con todo (Horaz) → Lich', fieldFor(() => true, lv) === INITIAL.fields[3]);
+  ok('campo: con nada → el primero', fieldFor(() => false, lv) === INITIAL.fields[0]);
+}
+
+// --- Poder del personaje (power.ts) ------------------------------------------------------------------
+{
+  const nuevo = { family: 'knight' as const, stats: { str: 28, agi: 20, vit: 25, ene: 10 }, maxHp: 112 };
+  const horaz = { family: 'knight' as const, stats: { str: 65535, agi: 3000, vit: 3000, ene: 65535 }, maxHp: 20000 };
+  ok('poder: DK recién creado puede con arañas', canFight(nuevo, 3));
+  ok('poder: DK recién creado NO con Lich ni Hound', !canFight(nuevo, 6) && !canFight(nuevo, 1));
+  ok('poder: Horaz puede con el Lich y el Giant', canFight(horaz, 6) && canFight(horaz, 7));
+  const e = estimateFight(nuevo, monsterCombat(6)!);
+  ok('poder: el Lich mata a un recién creado (pierde más de toda la vida)', e.hpLoss > 1, e);
+  ok('poder: tipo sin datos → no', !canFight(horaz, 99999));
+  const mago = { family: 'wizard' as const, stats: { str: 18, agi: 18, vit: 15, ene: 30 }, maxHp: 60 };
+  ok('poder: el mago pega con energía', damageRange(mago)[1] === 30 / 4);
 }
 
 // --- Lorencia --------------------------------------------------------------------------------------
