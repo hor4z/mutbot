@@ -413,6 +413,27 @@ export function trackWorld() {
     onMapArrival();
   });
 
+  // Reaparición tras morir (C1 F3 04, formato 075: X @4, Y @5, mapa @6). Sin esto el bot seguía
+  // creyendo que estaba donde murió: caminaba desde ahí, el server le rechazaba los pasos y en el
+  // panel quedaba congelado (Hume, 2026-10-12: murió en el Lich y el panel lo mostraba ahí, ya en el pueblo).
+  EventBus.on('RespawnAfterDeath075', (raw: any) => {
+    const b = toBytes(raw);
+    if (b.length < 7) return;
+    const [x, y, map] = [b[4], b[5], b[6]];
+    const changed = map !== world.map;
+    world.map = map;
+    world.x = x;
+    world.y = y;
+    log(`Reaparezco en map=${map} pos=(${x},${y}).`);
+    if (changed) {
+      world.npcs.clear();
+      world.townNpcs.clear();
+      world.players.clear();
+      drops.clear();
+    }
+    onMapArrival();
+  });
+
   // Invitaciones a party: se rechazan (con party la exp se reparte: en el navegador los ciclos de
   // Horaz pasaron de ~9 a ~13,6 min; con spots complementarios cada uno se queda con lo suyo). Con
   // --party-mates se acepta solo de un compañero (MUBOT_MATES, por nombre). Con un respiro humano.

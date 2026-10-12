@@ -66,6 +66,7 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
+| `power.ts` | ¿Puede el personaje con este monstruo? Daño y defensa con sus stats reales y la clase contra vida/daño/defensa de `monsters.json`: lo mata en <= 6 s perdiendo <= 35 % de la vida. Decide qué ataca y a qué campo va un personaje nuevo, y si va por un dorado. Tests en `early-tests.ts`. |
 | `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
@@ -459,6 +460,12 @@ Leer un `ItemData` de 12 bytes de ahí tiraba el proceso entero. Se arregló
 distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
 ítems, 14 fijo para dinero) antes de elegir qué clase usar.
 
+### Reaparición tras morir
+
+`RespawnAfterDeath075` (C1 F3 04, 22 bytes en este server): X @4, Y @5, mapa @6. **No se manejaba**:
+después de morir el bot seguía en la posición de la muerte, caminaba desde ahí y el panel quedaba
+congelado (Hume, 2026-10-12). Ahora actualiza posición/mapa y cuenta como llegada (`onMapArrival`).
+
 ### Layouts que el parser generado rompe
 
 - **CharacterList**: el XML define el "Extended" (34 bytes/char), pero 0.97d
@@ -523,6 +530,12 @@ quedan fijas en el C#.
 
 Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 
+- **Personaje nuevo** (`isFreshChar`: sin resets y < 3000 puntos en total):
+  - Reparte los puntos apenas los tiene, según la clase (`planFreshStats`: DK fuerza 55 %, agilidad 25 %, vitalidad 20 %).
+  - Farmeo inicial en Lorencia hasta el 20 por campos (este: arañas/Budge; norte: Bull Fighter; oeste:
+    Hound; sur: Lich), eligiendo campo y monstruos con `power.ts` (sus stats, no el nivel). Campamento
+    estable: empate → el más cercano; se muda solo por un grupo de 3+.
+  - No ataca dorados con los que no puede ni sale a cazar en las invasiones.
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
   - **Farmeo inicial** (personaje nuevo, nivel 1 a 9 en Lorencia, `INITIAL` en `early.ts`): solo monstruos de hasta 3 niveles más que él (nivel de `data/monsters.json`; sin dato, no). Acampa en el grupo más grande de esos a ≤ 20 tiles y, sin ninguno a la vista, se aleja del pueblo (135,128) hacia el Lich en proporción al nivel. En el 10 pasa al farmeo avanzado: el plan del Lich.
   - Lorencia (10-19): directo al Lich (134,202 ±3) con una salida variada en cada reset.
