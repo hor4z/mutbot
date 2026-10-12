@@ -8,7 +8,7 @@ import { track, trackEvent } from './telemetry';
 import { isPriorityChar } from './knowledge';
 import { dragonZones, nextZone } from './zones';
 import { DRAGON_TYPES } from './golden';
-import { closeSockets } from './connection';
+import { closeSockets, sendToGS } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
@@ -21,7 +21,7 @@ import { DEFENSE, Defense } from './defense';
 import { GoldenRule } from './golden';
 import { canFight } from './power';
 import { equipStep } from './equip';
-import { attackerOf, ownAreaSkill } from './protocol097';
+import { attackerOf, buildPartyInvite, ownAreaSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS } from './route';
 import { toBytes } from './util';
@@ -285,6 +285,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let devCrowdSince: number | null = null;
   const early = new EarlyPlanner();
   let lastEquipTry = 0;
+  let lastPartyAsk = 0;
+  let lastFieldLeave = 0;
   // Regla fuerte de dorados (golden.ts) y los ya avisados.
   const golden = new GoldenRule();
   const goldAnnounced = new Set<number>();
@@ -652,7 +654,25 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       lastEquipTry = Date.now();
       void equipStep().catch(() => {});
     }
-    if (!targetInMeleeRange && (await lootStep(weak))) {
+    const fightNear = weak && early.initial() && early.targets(ctx.npcs.values()).some((n) => chebyshev(world.x, world.y, n.x, n.y) <= 8);
+    // Personaje nuevo en un spot ocupado sin rendir: pedir party al jugador más cercano (una vez cada 5 min)
+    // y, si a los 90 s sigue sin exp, irse a otro campo (pedido del usuario: "pedir party o salir de ahí").
+    if (weak && early.initial() && !bot.inParty) {
+      const nowP = Date.now();
+      const near = [...world.players.entries()].map(([id, p]) => ({ id, p, d: chebyshev(world.x, world.y, p.x, p.y) })).filter((x) => x.d <= 10).sort((a, b) => a.d - b.d);
+      const dry = nowP - bot.lastArrivalAt > 60_000 && expLog.perMin(nowP, 60_000) === 0;
+      if (near.length && dry && nowP - lastPartyAsk > 5 * 60_000) {
+        lastPartyAsk = nowP;
+        sendToGS(new DataView(buildPartyInvite(near[0].id).buffer));
+        decide(`Spot ocupado y sin exp: le pido party a ${near[0].p.name ?? '#' + near[0].id}.`);
+      }
+      if (near.length && nowP - bot.lastArrivalAt > 90_000 && expLog.perMin(nowP, 90_000) === 0 && nowP - lastFieldLeave > 3 * 60_000) {
+        lastFieldLeave = nowP;
+        const left = early.leaveField(5 * 60_000);
+        if (left) decide(`${left}: ocupado por ${near.length} jugador(es) y sin exp en 90 s: me voy a otro campo por 5 min.`);
+      }
+    }
+    if (!targetInMeleeRange && (await lootStep(weak, fightNear))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;

@@ -42,6 +42,8 @@ export const INITIAL = {
   leaveZen: 5000,
   /** el Lich: hay que poder con él antes de irse */
   lichType: 6,
+  /** para irse alcanza con matar al Lich en <= esto (y perdiendo <= 35 % de vida) */
+  leaveKillSec: 10,
   scan: 20,
   /** el campamento se mantiene mientras haya atacables a <= esto de él */
   keepNear: 8,
@@ -51,7 +53,8 @@ export const INITIAL = {
   /** campos de menor a mayor: zona a recorrer, por dónde se entra y qué monstruos salen (tipos) */
   fields: [
     { name: 'el campo de arañas y Budge Dragon (este)', monsters: [3, 2], x1: 182, x2: 212, y1: 105, y2: 150, entry: { x: 186, y: 128 } },
-    { name: 'el campo de Bull Fighter (norte)', monsters: [0, 2], x1: 145, x2: 200, y1: 45, y2: 85, entry: { x: 170, y: 80 } },
+    // Spot de Bull Fighter visto en vivo (2026-10-12): (160,52), con jugadores farmeándolo.
+    { name: 'el campo de Bull Fighter (norte)', monsters: [0, 2], x1: 145, x2: 200, y1: 40, y2: 85, entry: { x: 160, y: 52 } },
     { name: 'el campo de Hound (oeste)', monsters: [1, 4], x1: 50, x2: 92, y1: 100, y2: 150, entry: { x: 85, y: 128 } },
     { name: 'el campo del Lich (sur)', monsters: [6], x1: 115, x2: 160, y1: 180, y2: 225, entry: { x: 134, y: 190 } },
   ] as Field[],
@@ -63,10 +66,11 @@ export type Field = { name: string; monsters: number[]; x1: number; x2: number; 
  * El campo que le toca: el que tiene el monstruo más fuerte (más nivel) con el que puede. Si no puede
  * con ninguno, el primero (arañas). `levelOf`: nivel por tipo (monsters.json).
  */
-export function fieldFor(canFight: (type: number) => boolean, levelOf: (type: number) => number | undefined): Field {
+export function fieldFor(canFight: (type: number) => boolean, levelOf: (type: number) => number | undefined, skip: (f: Field) => boolean = () => false): Field {
   let best = INITIAL.fields[0];
   let bestLevel = -1;
   for (const f of INITIAL.fields) {
+    if (skip(f)) continue;
     const top = Math.max(-1, ...f.monsters.filter(canFight).map((t) => levelOf(t) ?? -1));
     if (top > bestLevel) { best = f; bestLevel = top; }
   }

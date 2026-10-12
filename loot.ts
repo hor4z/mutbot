@@ -84,7 +84,12 @@ function bagRoom(): number {
 }
 
 // Devuelve true si hizo algo (un paso o el pickup).
-export async function lootStep(fresh = false): Promise<boolean> {
+/**
+ * `fresh` (personaje nuevo): además de lo valioso, zen/pociones/equipo; pero primero pelea (con un
+ * atacable a <= 8 solo levanta lo que está pegado) y no levanta lo que cae al lado de otro jugador (es
+ * suyo: Hume se pasaba el tiempo juntando el zen de dos jugadores y no sumaba exp, 2026-10-12).
+ */
+export async function lootStep(fresh = false, fightNear = false): Promise<boolean> {
   if (!drops.size) {
     lootState.looting = null;
     return false;
@@ -98,7 +103,9 @@ export async function lootStep(fresh = false): Promise<boolean> {
     }
     lootState.looting = null;
   }
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, drops.values(), LOOT_RADIUS, fresh, fresh && bagRoom() >= LOOT_GEAR_MIN_FREE);
+  const radius = fresh && fightNear ? 1 : LOOT_RADIUS;
+  const pool = fresh ? [...drops.values()].filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : drops.values();
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, fresh && bagRoom() >= LOOT_GEAR_MIN_FREE);
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });

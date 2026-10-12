@@ -21,6 +21,7 @@ import {
 import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
 import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
 import { journal } from './journal';
+import { isFreshChar } from './farming';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
 import { scheduleEventPolls } from './events';
 import { isMonsterType, isTownNpcType } from './explore';
@@ -448,7 +449,9 @@ export function trackWorld() {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
     const from = world.players.get(id)?.name;
-    const mate = PARTY_MATES && from != null && isMate(from);
+    // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
+    // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
+    const mate = (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));

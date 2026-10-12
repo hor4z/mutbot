@@ -7,8 +7,8 @@
  */
 import { decide } from './journal';
 import { CORNER, type Pos } from './corner';
-import { EARLY, INITIAL, deviasCamp, dist, fieldFor, initialCamp, lorenciaPlan, type Field } from './early';
-import { canFight, type Fighter } from './power';
+import { EARLY, INITIAL, deviasCamp, dist, fieldFor, inField, initialCamp, lorenciaPlan, type Field } from './early';
+import { FIGHT_LIMITS, canFight, type Fighter } from './power';
 import { bot, monsterLevel, world, type ScopedNpc } from './state';
 import { classFamily, isFreshChar } from './farming';
 import { isWalkable } from './terrain';
@@ -41,7 +41,7 @@ export class EarlyPlanner {
    * en el 27 con 0 zen) y que pueda con el Lich (lo más fuerte del mapa). Sus stats deciden, no el nivel.
    */
   readyToLeave(): boolean {
-    return world.level >= INITIAL.untilLevel && bot.lastMoney >= INITIAL.leaveZen && canFight(this.fighter(), INITIAL.lichType);
+    return world.level >= INITIAL.untilLevel && bot.lastMoney >= INITIAL.leaveZen && canFight(this.fighter(), INITIAL.lichType, { ...FIGHT_LIMITS, maxKillSec: INITIAL.leaveKillSec });
   }
 
   /** El personaje como lo ve power.ts (stats reales, vida máxima, clase). */
@@ -54,13 +54,26 @@ export class EarlyPlanner {
     const all = [...npcs];
     if (!this.initial()) return all;
     const f = this.fighter();
-    return all.filter((n) => canFight(f, n.type));
+    // Sin disputarle a otro jugador el monstruo que está peleando (a <= 2 de él).
+    const busy = (n: N) => [...world.players.values()].some((p) => Math.max(Math.abs(p.x - n.x), Math.abs(p.y - n.y)) <= 2);
+    return all.filter((n) => canFight(f, n.type) && !busy(n));
+  }
+
+  /** Campos que se dejan un rato (ocupados por otros jugadores y sin rendir). */
+  private avoid = new Map<Field, number>();
+  /** Deja el campo actual por `ms` (estaba ocupado y no rendía): elige otro con el que pueda. */
+  leaveField(ms: number): string | null {
+    if (!this.lastField) return null;
+    this.avoid.set(this.lastField, Date.now() + ms);
+    this.initialPrev = null;
+    return this.lastField.name;
   }
 
   /** El campo que le toca según sus stats (power.ts), no según el nivel. */
   private field(): Field {
     const f = this.fighter();
-    return fieldFor((t) => canFight(f, t), monsterLevel);
+    const now = Date.now();
+    return fieldFor((t) => canFight(f, t), monsterLevel, (x) => (this.avoid.get(x) ?? 0) > now);
   }
   private lastField: Field | null = null;
 
@@ -121,7 +134,13 @@ export class EarlyPlanner {
         if (this.lastField) this.initialPrev = null;
         this.lastField = field;
       }
-      const r = initialCamp({ me, field, monsters: this.targets(npcs), prev: this.initialPrev, rand: Math.random, walkable: (q) => isWalkable(0, q.x, q.y) });
+      // Fuera de su campo: va hacia él y solo pelea con lo que tenga pegado en el camino. Antes se quedaba
+      // con lo que viera (Bull Fighter, nivel 6) disputándolo con otros, ya pudiendo con Hound y Elite Bull
+      // del campo oeste (Hume en el 51; usuario: "le conviene ir a buscar enemigos y avanzar").
+      const here = inField(me, field);
+      if (!here && this.initialPrev && !inField(this.initialPrev, field)) this.initialPrev = null;
+      const pool = this.targets(npcs).filter((n) => here ? true : inField(n, field) || dist(n, me) <= 3);
+      const r = initialCamp({ me, field, monsters: pool, prev: this.initialPrev, rand: Math.random, walkable: (q) => isWalkable(0, q.x, q.y) });
       if (!this.initialPrev || r.camp.x !== this.initialPrev.x || r.camp.y !== this.initialPrev.y) decide(`Farmeo inicial (nivel ${world.level}): campamento (${r.camp.x},${r.camp.y}): ${r.why}.`);
       // Sin monstruos de su nivel: el punto de paseo se suelta al llegar, para elegir otro.
       this.initialPrev = r.why.startsWith('sin monstruos') && dist(me, r.camp) <= 2 ? null : r.camp;

@@ -28,7 +28,7 @@ export const monsterCombat = (type: number): MonsterCombat | undefined => COMBAT
 
 /** Lo que se acepta: matarlo en <= `maxKillSec` perdiendo <= `maxHpLoss` de la vida. */
 // attackSec: un golpe cada 0,5 s (ATTACK_PACE_MS de config.ts; acá fijo para que sea puro).
-export const FIGHT_LIMITS = { maxKillSec: 6, maxHpLoss: 0.35, hitChance: 0.7, attackSec: 0.5 } as const;
+export const FIGHT_LIMITS: { maxKillSec: number; maxHpLoss: number; hitChance: number; attackSec: number } = { maxKillSec: 6, maxHpLoss: 0.35, hitChance: 0.7, attackSec: 0.5 };
 
 export function damageRange(f: Fighter): [number, number] {
   const { str, agi, ene } = f.stats;
