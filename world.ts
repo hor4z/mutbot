@@ -442,6 +442,16 @@ export function watchMoney() {
 // ---------------------------------------------------------------------------
 // Entrada al mundo: login -> lista de personajes -> elegir -> CharacterInformation.
 // ---------------------------------------------------------------------------
+/** Personajes de la cuenta, sin elegir ninguno (--list-chars). */
+export async function listCharacters() {
+  login(USERNAME, PASSWORD);
+  const loginResp = new LoginResponsePacket(await waitFor('LoginResponse'));
+  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
+  const listWaiter = waitFor('CharacterList');
+  requestCharacterList();
+  return parseCharacterList097(await listWaiter).map((c) => ({ name: c.Name, level: c.Level }));
+}
+
 export async function loginAndSelectCharacter() {
   login(USERNAME, PASSWORD);
   const loginBytes = await waitFor('LoginResponse');

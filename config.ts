@@ -26,7 +26,7 @@ for (let i = 0; i < argv.length; i++) {
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
   '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
-  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates',
+  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates', '--list-chars',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -59,6 +59,9 @@ if (!ALLOW_REMOTE && !(LOCAL.test(proxyHost) && LOCAL.test(CS_HOST))) {
 
 // --exit-if-in-use (lo pasa la estación): ver main() en headless-bot.ts.
 export const EXIT_IF_IN_USE = args.has('--exit-if-in-use');
+// --list-chars (lo usa la estación): entra, imprime los personajes de la cuenta y sale. No elige
+// ninguno ni entra al mundo.
+export const LIST_CHARS = args.has('--list-chars');
 // 0 = sin límite: farmea, resetea y reconecta con backoff.
 export const AUTO_SECONDS = parseInt(args.get('--auto-seconds') ?? '600');
 // Panel (ws-server.ts); sin el flag no se levanta.

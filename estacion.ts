@@ -376,6 +376,46 @@ async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string
   return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Guardado' : 'Cuenta creada'}. Conectando a ${r.char}: ${what}.` : c.msg };
 }
 
+/**
+ * Personajes de una cuenta, preguntándole al server: lanza el bot con --list-chars (entra, lista y
+ * sale; no elige personaje ni entra al mundo). Uno por vez. La clave va por MUBOT_PASS.
+ */
+let probing = false;
+async function probeAccount(user: string, pass: string | null): Promise<{ ok: boolean; msg: string; chars?: { name: string; level: number }[] }> {
+  if (!pass) return { ok: false, msg: `no tengo la clave de ${user}` };
+  const busy = [...slots.values()].find((x) => x.pid != null && x.cfg.user.toLowerCase() === user.toLowerCase());
+  if (busy) return { ok: false, msg: `la cuenta ${user} está jugando con ${busy.cfg.char}: desconectalo primero` };
+  if (probing) return { ok: false, msg: 'ya estoy consultando otra cuenta, probá en unos segundos' };
+  probing = true;
+  try {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
+    env.MUBOT_PASS = pass;
+    const proc = Bun.spawn([process.execPath, '--env-file=/dev/null', 'run', 'headless-bot.ts', '--list-chars', '--allow-remote',
+      '--proxy', SERVER.proxy, '--cs-host', SERVER.csHost, '--cs-port', String(SERVER.csPort), '--user', user], {
+      cwd: ROOT, env, stdin: 'ignore', stdout: 'pipe', stderr: 'ignore',
+    });
+    const timer = setTimeout(() => proc.kill(), 30_000);
+    const out = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    clearTimeout(timer);
+    const line = out.split('\n').find((l) => l.startsWith('MUBOT_CHARS '));
+    if (code === 0 && line) {
+      const chars = JSON.parse(line.slice('MUBOT_CHARS '.length)) as { name: string; level: number }[];
+      if (db.hasAccount(user)) db.setAccountStatus(user, 'active');
+      return { ok: true, msg: chars.length ? `${user}: ${chars.length} personaje${chars.length === 1 ? '' : 's'}` : `${user} no tiene personajes todavía`, chars };
+    }
+    if (code === 4 && db.hasAccount(user)) db.setAccountStatus(user, 'blocked');
+    const why = code === 3 ? 'la cuenta está abierta en otro lado (¿el navegador?): cerrala y probá de nuevo'
+      : code === 4 ? 'el server tiene la cuenta bloqueada'
+      : code === 5 ? 'cuenta o clave incorrecta'
+      : 'el server no contestó a tiempo';
+    return { ok: false, msg: `No pude ver los personajes de ${user}: ${why}` };
+  } finally {
+    probing = false;
+  }
+}
+
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
   if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
   if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
@@ -520,6 +560,10 @@ Bun.serve({
       const r = parseStationRequest(raw);
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       refreshSlots();
+      if (r.action === 'probe') {
+        const res = await probeAccount(r.user, r.pass ?? db.passOfAccount(r.user));
+        return json(res, res.ok ? 200 : 409);
+      }
       if (r.action === 'create' || r.action === 'add') {
         const pass = r.action === 'add' ? db.passOfAccount(r.user) : null;
         if (r.action === 'add' && !pass) return json({ ok: false, msg: `no tengo la cuenta ${r.user} en la base` }, 404);

@@ -225,6 +225,28 @@ function NewCharacter({
   // El personaje ya está creado en el server: no hace falta clase y el bot no crea nada.
   const [charExists, setCharExists] = useState(false);
   const known = (!!account || existing) && charExists;
+  // Personajes que ya tiene la cuenta en el server (la estación entra, lista y sale).
+  const [found, setFound] = useState<{ name: string; level: number }[] | null>(null);
+  const [probeMsg, setProbeMsg] = useState("");
+  const [probing, setProbing] = useState(false);
+  async function probe() {
+    setProbing(true);
+    setProbeMsg("Entrando a la cuenta para ver tus personajes…");
+    setFound(null);
+    try {
+      const r = await fetch("/api/do", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(account ? { action: "probe", user: account } : { action: "probe", user, pass }),
+      });
+      const j = await r.json();
+      setProbeMsg(j.msg ?? "");
+      if (j.ok) setFound(j.chars ?? []);
+    } catch {
+      setProbeMsg("La estación no contesta.");
+    }
+    setProbing(false);
+  }
   const [cls, setCls] = useState<CharClassKey>("dk");
   const [char, setChar] = useState("");
   const [names, setNames] = useState<string[]>([]);
@@ -292,6 +314,35 @@ function NewCharacter({
         Ya tengo la cuenta (no registrarla)
       </label>
         </>
+      )}
+      {(account || existing) && (
+        <div className="probe">
+          <Action
+            className="quiet"
+            disabled={probing || (!account && (!/^[A-Za-z0-9]{4,10}$/.test(user) || !/^[!-~]{4,10}$/.test(pass)))}
+            onClick={() => void probe()}
+          >
+            <Users size={15} />
+            {probing ? "Buscando…" : "Buscar mis personajes"}
+          </Action>
+          {probeMsg && <p className="muted">{probeMsg}</p>}
+          {found && found.length > 0 && (
+            <div className="name-chips">
+              {found.map((f) => (
+                <button
+                  key={f.name}
+                  className={`chip ${known && char === f.name ? "active" : ""}`}
+                  onClick={() => {
+                    setCharExists(true);
+                    setChar(f.name);
+                  }}
+                >
+                  {f.name} · Nv. {f.level}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       {(account || existing) && (
         <label className="check">

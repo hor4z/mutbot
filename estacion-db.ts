@@ -161,6 +161,10 @@ export class EstacionDb {
     return out;
   }
 
+  hasAccount(user: string): boolean {
+    return !!this.db.query('SELECT 1 FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
+  }
+
   /** Clave guardada de una cuenta (para sumarle personajes sin volver a pedirla). */
   passOfAccount(user: string): string | null {
     return this.db.query<{ password: string }, [number, string]>('SELECT password FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user)?.password ?? null;

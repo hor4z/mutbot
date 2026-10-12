@@ -117,6 +117,9 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   ok('crear: campo de más', parseStationRequest({ ...base, x: 1 }) === null);
   ok('crear: personaje que ya existe (sin clase) solo con cuenta existente',
     parseStationRequest({ ...base, cls: null, existing: true })?.action === 'create' && parseStationRequest({ ...base, cls: null }) === null);
+  ok('probe: con o sin clave', parseStationRequest({ action: 'probe', user: 'cuenta9', pass: 'cl4ve!' })?.action === 'probe'
+    && parseStationRequest({ action: 'probe', user: 'cuenta9' })?.action === 'probe'
+    && parseStationRequest({ action: 'probe', user: 'c', pass: 'x' }) === null);
   ok('sumar: personaje a cuenta guardada (sin clave)', parseStationRequest({ action: 'add', user: 'cuenta9', char: 'Lythgard', cls: 'elf' })?.action === 'add');
   ok('sumar: con clave de más se rechaza', parseStationRequest({ action: 'add', user: 'cuenta9', pass: 'x', char: 'Lythgard', cls: 'elf' }) === null);
   ok('crear: sin existing', parseStationRequest({ action: 'create', user: 'cuenta9', pass: 'cl4ve!', char: 'Umbrion', cls: 'dk' }) === null);

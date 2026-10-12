@@ -1734,3 +1734,13 @@ time {
 .welcome .manage-character {
   max-width: 360px;
 }
+
+.new-char .probe {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.new-char .probe p {
+  margin: 0;
+  font-size: 11px;
+}

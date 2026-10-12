@@ -35,7 +35,7 @@ bun run agent       # el agente del navegador archivado (browser/serve-agent.ts,
 
 Flags del bot: ver la cabecera de `headless-bot.ts` (conexión, `--auto-seconds 0` = sin límite con
 reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, `--skills`, `--spots`,
-`--ws-port`, `--decision-log`, `--exit-if-in-use`). **Un flag desconocido corta al arrancar con
+`--ws-port`, `--decision-log`, `--exit-if-in-use`, `--list-chars`). **Un flag desconocido corta al arrancar con
 código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
 
 `--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
@@ -612,6 +612,10 @@ su consola.
     Con "ya tengo la cuenta" (`existing`) no registra.
   - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles. Nombre de 4
     a 10 letras o números.
+  - **Buscar mis personajes** (`{action:'probe', user, pass?}`, sin `pass` usa la de la base): lanza
+    el bot con `--list-chars`, que entra, imprime `MUBOT_CHARS <json>` (nombre y nivel) y sale sin elegir
+    personaje ni entrar al mundo (3/4/5 si el login se rechaza; 4 marca la cuenta `blocked`). Uno por vez,
+    30 s de plazo. **Probado en vivo** (2026-10-12).
   - **Personaje que ya existe** (cuenta existente + "El personaje ya existe"): `cls: null`, no se crea
     nada; si el nombre no está en la cuenta el bot sale con código 6 en vez de entrar con otro
     (`CHAR_EXPLICIT`: con `--char`/`MUBOT_CHAR` ya no cae al primero de la lista).

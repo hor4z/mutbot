@@ -119,7 +119,9 @@ export type StationRequest =
   | { action: 'disconnect'; char: string }
   | { action: 'routine'; char: string; routine: Routine }
   | NewCharRequest
-  | { action: 'add'; user: string; char: string; cls: CharClassKey | null };
+  | { action: 'add'; user: string; char: string; cls: CharClassKey | null }
+  // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
+  | { action: 'probe'; user: string; pass?: string };
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
@@ -159,6 +161,14 @@ export function parseStationRequest(v: unknown): StationRequest | null {
     // Clase null = el personaje ya existe en el server (solo con una cuenta que ya existe).
     if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !(isCharClass(r.cls) || (r.cls === null && r.existing))) return null;
     return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
+  }
+  if (r.action === 'probe') {
+    const keys = Object.keys(r).sort().join();
+    if (keys !== 'action,user' && keys !== 'action,pass,user') return null;
+    if (typeof r.user !== 'string') return null;
+    if (keys === 'action,user') return /^[A-Za-z0-9]{4,10}$/.test(r.user) ? { action: 'probe', user: r.user } : null;
+    if (typeof r.pass !== 'string' || accountProblem(r.user, r.pass)) return null;
+    return { action: 'probe', user: r.user, pass: r.pass };
   }
   // Otro personaje en una cuenta que ya está en la base: la clave la pone la estación.
   if (r.action === 'add') {
