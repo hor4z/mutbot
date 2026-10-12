@@ -13,6 +13,7 @@
  *   --user u --pass p --char c           (mejor por .env)
  *   --allow-remote                       permite apuntar a hosts no locales
  *   --exit-if-in-use                     si la cuenta ya está conectada al entrar, sale con código 3
+ *   (login rechazado: sale con 4 si la cuenta está bloqueada, 5 si la clave/cuenta/versión está mal)
  *
  * Farmeo:
  *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea, resetea y reconecta con backoff)
@@ -79,6 +80,9 @@ import { startStatusServer } from './ws-server';
 
 // Código de salida de --exit-if-in-use (la estación lo muestra como "cuenta abierta en otro lado").
 const EXIT_IN_USE = 3;
+// Login rechazado sin arreglo reintentando: 4 = cuenta bloqueada, 5 = clave, cuenta o versión mal.
+const EXIT_BLOCKED = 4;
+const EXIT_LOGIN_REFUSED = 5;
 
 // Tras una sesión trabada (ciego), esto antes de volver a entrar.
 const BLIND_WAIT_MS = 5_000;
@@ -166,7 +170,7 @@ async function main() {
       if (e instanceof LoginError && FATAL_LOGIN.has(e.result)) {
         console.error(`${e.message}: no reintento.`);
         closeSockets();
-        process.exit(1);
+        process.exit(e.result === LoginResponseLoginResultEnum.AccountBlocked ? EXIT_BLOCKED : EXIT_LOGIN_REFUSED);
       }
       alreadyConnected = e instanceof LoginError && e.result === LoginResponseLoginResultEnum.AccountAlreadyConnected;
       // --exit-if-in-use (lo pasa la estación): si en el PRIMER login la cuenta ya está conectada, es

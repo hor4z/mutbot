@@ -98,6 +98,8 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char
 ok('salida: 3 = cuenta abierta en otro lado', exitStatus(3).status === 'in-use');
 ok('salida: 0 = desconectado', exitStatus(0).status === 'off');
 ok('salida: 1 = error', exitStatus(1).status === 'failed');
+ok('salida: 4 = cuenta bloqueada', exitStatus(4).status === 'failed' && exitStatus(4).msg.includes('bloqueó'));
+ok('salida: 5 = login rechazado', exitStatus(5).status === 'failed' && exitStatus(5).msg.includes('rechazó'));
 
 console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
 if (fails) process.exit(1);

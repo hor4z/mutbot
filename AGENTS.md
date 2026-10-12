@@ -39,7 +39,7 @@ reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, 
 código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
 
 `--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
-sale con código 3 en vez de reintentar. Después de un corte sí reintenta (el server tarda en soltar
+sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal); la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
 la sesión vieja del propio bot). Lo pasa la estación.
 
 ## Estructura
@@ -605,7 +605,8 @@ su consola.
   spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); pausa = `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en
   el panel del bot.
 - **Los bots sobreviven a la estación:** corren con `setsid` y escriben en
-  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas). Al arrancar
+  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas; al lanzarlo, un log de más
+  de 50 MB se rota a `.log.1`). Al arrancar
   (y cada 2 s) la estación busca en `/proc` los `headless-bot.ts` de cada cuenta (`--user`,
   `--env-file`, `MUBOT_USER` o, sin nada, el `.env`) y los adopta con su `--ws-port`; uno sin
   `--ws-port` solo se puede desconectar. Desconectar = `SIGTERM`.

@@ -15,7 +15,7 @@ import { serveRadarAsset } from './radar-assets';
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statfsSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -31,6 +31,8 @@ const PORT = Number(process.env.ESTACION_PORT ?? 8787);
 // Entre desconectar y volver a conectar un personaje (ver connect).
 const RECONNECT_GAP_MS = 5_000;
 const LOG_DIR = join(homedir(), '.mubot', 'logs');
+// Al lanzar un bot, si su log pasa de esto se rota a <personaje>.log.1 (se pisa el anterior).
+const LOG_ROTATE_BYTES = 50 * 1024 * 1024;
 const SERVER: GameServer = {
   proxy: process.env.MUBOT_PROXY ?? DEFAULT_SERVER.proxy,
   csHost: process.env.MUBOT_CS_HOST ?? DEFAULT_SERVER.csHost,
@@ -256,6 +258,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   }
   mkdirSync(LOG_DIR, { recursive: true });
   const logPath = join(LOG_DIR, `${s.cfg.key}.log`);
+  try { if (statSync(logPath).size > LOG_ROTATE_BYTES) renameSync(logPath, `${logPath}.1`); } catch { /* todavía no hay log */ }
   const fd = openSync(logPath, 'a');
   // Sin MUBOT_* heredados: la estación pudo cargar el .env de otro personaje.
   const env: Record<string, string> = {};
