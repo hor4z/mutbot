@@ -1,0 +1,44 @@
+/* Vista "Comercio" (Commerce.tsx). Usa las variables de station.css. */
+.commerce { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; }
+.commerce-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.commerce-note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12px; }
+.commerce-empty { padding: 12px 4px; margin: 0; }
+.commerce-grid { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.commerce-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.commerce-side, .commerce-main { padding: 14px 16px; }
+.commerce h3 { margin: 0 0 8px; font-size: 13px; }
+.commerce h3 small { font-weight: 400; }
+.commerce h4 { margin: 12px 0 6px; font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); }
+.commerce-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.commerce-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.commerce-list li > span, .commerce-list li > label { min-width: 0; overflow-wrap: anywhere; }
+.commerce-list.checks label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.commerce-shop-title { color: var(--gold); font-style: normal; }
+.commerce-meta { margin: 6px 0 10px; font-size: 12px; }
+.commerce-unverified { color: var(--gold); font-size: 12px; }
+.commerce-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 10px; }
+.field-mini { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.field-mini input, .field-mini select, input.mini { height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); width: 96px; }
+input.mini { width: 44px; height: 28px; }
+input.mini.wide { width: 96px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.commerce-table td, .commerce-table th { white-space: nowrap; }
+.commerce-table td:first-child { white-space: normal; min-width: 160px; }
+.buy-inline { display: inline-flex; gap: 4px; align-items: center; }
+.commerce-notes summary, .commerce-notes-list { font-size: 11px; color: var(--muted); }
+.commerce-notes code { font-size: 10px; word-break: break-all; color: var(--muted); }
+.commerce-notes-list { padding-left: 16px; margin: 8px 0 0; }
+.commerce-lines { margin: 0 0 10px; padding-left: 18px; }
+.commerce-total { font-weight: 600; margin: 0 0 10px; color: var(--gold); }
+.commerce-pause { margin: 8px 0 0; color: var(--rose); font-size: 12px; }
+.commerce-trade { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+.commerce-trade.incoming { border-color: var(--gold); }
+.commerce-trade.done { border-color: var(--green); }
+.commerce-trade-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.commerce-trade-sides ul { margin: 0; padding-left: 16px; }
+.commerce-trade-actions { display: flex; gap: 8px; margin-top: 8px; }
+.commerce .good { color: var(--green); }
+@media (max-width: 860px) {
+  .commerce-grid, .commerce-grid.two { grid-template-columns: 1fr; }
+  .commerce-trade-sides { grid-template-columns: 1fr; }
+}

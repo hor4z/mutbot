@@ -540,6 +540,16 @@ El bot **no compra ni vende** (pedido del usuario). Solo lleva el zen para el pa
 merchants (venta de basura, compra de pociones, catálogo, descubrimiento) se sacó: la venta tenía un
 bucle sin espera con más de 24 ítems y vendía las cajas (grupo 14).
 
+**Comercio (capacidad, no automatismo; detalle y fuentes en `docs/comercio.md`):** el loop sigue sin
+comprar ni vender. Hay órdenes del panel: `shops` (solo lectura: catálogos de NPC y tiendas personales a la
+vista, sin precios en los NPC) y `commerce` (comprar/vender a un NPC, mi tienda, comprar en tienda, trade),
+cada una con `confirm` = `commerceToken(op)` armado por la UI tras un resumen con ítem, cantidad y total, y con
+el bot **en pausa**. Nunca se venden cajas ni Cristales (`neverSell`); el trade sí los pasa (mulas) y nunca
+acepta solo. `commerce-plan.ts` (`planSales`) solo propone. Archivos: `commerce-packets.ts` (bytes, tests en
+`commerce-tests.ts`), `commerce-plan.ts`, `commerce.ts`, `ui/src/Commerce.tsx` (pestaña "Comercio" del panel;
+demo `?demo&view=comercio`). **SIN VERIFICAR EN VIVO**: nada se corrió contra el server; tienda personal y
+trade son layouts de memoria de OpenMU (el hex de lo que llegue queda en las notas del panel).
+
 ## Anti-cheat
 
 `SpeedHackDetectPlugIn`: delay base de ataque 450ms + token bucket de 5.

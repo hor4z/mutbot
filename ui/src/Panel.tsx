@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tabs } from "@base-ui/react/tabs";
-import { Activity, BookOpen, CircleHelp, Flag, MessageSquare, Shield, Swords, Terminal, WifiOff } from "lucide-react";
+import { Activity, BookOpen, CircleHelp, Flag, MessageSquare, Shield, Store, Swords, Terminal, WifiOff } from "lucide-react";
 import type { PanelCommand } from "../../panel-protocol";
 import { Choice, Confirm, Modal } from "./components";
 import { computeAlerts, SPOTS } from "./hud-logic";
+import { CommerceView } from "./Commerce";
 import { Radar } from "./Radar";
 import { useBot } from "./useBot";
 import { demoMode } from "./demo";
@@ -43,6 +44,7 @@ const TABS = [
   { value: "combat", label: "Combate", Icon: Swords },
   { value: "gear", label: "Equipo y bolsa", short: "Equipo", Icon: Shield },
   { value: "events", label: "Eventos", Icon: Flag },
+  { value: "commerce", label: "Comercio", Icon: Store },
   { value: "chat", label: "Chat", Icon: MessageSquare },
   { value: "journal", label: "Diario", Icon: BookOpen },
   { value: "console", label: "Consola", Icon: Terminal },
@@ -185,6 +187,9 @@ export function Panel() {
             </Tabs.Panel>
             <Tabs.Panel value="events" className="hud-tabpanel">
               <EventsView s={s} now={now} />
+            </Tabs.Panel>
+            <Tabs.Panel value="commerce" className="hud-tabpanel">
+              <CommerceView state={s} send={send} online={online} />
             </Tabs.Panel>
             <Tabs.Panel value="chat" className="hud-tabpanel">
               <ChatPanel chats={chats} result={result} send={send} disabled={disabled} />
