@@ -318,3 +318,30 @@ export function parsePositionFix(raw: Uint8Array | DataView | ArrayBuffer): { id
   if (b.length !== 8 || b[0] !== 0xc1 || b[2] !== 0x11) return null;
   return { id: ((b[3] << 8) | b[4]) & 0x7fff, x: b[5], y: b[6] };
 }
+
+// ---------------------------------------------------------------------------
+// Mover ítems entre depósitos (baúl, bolsa, equipo) y hablar con un NPC.
+//   MoveItem (C3 <len> 24): <de: depósito> <de: casilla> <ítem 5 o 6 bytes> <a: depósito> <a: casilla>.
+//   Depósito 0 = inventario (equipo 0-11, bolsa 12-75): esa forma está PROBADA en vivo (equip.ts, Hume
+//   2026-10-12). Depósito 2 = baúl y 3 = Chaos Machine: salen del cliente web (`placePickedItem(slot, 2)`
+//   al guardar en el baúl, `autoMoveItem(0, slot, 3)` para la máquina; browser/browser-agent.js y
+//   browser/MANUAL-CHAOS.md), que usa el mismo adaptador del 0x24. SIN verificar en vivo desde el headless:
+//   sacar del baúl a la bolsa (de=2) nunca se mandó desde acá.
+//   Casillas del baúl: 0-based, 8 columnas (las que devuelve StoreItemList / vault-<pj>.json).
+// ---------------------------------------------------------------------------
+export const STORAGE = { inventory: 0, trade: 1, vault: 2, chaosMachine: 3 } as const;
+
+export function buildMoveItem(fromStorage: number, fromSlot: number, item: Uint8Array, toStorage: number, toSlot: number): Uint8Array {
+  if (item.length !== 5 && item.length !== 6) throw new Error(`ítem de ${item.length} bytes (esperaba 5 o 6)`);
+  return Uint8Array.from([0xc3, 7 + item.length, 0x24, fromStorage, fromSlot, ...item, toStorage, toSlot]);
+}
+
+/** TalkToNpcRequest (C3 05 30 <id BE>): abre la ventana del NPC (Baz = baúl; el Chaos Goblin es el NPC 238). */
+export function buildTalkNpc(npcId: number): Uint8Array {
+  return Uint8Array.from([0xc3, 0x05, 0x30, (npcId >> 8) & 0xff, npcId & 0xff]);
+}
+
+/** CloseNpcRequest (C1 03 31): cierra la ventana del NPC (baúl incluido). */
+export function buildCloseNpc(): Uint8Array {
+  return Uint8Array.from([0xc1, 0x03, 0x31]);
+}
