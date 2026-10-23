@@ -52,6 +52,7 @@
  *   util.ts         log, sleep, bytes, direcciones
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
+import { startGoldFeed } from './gold-feed';
 import { startTeamPolling } from './team';
 import { startSquadPolling } from './squad-client';
 import { resetStatTracking } from './progress';
@@ -122,6 +123,7 @@ async function session(deadline: number): Promise<LoopResult> {
     watchChat();
     watchLiveness();
     startTeamPolling();
+  startGoldFeed();
     startSquadPolling();
     worldTracked = true;
   }

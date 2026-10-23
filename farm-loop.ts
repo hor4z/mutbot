@@ -25,6 +25,7 @@ import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
+import { goldFeedHints } from './gold-feed';
 import monstersData from './data/monsters.json';
 import { canFight, monsterCombat } from './power';
 import { farmMiddleware, statPower } from './farm-middleware';
@@ -1038,6 +1039,15 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           spots.set(hint.key, { x: hint.x, y: hint.y, type: 0, at: hint.at });
         }
         if (hinted.size > 200) hinted.clear();
+      }
+      // Dorados que ven los demás (estación, /api/gold): se anotan como recordados para ir derecho (gold-feed.ts).
+      if (world.map === hunting.hunt.map) {
+        const fed = (hunting.hinted ??= new Set());
+        for (const hint of goldFeedHints(world.map, bot.charName, now)) {
+          if (fed.has(hint.key)) continue;
+          fed.add(hint.key);
+          spots.set(hint.key, { x: hint.x, y: hint.y, type: 0, at: hint.at });
+        }
       }
       if (gold && ctx.target !== gold.id) {
         if (!hunting.seen.has(gold.id)) {
