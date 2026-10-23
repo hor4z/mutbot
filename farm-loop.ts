@@ -315,7 +315,21 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (rec) { trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map, finisher: finisherMode }); finisherMode = 'none'; }
   };
   // ObjectHit (0x15 de 10 bytes): el daño que se ve sobre el dragón de la pelea (de cualquiera).
+  // Para decodificar el daño de verdad (dmgSeen daba 0): los primeros bytes crudos de cada tipo de golpe que se ven
+  // con un dragón a la vista. Solo log, ~24 líneas por tipo cada 10 min.
+  const rawSeen = new Map<string, { n: number; at: number }>();
+  const dumpRaw = (tag: string, raw: any) => {
+    if (dragonFight.current == null) return;
+    const now = Date.now();
+    const r = rawSeen.get(tag) ?? { n: 0, at: now };
+    if (now - r.at > 600_000) { r.n = 0; r.at = now; }
+    if (r.n >= 24) { rawSeen.set(tag, r); return; }
+    r.n++; rawSeen.set(tag, r);
+    log(`RAW ${tag} (${dragonFight.current}): ${Buffer.from(toBytes(raw)).toString('hex')}`);
+  };
+  const onObjectHitRaw = (raw: any) => dumpRaw('0x11', raw);
   const onHitDamage = (raw: any) => {
+    dumpRaw(`0x15/${toBytes(raw).length}`, raw);
     const h = parseHitDamage(toBytes(raw));
     if (h) { dragonFight.damage(h.id, h.damage); finisher.damage(h.id, h.damage, Date.now()); }
   };
@@ -391,6 +405,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   };
   EventBus.on('ObjectGotKilled', onKilled);
   EventBus.on('ObjectMoved', onHitDamage);
+  EventBus.on('ObjectHit', onObjectHitRaw);
   EventBus.on('ExperienceGained', onExp);
   EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
@@ -1420,6 +1435,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   EventBus.off('ObjectGotKilled', onKilled);
   EventBus.off('ObjectMoved', onHitDamage);
+  EventBus.off('ObjectHit', onObjectHitRaw);
   EventBus.off('ExperienceGained', onExp);
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
