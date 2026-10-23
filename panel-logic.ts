@@ -197,7 +197,12 @@ export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSe
  */
 // Un mapa sin zonas conocidas (nunca se vio un dorado ahí) se busca a ciegas: vale esta fracción.
 export const HUNT_UNKNOWN_FACTOR = 0.25;
-export function pickHuntMap(inp: { invasion: Invasion | null; level: number; done?: ReadonlySet<number>; dragonMap?: number | null; knownMaps?: ReadonlySet<number> }): HuntChoice {
+// Datos de la base (insights.ts), ambos opcionales y neutros sin base: `factor` multiplica el valor del mapa (rendimiento
+// de cajas medido, muertes y rivales a esta hora) y `predictedDragon` (el mapa más probable del dragón por el historial)
+// suma un cuarto del bonus solo mientras el server no avisó el mapa de verdad.
+export const HUNT_PREDICTED_FRACTION = 0.25;
+export function pickHuntMap(inp: { invasion: Invasion | null; level: number; done?: ReadonlySet<number>; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
+  factor?: (map: number) => number; predictedDragon?: number | null }): HuntChoice {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active') return { ok: false, msg: 'no hay invasión activa' };
   let best: HuntMap | null = null;
@@ -208,7 +213,8 @@ export function pickHuntMap(inp: { invasion: Invasion | null; level: number; don
     const alive = inv.maps.find((x) => x.map === h.map)?.alive ?? 0;
     if (alive <= (h.stopAlive ?? AUTO_HUNT.stopAlive)) continue;
     const known = !inp.knownMaps || inp.knownMaps.has(h.map) || inp.dragonMap === h.map;
-    const score = Math.min(alive, 30) * (h.value ?? 1) * (known ? 1 : HUNT_UNKNOWN_FACTOR) + (inp.dragonMap === h.map ? HUNT_DRAGON_BONUS : 0);
+    const bonus = inp.dragonMap === h.map ? HUNT_DRAGON_BONUS : inp.dragonMap == null && inp.predictedDragon === h.map ? HUNT_DRAGON_BONUS * HUNT_PREDICTED_FRACTION : 0;
+    const score = Math.min(alive, 30) * (h.value ?? 1) * (known ? 1 : HUNT_UNKNOWN_FACTOR) * (inp.factor?.(h.map) ?? 1) + bonus;
     if (score > bestScore) { best = h; bestScore = score; bestAlive = alive; }
   }
   return best ? { ok: true, hunt: best, alive: bestAlive } : { ok: false, msg: 'no queda un mapa con dorados que valga la pena' };
@@ -271,13 +277,14 @@ export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, n
 /** Clave de la invasión (la hora en la que empezó): una cacería automática por invasión. */
 export const invasionKey = (inv: Invasion) => Math.floor(inv.at / 3_600_000);
 
-export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; dragonMap?: number | null; knownMaps?: ReadonlySet<number> }): HuntChoice | null {
+export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
+  factor?: (map: number) => number; predictedDragon?: number | null }): HuntChoice | null {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active' || inp.now - inv.at > AUTO_HUNT.freshMs) return null;
   if (inp.lastKey === invasionKey(inv)) return null;
   // Recién reseteado no le gana a un dorado (usuario, 2026-10-23): sigue farmeando hasta el 400.
   if (inp.level < AUTO_HUNT.minLevel) return null;
-  const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps });
+  const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps, factor: inp.factor, predictedDragon: inp.predictedDragon });
   return ch.ok ? ch : null;
 }
 
@@ -300,11 +307,55 @@ export function resetBlockedByInvasion(now: number): boolean {
 export const HUNT_CELL = 25;
 export const HUNT_CELL_GIVE_UP_MS = 45_000;
 
+/** Celda del recorrido con terreno: su punto de destino es una casilla caminable y alcanzable. */
+export type HuntCell = { key: string; x: number; y: number; weight: number; avoid: boolean };
+/** Una celda cuenta como recorrida cuando se pasó a esto (tiles) de su destino (~ el alcance de la vista). */
+export const HUNT_CELL_REACH = 9;
+/** Celdas con menos casillas caminables alcanzables que esto no se recorren (rincones, islas). */
+export const HUNT_CELL_MIN_TILES = 40;
+
+/**
+ * Casillas alcanzables desde `start` por pasos de MU (8 direcciones, sin cortar esquinas, igual que
+ * path.ts). Devuelve una grilla 256×256 (1 = alcanzable). `passable` incluye zonas seguras: el pueblo se cruza.
+ */
+export function reachableFrom(passable: (x: number, y: number) => boolean, start: { x: number; y: number }, size = 256): Uint8Array {
+  const seen = new Uint8Array(size * size);
+  let s = start;
+  if (!passable(s.x, s.y)) {
+    // El punto de llegada puede ser una casilla de borde: el caminable más cercano a <= 3.
+    let found = false;
+    for (let r = 1; r <= 3 && !found; r++)
+      for (let dx = -r; dx <= r && !found; dx++)
+        for (let dy = -r; dy <= r && !found; dy++)
+          if (passable(start.x + dx, start.y + dy)) { s = { x: start.x + dx, y: start.y + dy }; found = true; }
+    if (!found) return seen;
+  }
+  const queue: number[] = [s.y * size + s.x];
+  seen[queue[0]] = 1;
+  const steps: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (let i = 0; i < queue.length; i++) {
+    const x = queue[i] % size, y = Math.floor(queue[i] / size);
+    for (const [dx, dy] of steps) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= size || ny >= size || seen[ny * size + nx] || !passable(nx, ny)) continue;
+      if (dx && dy && (!passable(x + dx, y) || !passable(x, y + dy))) continue;
+      seen[ny * size + nx] = 1;
+      queue.push(ny * size + nx);
+    }
+  }
+  return seen;
+}
+
 export class HuntExplorer {
   readonly visited = new Set<string>();
   goal: { x: number; y: number; key: string; since: number } | null = null;
   /** Vueltas completas al mapa. */
   passes = 0;
+  /** Con terreno (useTerrain): las celdas caminables y alcanzables del mapa; null = a ciegas, como antes. */
+  cells: HuntCell[] | null = null;
+  private terrainMap = -1;
+  private weightsRef: ReadonlyMap<string, number> | undefined;
+  private avoidRef: ReadonlySet<string> | undefined;
 
   constructor(readonly cell = HUNT_CELL, readonly giveUpMs = HUNT_CELL_GIVE_UP_MS, readonly size = 256) {}
 
@@ -320,13 +371,99 @@ export class HuntExplorer {
     return `${Math.floor(x / this.cell)},${Math.floor(y / this.cell)}`;
   }
 
+  private nextWithTerrain(x: number, y: number, now: number): { x: number; y: number } {
+    // Lo que se pasó a <= HUNT_CELL_REACH de su destino (también de camino a otra) ya se vio.
+    for (const c of this.cells!) if (!this.visited.has(c.key) && cheb(x, y, c.x, c.y) <= HUNT_CELL_REACH) this.visited.add(c.key);
+    if (this.goal && (this.visited.has(this.goal.key) || now - this.goal.since > this.giveUpMs)) {
+      this.visited.add(this.goal.key);
+      this.goal = null;
+    }
+    if (this.goal) return this.goal;
+    let c = this.nextCell(x, y);
+    if (!c) {
+      // Mapa entero recorrido: otra vuelta (los dorados se mueven y reaparecen).
+      this.passes++;
+      this.visited.clear();
+      for (const k of this.cells!) if (cheb(x, y, k.x, k.y) <= HUNT_CELL_REACH) this.visited.add(k.key);
+      c = this.nextCell(x, y);
+      if (!c) return { x, y };
+    }
+    this.goal = { x: c.x, y: c.y, key: c.key, since: now };
+    return this.goal;
+  }
+
   reset() {
     this.visited.clear();
     this.goal = null;
   }
 
+  /** Clave de la celda que contiene (x, y): la de `weights` / `avoid` de useTerrain. */
+  cellKey(x: number, y: number) {
+    return this.key(x, y);
+  }
+
+  /**
+   * Recorrer solo lo caminable (HANDOFF "Qué sigue" #1): con el terreno del mapa, las celdas se arman con las
+   * casillas ALCANZABLES desde `start` y su destino es una casilla caminable (no una pared ni el agua); las
+   * celdas del pueblo (zona segura) y los rincones chicos se saltean. `weights`: celdas con dorados vistos
+   * (zones.ts) que van primero, las de más peso y más cerca antes; `avoid`: celdas donde murieron personajes,
+   * que van al final. Se arma una vez por mapa (y de nuevo si cambian los pesos); sin llamarlo, no cambia nada.
+   */
+  useTerrain(map: number, passable: (x: number, y: number) => boolean, huntable: (x: number, y: number) => boolean, start: { x: number; y: number },
+    weights?: ReadonlyMap<string, number>, avoid?: ReadonlySet<string>) {
+    if (this.terrainMap === map && this.weightsRef === weights && this.avoidRef === avoid) return;
+    const rebuilt = this.terrainMap !== map;
+    this.terrainMap = map;
+    this.weightsRef = weights;
+    this.avoidRef = avoid;
+    if (!rebuilt && this.cells) {
+      for (const c of this.cells) { c.weight = weights?.get(c.key) ?? 0; c.avoid = !!avoid?.has(c.key); }
+      return;
+    }
+    const reach = reachableFrom(passable, start, this.size);
+    const cells: HuntCell[] = [];
+    const half = Math.floor(this.cell / 2);
+    for (let cx0 = 0; cx0 < this.size; cx0 += this.cell) {
+      for (let cy0 = 0; cy0 < this.size; cy0 += this.cell) {
+        const mx = cx0 + half, my = cy0 + half;
+        let n = 0;
+        let best: { x: number; y: number } | null = null;
+        let bd = Infinity;
+        for (let x = cx0; x < Math.min(this.size, cx0 + this.cell); x++) {
+          for (let y = cy0; y < Math.min(this.size, cy0 + this.cell); y++) {
+            if (!reach[y * this.size + x] || !huntable(x, y)) continue;
+            n++;
+            const d = cheb(x, y, mx, my);
+            if (d < bd) { bd = d; best = { x, y }; }
+          }
+        }
+        if (n < HUNT_CELL_MIN_TILES || !best) continue;
+        const key = this.key(mx, my);
+        cells.push({ key, x: best.x, y: best.y, weight: weights?.get(key) ?? 0, avoid: !!avoid?.has(key) });
+      }
+    }
+    this.cells = cells.length ? cells : null;
+    this.visited.clear();
+    this.goal = null;
+  }
+
+  /** La celda a recorrer con terreno: con peso primero (peso / distancia), sin peso la más cercana, las a evitar al final. */
+  private nextCell(x: number, y: number): HuntCell | null {
+    let best: HuntCell | null = null;
+    let bs = -Infinity;
+    for (const c of this.cells!) {
+      if (this.visited.has(c.key)) continue;
+      const d = cheb(x, y, c.x, c.y);
+      // Tres bandas: con dorados (10 000+), comunes (0+), a evitar (-10 000+); adentro, lo más cerca / de más peso.
+      const score = c.avoid ? -10_000 - d : c.weight > 0 ? 10_000 + (c.weight * 100) / (d + 25) : -d;
+      if (score > bs) { bs = score; best = c; }
+    }
+    return best;
+  }
+
   /** A dónde caminar ahora. Marca la celda actual visitada; si se visitaron todas, vuelve a empezar. */
   next(x: number, y: number, now: number): { x: number; y: number } {
+    if (this.cells) return this.nextWithTerrain(x, y, now);
     this.visited.add(this.key(x, y));
     if (this.goal && (this.visited.has(this.goal.key) || now - this.goal.since > this.giveUpMs)) {
       this.visited.add(this.goal.key);
