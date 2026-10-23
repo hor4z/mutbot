@@ -15,6 +15,7 @@ import type { CharLearning, Spot } from './learning';
 import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
 import type { Invasion } from './panel-protocol';
 import { PkRecovery } from './recovery';
+import type { ScoutPublisher, ScoutTour } from './scout';
 import type { StatusServer } from './ws-server';
 import monstersData from './data/monsters.json';
 
@@ -122,7 +123,11 @@ export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextW
   // Cacería del Dragón Rojo: corta por tiempo (RED_HUNT_MS), no por el 0xFD de la invasión dorada.
   red?: boolean;
   // Último dorado a la vista en este mapa (para huntDryOut).
-  lastSeenAt?: number };
+  lastSeenAt?: number;
+  // Explorador (orden `scout`, scout.ts): recorre mapas sin pelear y publica. `hunt` es el mapa de ahora.
+  scout?: { tour: ScoutTour; pub: ScoutPublisher };
+  // Pistas de exploradores ya sembradas en `spots` (clave = -hora del reporte), para no volver a una ya visitada.
+  hinted?: Set<number> };
 
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.

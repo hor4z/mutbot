@@ -5,6 +5,7 @@
  * y van a la tarjeta "Decisiones" del panel. Si la estación no está, el bot sigue solo.
  */
 import { bot } from './state';
+import { STATION_STALE_MS, coveredMaps, freshReports, type ScoutBody, type ScoutInfo } from './scout';
 
 // fresh: personaje nuevo (isFreshChar, por los stats): lo usa el dúo de crianza (duo.ts).
 export type TeamMember = { char: string; level: number; map: number; x: number; y: number; mode: string; fresh?: boolean };
@@ -18,6 +19,9 @@ const ASK_EVERY_MS = 3 * 60_000;
 
 let members: TeamMember[] = [];
 let requests: TeamRequest[] = [];
+// Reportes de exploradores (scout.ts) de la última respuesta buena y cuándo llegó; sin estación o viejos: no se usan.
+let scouts: ScoutInfo[] = [];
+let scoutsOkAt = 0;
 const askedAt = new Map<HelpKind, number>();
 const answered = new Set<string>();
 let polling = false;
@@ -30,9 +34,11 @@ export function startTeamPolling() {
     try {
       const r = await fetch(TEAM_URL, { signal: AbortSignal.timeout(2000) });
       if (r.ok) {
-        const d = (await r.json()) as { members?: TeamMember[]; requests?: TeamRequest[] };
+        const d = (await r.json()) as { members?: TeamMember[]; requests?: TeamRequest[]; scouts?: unknown };
         members = d.members ?? [];
         requests = d.requests ?? [];
+        scouts = freshReports(d.scouts, bot.charName, Date.now());
+        scoutsOkAt = Date.now();
       }
     } catch {
       // sin estación: el bot sigue solo
@@ -79,4 +85,18 @@ export function postInsight(note: string, data: unknown, topic: InsightMessage['
   if (body.length > 1000) body = JSON.stringify(msg(null));
   void fetch(TEAM_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(2000) }).catch(() => {});
   return true;
+}
+
+/** Reportes de exploradores frescos (< 10 min) y de otros; vacío si la estación no contesta hace > 2 min (comportamiento de antes). */
+export function scoutReports(now = Date.now()): ScoutInfo[] {
+  if (now - scoutsOkAt > STATION_STALE_MS) return [];
+  return freshReports(scouts, bot.charName, now);
+}
+
+/** Último reporte de otro explorador por mapa (para no repetir lo que ya cubrió). */
+export const scoutCovered = (now = Date.now()) => coveredMaps(scoutReports(now));
+
+/** Un reporte del explorador a la estación (POST MUBOT_TEAM_URL, `kind: 'scout'`); si no responde, se ignora. */
+export function postScout(body: ScoutBody) {
+  void fetch(TEAM_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(2000) }).catch(() => {});
 }

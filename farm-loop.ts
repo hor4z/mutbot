@@ -3,7 +3,8 @@
  * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
-import { askHelp, newRequests, postInsight, teammates } from './team';
+import { askHelp, newRequests, postInsight, postScout, scoutCovered, scoutReports, teammates } from './team';
+import { SCOUT, buildScoutBody, scoutDanger, scoutFactor, scoutHints } from './scout';
 import { sendServerCommand } from './chat';
 import { avoidCells, huntFactor, insights, predictDragonMap } from './insights';
 import { silentMs } from './liveness';
@@ -24,7 +25,7 @@ import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { GoldenRule, stickyGolden } from './golden';
-import { canFight } from './power';
+import { canFight, monsterCombat } from './power';
 import { farmMiddleware, statPower } from './farm-middleware';
 import { ObserverTracker } from './observer';
 import { equipStep } from './equip';
@@ -45,7 +46,7 @@ import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from '.
 import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
-import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type ScopedNpc } from './state';
+import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type HuntState, type ScopedNpc } from './state';
 import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
@@ -71,10 +72,42 @@ function huntData(now: number) {
   const d = new Date(now);
   const m = d.getUTCMinutes();
   const hourUtc = m >= 50 ? d.getUTCHours() : m < 5 ? (d.getUTCHours() + 23) % 24 : (d.getUTCHours() + 1) % 24;
-  return { factor: (map: number) => huntFactor(ins, map, now), predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
+  // Reportes de exploradores (scout.ts): dorados vivos vistos suben el mapa, la competencia lo baja. Sin reportes: 1.
+  const reports = scoutReports(now);
+  return { factor: (map: number) => huntFactor(ins, map, now) * scoutFactor(reports, map, now), predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
 }
 // Personaje nuevo: no encadena cacerías (no puede con los dorados).
 const weakNow = () => isFreshChar(world.resets, world.stats);
+const scoutMe = () => ({ family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp });
+
+// Explorador (scout.ts): un tick. Decide si pasa a otro mapa (peligro, muerte, ya vio el mapa), publica a la
+// estación cuando toca y devuelve el motivo si hay que dejar de explorar (ningún mapa seguro).
+function runScout(h: HuntState, ctx: LoopCtx, now: number, deaths: number): string | null {
+  const sc = h.scout!;
+  const here = world.map === h.hunt.map;
+  const me = scoutMe();
+  const threats = here ? [...ctx.npcs.values()].filter((n) => chebyshev(world.x, world.y, n.x, n.y) <= SCOUT.threatRadius && monsterCombat(n.type) && !canFight(me, n.type)).length : 0;
+  const hpPct = world.maxHp > 0 ? (world.hp / world.maxHp) * 100 : 100;
+  const st = sc.tour.step({ now, map: world.map, level: world.level, weak: weakNow(), deaths, danger: scoutDanger({ hpPct, threats }), lapDone: h.explorer.passes >= 1, covered: scoutCovered(now) });
+  if (st.kind === 'stop') return st.why;
+  if (st.kind === 'go') {
+    h.hunt = st.to;
+    h.warpTries = 0;
+    h.nextWarpAt = 0;
+    h.explorer = new HuntExplorer();
+    ctx.target = null;
+    decide(`Explorador: paso a ${st.to.name} (${st.why}).`);
+    journal('travel', `explorador: ${st.to.name}`, { map: st.to.map, reason: 'scout', why: st.why });
+    return null;
+  }
+  if (here && world.maxHp > 0 && world.hp > 0 && sc.pub.due(now, world.map)) {
+    sc.pub.sent(now);
+    const others = [...world.players.values()].filter((q) => !(q.name != null && isMate(q.name))).length;
+    postScout(buildScoutBody({ from: bot.charName, map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, players: others, monsters: ctx.npcs.size,
+      golds: [...ctx.npcs.values()].filter(isGolden).map((n) => monsterName(n.type)) }));
+  }
+  return null;
+}
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
 const EARLY_STARVE_MS = 60_000;
 // Equipo: pedir ayuda en la esquina con esta cantidad de rivales y rindiendo menos que esto.
@@ -413,6 +446,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         decide(`Vigía [${wd.step}/3]: ${idleMin} min sin progreso en ${mapName(world.map)} (${bot.doing}). Diagnóstico: ${wd.diagnosis}. ${wd.why}.`, { diagnosis: wd.diagnosis, remedy: wd.remedy, step: wd.step, idleMin });
         trackEvent('stuck', wd.diagnosis, wd.step, idleMin, { remedy: wd.remedy, doing: bot.doing, hunting: !!bot.hunting, x: world.x, y: world.y });
         postInsight(`trabado ${idleMin} min: ${wd.diagnosis} → ${wd.remedy}`, { diagnosis: wd.diagnosis, remedy: wd.remedy, step: wd.step, idleMin, map: world.map }, 'stuck', 60_000);
+        // Explorador: la traba veta el mapa y vuelve al más seguro (scout.ts).
+        if (bot.hunting?.scout) {
+          const to = bot.hunting.scout.tour.onStuck({ now: nowW, level: world.level, weak: weakNow(), covered: scoutCovered(nowW) });
+          if (to) { bot.hunting.hunt = to; bot.hunting.warpTries = 0; bot.hunting.nextWarpAt = 0; bot.hunting.explorer = new HuntExplorer(); ctx.target = null; }
+        }
         if (wd.remedy === 'pkclear') pkGuard.force(nowW, 'vigía: sin progreso y PK');
         else if (wd.remedy === 'ignore_loot') { drops.clear(); lootState.looting = null; }
         else if (wd.remedy === 'drop_target' || wd.remedy === 'leave_camp') {
@@ -552,14 +590,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const h = bot.hunting;
       const nowH = Date.now();
       const known = () => mapsWithZones(HUNT_MAPS.map((x) => x.map), nowH);
-      const stop = h.red
+      const stop = h.scout ? runScout(h, ctx, nowH, deaths) : h.red
         ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now: nowH, maxMs: RED_HUNT_MS })
         : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
           (h.auto && world.map === h.hunt.map
             ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now: nowH,
                 next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: known(), ...huntData(nowH) }) })
             : null);
-      if (stop) trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((nowH - h.since) / 60_000).toFixed(1), red: !!h.red });
+      if (stop && !h.scout) trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((nowH - h.since) / 60_000).toFixed(1), red: !!h.red });
       if (stop) {
         stopHunt(stop);
         ctx.target = null;
@@ -583,7 +621,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           continue;
         }
         if (h.warpTries >= 3) {
-          stopHunt(`no pude llegar a ${h.hunt.name}`);
+          // Explorador: veta el mapa y la próxima vuelta del tour elige otro; cazador: corta.
+          if (h.scout) { h.scout.tour.warpFailed(nowH); h.warpTries = 0; h.nextWarpAt = nowH + WARP_COOLDOWN_MS; decide(`Explorador: no pude llegar a ${h.hunt.name}, pruebo otro mapa.`); }
+          else stopHunt(`no pude llegar a ${h.hunt.name}`);
           continue;
         }
         h.warpTries++;
@@ -903,7 +943,24 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 8) Elegir / mantener objetivo: campamento (camp.ts) + exp/s (farming.ts).
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
     const hunting = bot.hunting;
-    if (hunting) {
+    if (hunting?.scout) {
+      // Explorador: no pelea. Solo se defiende de lo que le pegó hace poco, a <= 2 tiles y que puede vencer.
+      const nowS = Date.now();
+      const me = scoutMe();
+      const ok = (n: ScopedNpc) => nowS - (ctx.aggro.get(n.id) ?? -Infinity) <= SCOUT.defenseMs && chebyshev(world.x, world.y, n.x, n.y) <= SCOUT.defenseRadius && canFight(me, n.type);
+      const cur = ctx.target != null ? ctx.npcs.get(ctx.target) : undefined;
+      if (cur && !ok(cur)) ctx.target = null;
+      if (ctx.target == null) {
+        const t = [...ctx.npcs.values()].find((n) => !unreachable.has(n.id) && ok(n));
+        if (t) {
+          ctx.target = t.id;
+          targetType = t.type;
+          targetSince = nowS;
+          stuckCount = 0;
+          panelLog(`Explorador: me defiendo de ${monsterName(t.type)}.`);
+        }
+      }
+    } else if (hunting) {
       // Cacería: un dorado siempre manda sobre los comunes, pero con correa (stickyGolden): no se suelta
       // el que ya tiene el golpe salvo por un dragón. A los comunes, nunca.
       const now = Date.now();
@@ -929,6 +986,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
         }
         spots.set(n.id, { x: n.x, y: n.y, type: n.type, at: now });
+      }
+      // Pistas de exploradores (scout.ts): dorados vistos hace < 3 min en este mapa se anotan como recordados
+      // (una vez cada una: si se llega y ya no están, no se vuelve).
+      if (world.map === hunting.hunt.map) {
+        const hinted = (hunting.hinted ??= new Set());
+        for (const hint of scoutHints(scoutReports(now), world.map, now, HUNT_SPOT_TTL_MS)) {
+          if (hinted.has(hint.key)) continue;
+          hinted.add(hint.key);
+          spots.set(hint.key, { x: hint.x, y: hint.y, type: 0, at: hint.at });
+        }
+        if (hinted.size > 200) hinted.clear();
       }
       if (gold && ctx.target !== gold.id) {
         if (!hunting.seen.has(gold.id)) {
@@ -1076,7 +1144,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // se olvida. Si no hay ninguno, recorrer celdas.
       const spots = bot.hunting.spots;
       let mem: { id: number; x: number; y: number } | null = null;
-      if (spots && world.map === bot.hunting.hunt.map) {
+      if (!bot.hunting.scout && spots && world.map === bot.hunting.hunt.map) {
         let md = Infinity;
         for (const [id, sp] of spots) {
           const d = chebyshev(world.x, world.y, sp.x, sp.y);
@@ -1085,7 +1153,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         }
       }
       // Sin dorado recordado: la zona de dragones más cercana sin visitar (zones.ts, de la base).
-      if (!mem && world.map === bot.hunting.hunt.map) {
+      if (!bot.hunting.scout && !mem && world.map === bot.hunting.hunt.map) {
         const visited = (bot.hunting.zonesVisited ??= new Set());
         // Primero las zonas de dragones; después las de cualquier dorado.
         const zs = dragonZones(world.map).length && [...dragonZones(world.map)].some((z) => !visited.has(`${z.x},${z.y}`)) ? dragonZones(world.map) : goldenZones(world.map);
@@ -1116,7 +1184,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
       const g = bot.hunting.explorer.next(world.x, world.y, now);
       bot.goalPoint = [g.x, g.y];
-      bot.doing = `cazando dorados en ${bot.hunting.hunt.name}: recorro la celda (${g.x},${g.y})`;
+      bot.doing = bot.hunting.scout ? `explorando ${bot.hunting.hunt.name} sin pelear: recorro la celda (${g.x},${g.y})` : `cazando dorados en ${bot.hunting.hunt.name}: recorro la celda (${g.x},${g.y})`;
       ctx.phase = 'walk';
       castOnTheWay(ctx);
       await walkTowards(ctx, g.x, g.y);

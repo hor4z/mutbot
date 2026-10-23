@@ -15,6 +15,9 @@ import type { BotMode, EquipPlanView, EventTimer, PanelCommand, PanelState } fro
 import { describeStep, summarizePlan } from './equip-plan';
 import { equipPlanNow } from './vault';
 import { WARP_SPOTS } from './route';
+import { ScoutPublisher, ScoutTour } from './scout';
+import { scoutCovered } from './team';
+import { isFreshChar } from './farming';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
 import { chebyshev } from './util';
 import { dragonZones } from './zones';
@@ -113,6 +116,21 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       bot.pendingEquip = true;
       equipPlanView = null;
       return { ok: true, msg: 'voy a Lorencia, saco las piezas del baúl y me las pongo (lee el baúl de nuevo y arma el plan con datos de ahora)' };
+    case 'scout': {
+      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      const now = Date.now();
+      const tour = new ScoutTour();
+      const first = tour.start({ now, map: world.map, level: world.level, weak: isFreshChar(world.resets, world.stats), covered: scoutCovered(now) });
+      if (!first) return { ok: false, msg: 'no tengo un mapa seguro para explorar con mi nivel y mis stats' };
+      if (bot.hunting) stopHunt('orden scout del panel');
+      bot.hunting = { hunt: first, since: now, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), scout: { tour, pub: new ScoutPublisher() } };
+      bot.pinnedSpot = null;
+      bot.pendingWarp = null;
+      bot.paused = false;
+      bot.retarget = true;
+      return { ok: true, msg: `exploro desde ${first.name} sin pelear (salvo defensa propia) y aviso a la estación cada 30-60 s; farm me corta` };
+    }
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
@@ -205,7 +223,7 @@ export function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `cacería ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!bot.pinnedSpot },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `${bot.hunting.scout ? 'exploración' : 'cacería'} ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!bot.pinnedSpot },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,
