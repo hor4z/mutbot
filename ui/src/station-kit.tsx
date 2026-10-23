@@ -2,8 +2,9 @@
 import type { ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { Checkbox } from "@base-ui/react/checkbox";
+import { Dialog } from "@base-ui/react/dialog";
 import {
-  Anchor, Binoculars, CircleAlert, CirclePause, CircleSlash, Crosshair, Loader, LogOut, Moon, Route, Skull, Sparkles, Swords, Unplug, UsersRound, WifiOff, RotateCw, Lock, Check,
+  Anchor, Binoculars, CircleAlert, CirclePause, CircleSlash, Crosshair, Loader, LogOut, Moon, Route, Skull, Sparkles, Swords, Unplug, UsersRound, WifiOff, RotateCw, Lock, Check, X, TriangleAlert,
 } from "lucide-react";
 import type { RoleAssign, RoleKey } from "../../estacion-logic";
 import { ROLES } from "../../estacion-logic";
@@ -166,5 +167,33 @@ export function Check2({ checked, onChange, label, indeterminate }: { checked: b
         {indeterminate ? <i className="dash" /> : <Check size={12} strokeWidth={3} />}
       </Checkbox.Indicator>
     </Checkbox.Root>
+  );
+}
+
+/** Diálogo de confirmación explícito (para lo que mueve cosas reales o toca al personaje). Cancelar es el foco inicial. */
+export function ConfirmDialog({ open, onOpenChange, title, warning, confirmLabel, danger, onConfirm, children }: {
+  open: boolean; onOpenChange: (v: boolean) => void; title: string; warning: string; confirmLabel: string; danger?: boolean; onConfirm: () => void; children?: ReactNode;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="backdrop" />
+        <Dialog.Popup className="modal confirm">
+          <header className="modal-head">
+            <div>
+              <Dialog.Title>{title}</Dialog.Title>
+              <Dialog.Description className="confirm-warn"><TriangleAlert size={14} />{warning}</Dialog.Description>
+            </div>
+            <Dialog.Close className="button quiet icon" aria-label="Cerrar"><X size={16} /></Dialog.Close>
+          </header>
+          {children && <div className="modal-body">{children}</div>}
+          <footer className="modal-foot">
+            <span className="grow" />
+            <button className="button quiet" autoFocus onClick={() => onOpenChange(false)}>Cancelar</button>
+            <button className={`button ${danger ? "danger" : "primary"}`} onClick={() => { onOpenChange(false); onConfirm(); }}>{confirmLabel}</button>
+          </footer>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

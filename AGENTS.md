@@ -872,3 +872,9 @@ y las muestra en "Dorados vistos". Contrato:
 ```
 
 El buscador (`--scout`), el explorador (`--atlas`) y el dúo se sacaron: eran del modo navegador.
+
+### Insights, órdenes y equipo en la estación (ronda 2)
+
+- `POST /api/team` acepta `{from,kind:'insight',topic,note,data,at}` (≤1 KB, sin Origin; `parseBotInsight`): `pk`/`stuck` entran al feed de alertas; `data` queda como último resumen por bot (vence a las 2 h) y sale en `/api/state` como `insights`.
+- `/api/state` suma `events` (la respuesta más reciente de cualquier bot por Devil Square/Blood Castle/Chaos Castle, de `panel-state.events`) y `equipPlan` por personaje.
+- `POST /api/do {action:'bot', char, command}` reenvía al bot solo `equipplan`, `equip` y `say '/pkclear'` (`isBotOrder`). La UI pide confirmación para `equip` y `/pkclear`.

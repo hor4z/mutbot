@@ -3,9 +3,9 @@
  * avisos (toasts) y utilidades de presentación que comparten las vistas.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Alert, RoleAssign, ScoutReport, StationRequest, Routine } from "../../estacion-logic";
+import type { Alert, InsightSummary, RoleAssign, ScoutReport, StationRequest, Routine } from "../../estacion-logic";
 import { roleRoutine } from "../../estacion-logic";
-import type { EventTimer, Invasion } from "../../panel-protocol";
+import type { EquipPlanView, EventTimer, Invasion } from "../../panel-protocol";
 
 export type Character = {
   key: string;
@@ -26,6 +26,8 @@ export type Character = {
   role: RoleAssign;
   roleSaved: boolean;
   stuck: boolean;
+  /** plan de equipo que calculó el bot con `equipplan` (estación vieja: no viene) */
+  equipPlan?: EquipPlanView | null;
   game: null | {
     mode: string;
     doing: string;
@@ -52,6 +54,8 @@ export type StationData = {
   alerts: Alert[];
   invasion: Invasion | null;
   events?: EventTimer[];
+  /** resumen de datos que mandó cada bot (dragón probable, ladrones, celdas letales); estación vieja: [] */
+  insights: InsightSummary[];
   scouts: Scout[];
   now: number;
 };
@@ -119,7 +123,7 @@ function withRole(c: Character): Character {
   return { ...c, role, roleSaved: false };
 }
 
-const EMPTY: StationData = { chars: [], golds: [], alerts: [], invasion: null, scouts: [], now: 0 };
+const EMPTY: StationData = { chars: [], golds: [], alerts: [], invasion: null, insights: [], scouts: [], now: 0 };
 
 /** Estado de la estación cada 2 s (solo lectura: GET /api/state). */
 export function useStationData() {
@@ -145,7 +149,8 @@ export function useStationData() {
           golds: s.golds ?? [],
           alerts: s.alerts ?? [],
           invasion: s.invasion ?? null,
-          events: s.events,
+          events: Array.isArray(s.events) ? s.events : undefined,
+          insights: Array.isArray(s.insights) ? s.insights : [],
           scouts: s.scouts ?? [],
           now: s.now ?? Date.now(),
         });
