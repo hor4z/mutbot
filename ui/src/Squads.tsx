@@ -12,7 +12,7 @@ type State = {
   accounts: null | { remaining: number; created: number; stopped: boolean; log: string[]; next: { at: number; char: string; cls: string }[] };
 };
 type Reply = { ok: boolean; msg: string; steps?: Plan };
-type Call = (body: SquadRequest) => Promise<Reply>;
+type Call = (body: SquadRequest | { action: "human-follow"; human: string; chars: string[] } | { action: "human-follow-stop" }) => Promise<Reply>;
 
 const MAPS = [
   { warp: 2, name: "Lorencia", reqLevel: 10 },
@@ -189,6 +189,40 @@ function CreateSquad({ chars, call, say }: { chars: CharRow[]; call: Call; say: 
   );
 }
 
+function FollowHuman({ chars, call, say }: { chars: CharRow[]; call: Call; say: (m: string) => void }) {
+  const [human, setHuman] = useState("");
+  const [pick, setPick] = useState<string[]>([]);
+  const bots = chars.filter((c) => c.online);
+  const toggle = (c: string) => setPick((p) => (p.includes(c) ? p.filter((x) => x !== c) : p.length < 5 ? [...p, c] : p));
+  return (
+    <Section title="Que me sigan" extra={<Users size={15} />}>
+      <p className="muted">
+        Jugás un personaje a mano en el navegador y los bots elegidos aceptan tu party y se pegan a vos mientras te ven. Desconectá antes el bot de ese personaje.
+      </p>
+      <div className="squad-pick">
+        {bots.map((c) => (
+          <button key={c.char} className={`character-pill ${pick.includes(c.char) ? "active" : ""}`} onClick={() => toggle(c.char)} aria-pressed={pick.includes(c.char)}>
+            <span className="mini-dot online" />
+            <strong>{c.char}</strong>
+            <span>{c.cls ? CLS[c.cls] : "?"} · Nv. {c.level || "—"}</span>
+          </button>
+        ))}
+        {!bots.length && <p className="empty-copy">No hay bots conectados para que te sigan.</p>}
+      </div>
+      <div className="squad-form">
+        <input className="squad-input" placeholder="Tu personaje (nombre en el juego)" maxLength={10} value={human} onChange={(e) => setHuman(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))} />
+        <Action className="primary" disabled={!pick.length || !human.trim()} onClick={async () => {
+          const r = await call({ action: "human-follow", human: human.trim(), chars: pick });
+          say(r.msg);
+        }}>
+          <Plus size={14} /> Que me sigan
+        </Action>
+        <Action onClick={async () => { const r = await call({ action: "human-follow-stop" }); say(r.msg); }}>Dejar de seguirme</Action>
+      </div>
+    </Section>
+  );
+}
+
 const hhmm = (t: number) => new Date(t).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
 
 function Accounts({ st, call, say }: { st: State["accounts"]; call: Call; say: (m: string) => void }) {
@@ -284,6 +318,7 @@ export function Squads({ demo = false }: { demo?: boolean }) {
       <div className="squads-grid">
         {state.squads.map((s) => <SquadCard key={s.id} s={s} call={call} say={setMsg} />)}
         <CreateSquad chars={state.chars} call={call} say={setMsg} />
+        <FollowHuman chars={state.chars} call={call} say={setMsg} />
         <Accounts st={state.accounts} call={call} say={setMsg} />
       </div>
     </div>
