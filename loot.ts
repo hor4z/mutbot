@@ -7,7 +7,7 @@ import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { step, sendPickup } from './actions';
 import { itemInfo } from './panel-logic';
-import { pickLoot } from './farming';
+import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
@@ -15,7 +15,9 @@ import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
-type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean };
+type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean; level?: number };
+/** Juez opcional del equipo que cae (item-score.ts `makeDropJudge`). Vacío por defecto: nada cambia hasta que alguien lo conecte. */
+export const lootPolicy: { judge?: DropJudge } = {};
 export const drops = new Map<number, ScopedDrop>();
 
 // Drop que se está yendo a buscar, y cuántos se levantaron en total (panel e informe).
@@ -152,7 +154,7 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
   const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE);
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });

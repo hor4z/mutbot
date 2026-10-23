@@ -505,8 +505,18 @@ export type DropInfo = { group: number; num: number; isMoney?: boolean; excellen
  * nada: Hume llegó a nivel 27 con 0.
  */
 export const JEWELS = new Set([13, 14, 16, 22, 31]);
-export function isValuableDrop(d: DropInfo, fresh = false, gear = false): boolean {
+/**
+ * Opinión opcional sobre el equipo (grupos 0-11) que cae, p. ej. `makeDropJudge` de item-score.ts: true =
+ * levantarlo, false = dejarlo, undefined = no opina (rige la regla de siempre). Solo se consulta con lugar
+ * en la bolsa (`gear`). Sin juez (el default) el comportamiento no cambia.
+ */
+export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
+export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?: DropJudge): boolean {
   if (d.isMoney) return fresh;
+  if (judge && gear && d.group <= 11) {
+    const j = judge(d);
+    if (j !== undefined) return j;
+  }
   if (fresh && d.group === 14 && (d.num <= 3 || d.num === 15 || JEWELS.has(d.num))) return true;
   if (fresh && d.group === 12 && d.num === 15) return true; // Jewel of Chaos
   if (fresh && gear && d.group <= 11) return true;
@@ -521,11 +531,11 @@ export const CURRENCY_ITEMS: ReadonlySet<number> = new Set([11, 31, 7, 12, 20]);
 const LOOT_BOX_FIRST = 8;
 
 // El drop valioso más cercano a <= radius (o null).
-export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false): D | null {
+export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false, judge?: DropJudge): D | null {
   let best: D | null = null;
   let bd = Infinity;
   for (const d of drops) {
-    if (!isValuableDrop(d, fresh, gear)) continue;
+    if (!isValuableDrop(d, fresh, gear, judge)) continue;
     const dd = cheb(me, d);
     const score = dd - (d.group === 14 && d.num === 11 ? LOOT_BOX_FIRST : 0);
     if (dd <= radius && score < bd) {
