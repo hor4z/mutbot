@@ -1245,3 +1245,27 @@ time {
   margin: 0 0 10px;
   font-size: 12px;
 }
+
+/* Escuadras (Squads.tsx) */
+.squads-view { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+.squads-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.squads-head h1 { margin: 2px 0 4px; font-size: 24px; }
+.squads-head p { max-width: 640px; margin: 0; }
+.squads-shield { color: var(--gold); flex: none; }
+.squads-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 14px; align-items: start; }
+.squad-msg { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--gold); }
+.squad-table-wrap { overflow-x: auto; margin: 8px 0; }
+.squad-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.squad-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px 4px 0; white-space: nowrap; }
+.squad-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+.squad-off { opacity: 0.5; }
+.squad-order { color: var(--muted); }
+.warning-text { color: var(--rose); }
+.squad-tag { margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 99px; color: var(--gold); font-size: 10px; }
+.squad-mission-line { margin: 0 0 4px; }
+.squad-form, .squad-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.squad-input { min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; min-width: 0; flex: 1 1 160px; }
+.squad-confirm { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; color: var(--muted); }
+.squad-pick { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.squad-log { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); color: var(--muted); font: 11px/1.5 "Geist Mono", ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.squad-plan { margin: 8px 0; padding-left: 18px; }

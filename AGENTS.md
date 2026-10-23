@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health, scout
+bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health, scout, party, formation, squad
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -89,6 +89,10 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
 | `ui/` | La interfaz (React + Vite, radar Three.js). **`panel.html` y `estacion.html` se generan** con `bun run ui:build`: editar `ui/src`, no los HTML. Ver `ui/README.md`. |
 | `radar-assets.ts` | Sirve los archivos del radar (`/radar-assets/...`, solo lectura, nombres de la lista; CORS solo para la estación y los puertos de los bots). Los archivos (`assets/radar/`, 91 MB del cliente) no van al repo: `bun run ui:maps`. |
+| `squad.ts` | Escuadras (lógica pura, la usa la estación): roles por clase, misiones explorar/cazar dorados/crianza como máquinas de estados, abortos, órdenes firmadas (HMAC), `SquadBook` y el contrato `squad-*`. Tests en `squad-tests.ts`. |
+| `party.ts` / `formation.ts` | A quién se acepta en party y quién invita a quién (con espera), lista de la party; seguir al líder con correa y sin amontonarse. Tests en `party-tests.ts` y `formation-tests.ts`. |
+| `squad-client.ts` | El bot obedece a la estación: consulta `/api/squad`, verifica la firma y ejecuta (viaje, ir a, seguir, cobrar, retirada, invitar, buffs). Sin `MUBOT_SQUAD_KEY` no hace nada. |
+| `squad-gear.ts` / `squad-accounts.ts` | Alas por clase y su valor; plan de cuentas con ritmo humano (solo si el usuario lo dispara). |
 | `ws-server.ts` | Server del panel de cada bot detrás de `--ws-port` (solo 127.0.0.1). |
 | `panel.html` / `panel-protocol.ts` / `panel-logic.ts` | El panel del bot, su contrato y la lógica pura (0x91, 0xFD, tickets, ciclos, cacería, señales de dorados). |
 | `*-tests.ts` | Tests offline de cada módulo (sin red, reloj simulado, dir temporal). |
@@ -656,6 +660,31 @@ que lo justifican están en **[docs/aprendizajes.md](docs/aprendizajes.md)**.
 - **Aviso a la estación** (`postInsight` en `team.ts`): `POST MUBOT_TEAM_URL` con `{from, kind:'insight', topic:'data'|'pk'|'stuck',
   note, data, at}` (≤ 1 KB, como mucho uno por tema cada 10 min / 60 s). La estación actual lo rechaza con 400 y el bot lo
   ignora; el contrato de `kind: 'corner'|'golden'` y `/api/gold` no cambia.
+
+## Escuadras (grupos de hasta 5 con misiones)
+
+Diseño, hechos con fuente y supuestos: **[docs/escuadras.md](docs/escuadras.md)**. Resumen:
+
+- **Solo la estación manda.** Genera una clave (`~/.mubot/squad.key`), se la pasa por entorno a los bots que lanza
+  (`MUBOT_SQUAD_KEY`) y les sirve una asignación firmada por personaje en `GET /api/squad?char=` (sin `Origin`, loopback,
+  vigencia 20 s). Un bot sin clave (lanzado antes, como Hume hoy) **no obedece**; la tarjeta lo marca. Con escuadra
+  vigente, el bot acepta party **solo** de miembros de la lista firmada (`world.ts` → `squadPartyDecision`).
+- **Nada arranca solo.** `POST /api/do` (mismo `Origin`/JSON de siempre) con `squad-create`, `squad-mission` (exige
+  `confirm: true`), `squad-abort`, `squad-disband` y `squad-accounts` (`plan` / `start` / `stop`); `parseStationRequest`
+  los valida estricto. Al terminar una misión los bots reciben `release` y vuelven a su rutina; no se encadenan.
+- **Enganche mínimo:** `farm-loop.ts` (una línea tras la orden `warp` pendiente: `squadStep`), `world.ts` (decisión de party
+  y lista), `headless-bot.ts` (`startSquadPolling`), `estacion.ts` (bloque "Escuadras": libro, clave, `/api/squad`,
+  `/api/squads`, tick cada 2 s, plan de cuentas) y `ui/src/Squads.tsx` (botón "Escuadras" en la barra; `?demo` abre la
+  tarjeta con datos de mentira, sin tocar la estación).
+- **Misiones:** explorar (celdas repartidas, uno al frente, converge al hallazgo), cazar dorados (todos sobre el mismo
+  `focus`, tanque/daño/apoyo), crianza (padrino con su rutina y protegidos que cobran a salvo). Retirada por muertes,
+  vida baja, jugador hostil (sin fuente todavía), miembro perdido o tiempo.
+- **Crianza con Hume de padrino:** solo cuando el usuario la ordena, y solo si Hume corre con la clave.
+- **Ritmos humanos intactos:** el viaje sale escalonado (2-22 s al azar por miembro), el seguimiento reacciona con
+  retraso y varía su lugar, todo el movimiento va por `walkTowards`/`humanPace` y las cuentas nuevas salen cada 12-40 min
+  (máx. 2 por hora). Nada de esto busca esquivar el anti-cheat ni la moderación.
+- **Sin verificar en vivo:** PartyList, salir de la party, buffs sobre aliados, y todo el comportamiento contra el server
+  (los tests son offline con reloj simulado).
 
 ## Datos y aprendizaje (ClickHouse local)
 

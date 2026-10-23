@@ -53,6 +53,7 @@
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
 import { startTeamPolling } from './team';
+import { startSquadPolling } from './squad-client';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, LIST_CHARS, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
@@ -121,6 +122,7 @@ async function session(deadline: number): Promise<LoopResult> {
     watchChat();
     watchLiveness();
     startTeamPolling();
+    startSquadPolling();
     worldTracked = true;
   }
   await loginAndSelectCharacter();

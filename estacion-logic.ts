@@ -5,6 +5,10 @@
  */
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
 import { validCharName } from './names';
+import { parseSquadRequest, type SquadRequest } from './squad';
+
+// Escuadras (squad.ts): el contrato que ven la interfaz y los bots.
+export type { Assignment, Mission, MissionKind, Order, Squad, SquadRequest, SquadView, SquadRole } from './squad';
 
 /**
  * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
@@ -133,13 +137,17 @@ export type StationRequest =
   // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
   | { action: 'probe'; user: string; pass?: string }
   // Órdenes puntuales al bot (solo las de BOT_ORDERS): calcular el plan de equipo, ejecutarlo, limpiar el PK.
-  | { action: 'bot'; char: string; command: PanelCommand };
+  | { action: 'bot'; char: string; command: PanelCommand }
+  // Escuadras (squad.ts): crear, misión (solo con confirm: true), abortar, disolver y alta de cuentas.
+  | SquadRequest;
 
 /** Lo único que la estación le reenvía a un bot por /api/do { action: 'bot' } (la interfaz pide confirmación antes de las que mueven o tocan algo). */
 export function isBotOrder(c: unknown): c is PanelCommand {
   if (!isPanelCommand(c)) return false;
   return c.cmd === 'equipplan' || c.cmd === 'equip' || (c.cmd === 'say' && c.text === '/pkclear');
 }
+
+export const isSquadRequest = (r: StationRequest): r is SquadRequest => r.action.startsWith('squad-');
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
@@ -172,6 +180,7 @@ export function accountProblem(user: string, pass: string): string | null {
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
+  if (typeof r.action === 'string' && r.action.startsWith('squad-')) return parseSquadRequest(v);
   if (r.action === 'create') {
     const keys = Object.keys(r).sort().join();
     if (keys !== 'action,char,cls,existing,pass,user') return null;
