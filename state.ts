@@ -152,6 +152,8 @@ export const bot = {
   pendingWarp: null as Spot | null,
   // Orden `vault` del panel: leer el baúl en el próximo paso del loop.
   pendingVault: false,
+  // Orden `equip` del panel (solo la manda una persona): sacar del baúl y equipar en el próximo paso del loop.
+  pendingEquip: false,
   pinnedSpot: null as Spot | null,
   resetting: false,
   // El loop descarta su objetivo en el próximo tick (cambio de modo).

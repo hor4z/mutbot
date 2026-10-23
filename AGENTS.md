@@ -69,6 +69,9 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `duo.ts` | Dúo de crianza: reparto de exp de OpenMU (`baseExp`, `partyGain`), padrino/protegido por stats y dónde se para el protegido (lógica pura). Tests en `duo-tests.ts`. |
 | `power.ts` | ¿Puede el personaje con este monstruo? Daño y defensa con sus stats reales y la clase contra vida/daño/defensa de `monsters.json`: lo mata en <= 6 s perdiendo <= 35 % de la vida. Decide qué ataca y a qué campo va un personaje nuevo, y si va por un dorado. Tests en `early-tests.ts`. |
 | `equip.ts` | Equiparse con lo que levanta (personaje nuevo). Tests en `equip-tests.ts`. |
+| `item-rules.ts` / `item-score.ts` | Clase, requisitos y defensa de `data/items.json` (columnas corridas: ver la cabecera), puntaje de una pieza, Cristales del Alquimista, `judgeItem` y `makeDropJudge`. Puros. Tests en `items-tests.ts`. |
+| `equip-plan.ts` | `planEquip`: plan de equipamiento desde el baúl (qué sacar, a qué casilla, qué desvestir, qué poner, en orden). Puro. |
+| `crafting.ts` | Recetas del Chaos Goblin, Alquimista, armonía y Fenrir con sus tasas publicadas y `planCrafts` (propone por valor esperado, **nunca ejecuta**). Puro. Datos y fuentes en `docs/items-y-maquinas.md`. |
 | `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
@@ -489,6 +492,7 @@ inesperado") y dejó de levantar cajas sin otro aviso. `protocol097.ts` acepta 5
 0x24 de 19 bytes de season6; depósito 0 = inventario, equipo 0-11, bolsa 12-75). Respuesta `ItemMoved`
 (C3 24): byte 3 = casilla nueva o 0xFF (no se pudo: requisitos, clase o lugar). `equip.ts` lo usa con
 los 5 bytes crudos que ahora guarda el inventario (`raw`). **Probado en vivo** (Hume, 2026-10-12).
+Desde el baúl: `buildMoveItem(2, casillaBaúl, ítem, 0, casillaBolsa)` (`protocol097.ts`; depósito 2 = baúl, 3 = Chaos Machine, de los `placePickedItem`/`autoMoveItem` del cliente web). **Sin verificar en vivo desde el headless.**
 
 ### Reaparición tras morir
 
@@ -767,7 +771,7 @@ cacería), `command-result` y `decision` (el diario).
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 6 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`) **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 9 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `vault`, `equipplan`, `equip`) **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
@@ -797,6 +801,25 @@ el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
 server real: falta confirmar que el server contesta 0x91 a esta pregunta, el
 layout del 0xFD, el `classId` y el nivel del ítem en 0.97d, y una cacería
 completa.
+
+### Ítems y baúl (`vault`, `equipplan`, `equip`)
+
+- `vault`: va a Baz (Lorencia), lee el baúl y escribe `~/.mubot/vault-<pj>.json` (ahora con `rawHex` por ítem).
+- `equipplan`: **solo calcula y muestra**. Usa el baúl de la última lectura viva o el archivo, y lo puesto/bolsa
+  de ahora; no camina ni mueve nada. Contesta con el resumen, deja los pasos en el log del panel y en
+  `panel-state.equipPlan` (`EquipPlanView`). Alcance: casco, armadura, pantalones, guantes y botas; armas, escudo,
+  alas y bijouterie no se tocan.
+- `equip`: **solo si alguien la manda** (nunca la dispara el loop). Va a Baz, relee el baúl, arma el plan con datos
+  de ahora, saca las piezas (`C3 0D 24 02 …`), cierra y las equipa de a una con pausa humana (900 ms ± ritmo). Para
+  en el primer fallo y lo cuenta. Rechazada si está cazando. **Sacar del baúl (de=2) NO está verificado en vivo**;
+  el resto del camino (equipar, hablar con Baz) sí.
+- El plan puntúa con `item-score.ts` (heurística: defensa + nivel + opción + excelentes + luck) y valida clase,
+  nivel y stats con `item-rules.ts`. Con el baúl real de Hume sale: Great Dragon casco, pantalones y botas,
+  Dragon Knight Armor +10 (219 puntos contra 211 de la Great Dragon armadura) y Scale Gloves.
+- `makeDropJudge` + `lootPolicy.judge` (`loot.ts`): hook para que `isValuableDrop` use el puntaje con el equipo
+  que cae. **Apagado por defecto**: nadie lo conecta, el loot se comporta como siempre.
+- Mezclas: ver `docs/items-y-maquinas.md`. **El bot no ejecuta ninguna**; `planCrafts` propone y cada mezcla
+  del Chaos Goblin la confirma una persona.
 
 ### Dorados sin navegador
 

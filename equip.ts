@@ -14,6 +14,7 @@
 import { rawPacket } from './actions';
 import { sendToGS, waitFor } from './connection';
 import { itemInfo } from './panel-logic';
+import { buildMoveItem } from './protocol097';
 import { world, type ItemSlot } from './state';
 import { decide } from './journal';
 import { log, sleep, toBytes } from './util';
@@ -55,10 +56,10 @@ export function freeBagSlot(items: Iterable<ItemSlot>, w: number, h: number): nu
 const key = (it: ItemSlot) => `${it.group}/${it.num}/${it.level ?? 0}`;
 const rejected = new Set<string>();
 
-async function move(it: ItemSlot, to: number): Promise<boolean> {
+export async function move(it: ItemSlot, to: number): Promise<boolean> {
   if (!it.raw || (it.raw.length !== 5 && it.raw.length !== 6)) return false;
   const reply = waitFor('ItemMoved', 3000).catch(() => null);
-  sendToGS(rawPacket([0xc3, 7 + it.raw.length, 0x24, 0, it.slot, ...it.raw, 0, to]));
+  sendToGS(rawPacket([...buildMoveItem(0, it.slot, it.raw, 0, to)]));
   const r = await reply;
   const b = r ? toBytes(r) : null;
   if (!b || b[3] === 0xff) return false;
