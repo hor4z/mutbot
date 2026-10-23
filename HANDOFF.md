@@ -107,7 +107,7 @@ Golden Dragon). La invasión de las 10:50 dio 7 cajas.
 
 ## Qué sigue (en orden)
 
-1. **Explorador de cacería con el terreno real.** Hoy recorre celdas de 25×25 a ciegas y "da vueltas".
+1. **(Hecho, sin verificar en vivo) Explorador de cacería con el terreno real** (`HuntExplorer.useTerrain`; ver AGENTS.md). Hoy recorre celdas de 25×25 a ciegas y "da vueltas".
    Hume conoce 21 a 37 de las ~100 celdas de cada mapa. Ya existen `terrain.ts` (`walkableFor`) y
    `path.ts` (`findPath`): falta recorrer las celdas caminables sin repetir, primero las que tuvieron
    dorados.
@@ -117,7 +117,7 @@ Golden Dragon). La invasión de las 10:50 dio 7 cajas.
 3. **Equipar a Hume con el Great Dragon del baúl.** Es lo que más sube su daño y su aguante, y hace que
    las cajas de los dragones sean suyas. Hace falta mover del baúl al inventario y equipar: el packet
    C3 24 con el depósito del baúl, sin verificar. Mostrarle el plan al usuario antes.
-4. **Leer la vida real** (sin el tope de 65.535).
+4. **(Hecho como inferencia, sin captura) Leer la vida real** (`health.ts`; confirmar con el log `HP: la lectura de 16 bits…`).
 5. **Pociones,** solo si el usuario lo autoriza. Sin pociones muere contra dorados duros y en Aida.
 6. **Blood Castle:** una caja +5 asegurada por hora. Es el próximo proyecto grande: armar la capa,
    entrar, romper el portón y entregar el arma.

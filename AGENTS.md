@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion
+bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -58,6 +58,10 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `progress.ts` | Reparto de puntos (`/add`) y `/reset` encadenado. |
 | `events.ts` | Aperturas de eventos (0x91), invasión dorada (0xFD), CharacterResets. |
 | `journal.ts` | Diario de acciones (`journal()`) y log al panel. |
+| `recovery.ts` | Auto-recuperación del PK (lógica pura): avisos del server → `/pkclear` con tope y enfriamiento. Tests en `recovery-tests.ts`. |
+| `watchdog.ts` | Vigía de trabas (lógica pura): sin progreso 4/8/12 min → diagnóstico y remedio. `liveness.ts` anota cuándo llegó el último packet. Tests en `watchdog-tests.ts`. |
+| `insights.ts` | Datos de ClickHouse para decidir (caché de 10 min, tolera la base caída): factor por mapa, dragón probable, celdas letales. Tests en `insights-tests.ts`. |
+| `health.ts` | Vida real sin el envoltorio de 16 bits (`HpTracker`). Tests en `health-tests.ts`. |
 | `panel.ts` | Modo, órdenes del panel, estado que se manda cada 1 s, señales de dorados. |
 | `farm-loop.ts` | El loop autónomo (`autonomousLoop`): prioridades de cada tick. |
 | `corner-step.ts` | Un tick en la esquina de Arena 2 (`cornerStep`): lados por exp medida, aggro, buff, esquina llena. |
@@ -614,6 +618,39 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Rival del top cerca** (`rivals.ts`: top 20 del ranking de la base, refresco cada 10 min): a ≤ 10 tiles se anuncia en Decisiones (cada 5 min); el mago le disputa con Decay el grupo a **cualquier rival** a ≤ 10 de Horaz (o de ella si no lo ve) (`contestTarget`, sin atacarlo; **nunca** apunta a monstruos a ≤ 4 + radio del giro de Horaz, para no sacarle kills a él; usuario: "que Melu moleste donde pegue él o cualquiera que esté cerca de Horaz") y el prioritario, sin nada a tiro, ocupa el lugar que ese rival dejó en la esquina (15 s a 3 min después de irse, ej. reseteando). Nunca se ataca ni se persigue al rival.
 - **Cazador automático** (`autoHuntChoice` / `pickHuntMap`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y nivel 380 o más, sale a cazar solo al mejor mapa: vivos (tope 30) × valor de sus cajas (Noria 1, Lorencia y Devias 2, Atlans 3,5, Tarkan 4), más un bonus para el mapa del Golden Dragon, que el server avisa a las :50 con `[Devias] Golden invasion!` (`dragonMapFromServerMessage`, `bot.dragonMap`). Sigue en el mapa hasta que quede en **0** (usuario: "hasta que no quede ninguno, prioridad máxima"); se va antes solo si pasan 2 min sin ver un dorado y otro mapa tiene más vivos (`huntDryOut`). También corta con la invasión terminada o a los 15 min. Cada corte queda en la base (`hunt_end`: mapa, dorados vistos, minutos), y **encadena** el siguiente mapa que no haya hecho (el 2026-10-23 Devias se vació en 3 min con Noria en 38). Un mapa sin zonas conocidas (`mapsWithZones`, `zones.ts`: celdas donde se vio cualquier dorado, de `golden_seen`) vale ×0,25, salvo el del dragón: sin zonas recorre a ciegas y da vueltas (Atlans). Cazando va primero a las zonas de dragones y después a las de cualquier dorado; si el dragón al que le pega sale de la vista, va 6 s a donde estaba en vez de repartir el daño con otro dorado. Una caja de otro ("doesn't belong to you") se suelta ya y se reintenta a los 10 s. Cazando no pelea con comunes ni tira el skill de área en el camino (frenan). A la base: `golden_kill` (cada dorado que muere a la vista y quién lo mató), `loot_ok` y `loot_foreign` (levantado de verdad o de otro). Entre :30 y :05 no resetea (llegar a la invasión en nivel 400). Contra los dorados, correa (`stickyGolden`, `golden.ts`): no suelta al que le pega salvo por un dragón; y el skill más fuerte a un objetivo (`goldenSkill`, `combat.ts`: Death Stab 43, si no Rageful Blow 42, respetando el nivel mínimo 160/170 del Blade Knight). El caballero mantiene Swell Life (48) cada ~55 s. Los avisos del server van al log (`Server: …`) y a la base (`server_msg`); "The item is still falling" y "This item doesn't belong to you" son los 2 s de espera y la caja de otro (la del que más daño hizo).
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
+
+## Auto-recuperación, vigía de trabas y datos en vivo (2026-10-23)
+
+Todo esto es **aditivo y conservador**: sin base, sin datos o ante la duda, el bot hace lo de siempre. Los hechos medidos
+que lo justifican están en **[docs/aprendizajes.md](docs/aprendizajes.md)**.
+
+- **PK** (`recovery.ts`, enganchado en `chat.ts` y `farm-loop.ts`): el aviso `Un PK no puede usar /move.` o `PK: N kills…`
+  (o 3 warps seguidos sin `MapChanged`, ver `warpAndWait`) abre un episodio; el loop manda `/pkclear` (3 s después, hasta 3
+  veces, 20 s entre intentos, respetando el gap de chat de 2 s: `sendServerCommand` en `chat.ts`, solo comandos de
+  `SAY_COMMANDS`) y `[/pkclear] <char> kills have been cleaned.` lo cierra. Si el server no lo limpia, descansa 30 min. Cada
+  paso sale por `decide()` y a la base (`pk_clear`). En pausa no manda nada.
+- **Vigía de trabas** (`watchdog.ts`, en `farm-loop.ts`): sin exp, kills, nivel, movimiento (≥ 3 tiles), objetivo nuevo ni
+  cambio de mapa por 4/8/12 min → diagnostica (`pk`, `no_response` por `liveness.ts`, `bag_full`, `no_potion`, `wall`,
+  `dry_map`, `idle`) y aplica el remedio seguro del escalón: PK → `/pkclear`; muro → soltar objetivo y campamento, volver a
+  entrar al mapa, reconectar; poca vida sin pociones → Lorencia; sin respuesta del server → reconectar. Apagado en pausa,
+  reseteando, conectando o muerto. Cada aviso: `decide('Vigía [n/3]…')` y evento `stuck` en la base. La reconexión por ceguera
+  (3 min sin exp) y el hambre siguen igual; el vigía es la red de abajo. No compra nada.
+- **Recorrido de cacería con terreno** (`HuntExplorer.useTerrain`, `panel-logic.ts`): con el `.att` del mapa, celdas de 25×25
+  armadas con las casillas alcanzables desde la llegada (`reachableFrom`), destino caminable, sin pueblo (zona segura) ni
+  rincones de < 40 casillas, sin repetir hasta completar la vuelta, primero las celdas con dorados vistos (`zoneWeights` en
+  `zones.ts`; dragones ×3) y última las celdas letales. Sin el `.att`, a ciegas como antes.
+- **Datos de la base** (`insights.ts`): cada 10 min, 8 SELECT (cacerías, cajas, invasiones del server, muertes, exposición,
+  rivales, ladrones); reintento espaciado 2 → 30 min si no responde; datos de más de 2 h se ignoran. Decisiones, todas
+  acotadas y con mínimo de datos: `huntFactor` (×0,5-1,5 al valor de cada mapa en `pickHuntMap`/`autoHuntChoice`: cajas por
+  minuto medidas, muertes por hora de exposición, rivales a esta hora), `predictDragonMap` (desempate de un cuarto del bonus
+  del dragón solo mientras el server no avisó el mapa) y `avoidCells` (celdas con ≥ 2 muertes, al final del recorrido).
+- **Vida real** (`health.ts`, `world.ts`): la vida llega en 16 bits y con el máximo cerca de 65.535 se da vuelta (Hume leía 146
+  a plena vida). `HpTracker` des-envuelve por continuidad (salto ≥ 55.000 entre lecturas) y sube `world.maxHp`. Es una
+  inferencia de los datos, **sin verificar con una captura**; al darse vuelta el log dice `HP: la lectura de 16 bits se dio
+  vuelta…` y la base guarda `hp_wrap`.
+- **Aviso a la estación** (`postInsight` en `team.ts`): `POST MUBOT_TEAM_URL` con `{from, kind:'insight', topic:'data'|'pk'|'stuck',
+  note, data, at}` (≤ 1 KB, como mucho uno por tema cada 10 min / 60 s). La estación actual lo rechaza con 400 y el bot lo
+  ignora; el contrato de `kind: 'corner'|'golden'` y `/api/gold` no cambia.
 
 ## Datos y aprendizaje (ClickHouse local)
 

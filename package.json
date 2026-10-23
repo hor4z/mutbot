@@ -5,7 +5,7 @@
   "scripts": {
     "bot": "bun run headless-bot.ts",
     "proxy": "bun run proxy.ts",
-    "test": "bun run packet-tests.ts && bun run learning-tests.ts && bun run explore-tests.ts && bun run farming-tests.ts && bun run farm-middleware-tests.ts && bun run observer-tests.ts && bun run camp-tests.ts && bun run corner-tests.ts && bun run duo-tests.ts && bun run early-tests.ts && bun run early-step-tests.ts && bun run golden-tests.ts && bun run defense-tests.ts && bun run path-tests.ts && bun run panel-tests.ts && bun run estacion-tests.ts && bun run telemetry-tests.ts && bun run equip-tests.ts",
+    "test": "bun run packet-tests.ts && bun run learning-tests.ts && bun run explore-tests.ts && bun run farming-tests.ts && bun run farm-middleware-tests.ts && bun run observer-tests.ts && bun run camp-tests.ts && bun run corner-tests.ts && bun run duo-tests.ts && bun run early-tests.ts && bun run early-step-tests.ts && bun run golden-tests.ts && bun run defense-tests.ts && bun run path-tests.ts && bun run panel-tests.ts && bun run estacion-tests.ts && bun run telemetry-tests.ts && bun run equip-tests.ts && bun run recovery-tests.ts && bun run watchdog-tests.ts && bun run hunt-explorer-tests.ts && bun run insights-tests.ts && bun run health-tests.ts",
     "db:up": "docker compose --env-file .env.db -f db/docker-compose.yml up -d",
     "db:init": "bun --env-file=.env.db scripts/db.ts init",
     "aprender": "bun --env-file=.env.db scripts/aprender.ts",

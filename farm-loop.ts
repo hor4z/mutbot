@@ -3,10 +3,15 @@
  * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
-import { askHelp, newRequests, teammates } from './team';
+import { askHelp, newRequests, postInsight, teammates } from './team';
+import { sendServerCommand } from './chat';
+import { avoidCells, huntFactor, insights, predictDragonMap } from './insights';
+import { silentMs } from './liveness';
+import { PK_RECOVERY } from './recovery';
+import { StuckWatch } from './watchdog';
 import { track, trackEvent } from './telemetry';
 import { isPriorityChar } from './knowledge';
-import { dragonZones, goldenZones, mapsWithZones, nextZone } from './zones';
+import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES } from './golden';
 import { closeSockets, sendToGS } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
@@ -32,7 +37,7 @@ import { EXPLORE, Explorer } from './explore';
 import { SelfReport, classFamily, isFreshChar } from './farming';
 import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
-import { lootState, drops, lootStep, watchDrops } from './loot';
+import { bagRoom, lootState, drops, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
@@ -40,8 +45,8 @@ import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from '.
 import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
-import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, typeStats, world, type ScopedNpc } from './state';
-import { isSafeZone } from './terrain';
+import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type ScopedNpc } from './state';
+import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
 
@@ -59,6 +64,15 @@ let lastDragon: { id: number; x: number; y: number; at: number } | null = null;
 // El aviso "[Mapa] Golden invasion!" vale para esa invasión (15 min).
 const DRAGON_MAP_TTL_MS = 20 * 60_000;
 const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
+// Datos de la base (insights.ts) para elegir mapa: multiplicador por mapa (cajas medidas, muertes, rivales a esta hora)
+// y el mapa probable del dragón mientras el server no lo avisó. Sin base (o sin datos suficientes): neutros.
+function huntData(now: number) {
+  const ins = insights(now);
+  const d = new Date(now);
+  const m = d.getUTCMinutes();
+  const hourUtc = m >= 50 ? d.getUTCHours() : m < 5 ? (d.getUTCHours() + 23) % 24 : (d.getUTCHours() + 1) % 24;
+  return { factor: (map: number) => huntFactor(ins, map, now), predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
+}
 // Personaje nuevo: no encadena cacerías (no puede con los dorados).
 const weakNow = () => isFreshChar(world.resets, world.stats);
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
@@ -79,6 +93,7 @@ const killsSeen = { me: 0, mate: 0, rival: 0, rivals: new Map<string, number>() 
 function dataTick(ctx: LoopCtx, corner: CornerState) {
   const now = Date.now();
   lastTickAt = now;
+  insights(now); // mantiene tibia la caché de la base (insights.ts); no espera ni depende de ella
   const near = (q: { x: number; y: number }, d: number) => Math.hypot(q.x - world.x, q.y - world.y) <= d;
   const players = [...world.players.values()];
   const mates = players.filter((q) => q.name != null && isMate(q.name));
@@ -207,6 +222,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let targetType = -1;
   let starvingLogged = 0;
   let seededRoute = '';
+  // Vigía de trabas (watchdog.ts): sin progreso por X min → diagnóstico y remedio, siempre con traza.
+  const stuckWatch = new StuckWatch();
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro
   // id); el meter descarta el duplicado. Se corta el tramo y se olvida el spot
@@ -380,6 +397,51 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     // Señales de dorados a la estación (nuevos, movidos, idos): los ve aunque estén en zona segura.
     for (const { payload } of goldReporter.update(world.map, [...world.npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) })), Date.now())) publishGold(payload);
+    // Vigía de trabas (watchdog.ts): sin exp, kills, movimiento ni objetivo nuevo por 4/8/12 min → diagnóstico y
+    // remedio seguro (cada uno deja traza en Decisiones y en la base, evento `stuck`).
+    {
+      const nowW = Date.now();
+      const hpPct = world.maxHp > 0 ? (world.hp / world.maxHp) * 100 : 100;
+      const potions = [...world.inventory.values()].filter((it) => it.group === 14 && it.num >= 1 && it.num <= 3).length;
+      const wd = stuckWatch.feed({
+        now: nowW, mode: currentMode(), map: world.map, x: world.x, y: world.y, level: world.level, expTotal: ctx.expTotal, kills,
+        target: ctx.target, pk: pkGuard.active, freeSlots: world.inventory.size ? bagRoom() : null, potions, hpPct, monsters: ctx.npcs.size,
+        walkStuck: ctx.walkStuck, lootingLong: !!lootState.looting && nowW - lootState.looting.since > 30_000, silentMs: silentMs(nowW), hunting: !!bot.hunting,
+      });
+      if (wd) {
+        const idleMin = +(wd.idleMs / 60_000).toFixed(1);
+        decide(`Vigía [${wd.step}/3]: ${idleMin} min sin progreso en ${mapName(world.map)} (${bot.doing}). Diagnóstico: ${wd.diagnosis}. ${wd.why}.`, { diagnosis: wd.diagnosis, remedy: wd.remedy, step: wd.step, idleMin });
+        trackEvent('stuck', wd.diagnosis, wd.step, idleMin, { remedy: wd.remedy, doing: bot.doing, hunting: !!bot.hunting, x: world.x, y: world.y });
+        postInsight(`trabado ${idleMin} min: ${wd.diagnosis} → ${wd.remedy}`, { diagnosis: wd.diagnosis, remedy: wd.remedy, step: wd.step, idleMin, map: world.map }, 'stuck', 60_000);
+        if (wd.remedy === 'pkclear') pkGuard.force(nowW, 'vigía: sin progreso y PK');
+        else if (wd.remedy === 'ignore_loot') { drops.clear(); lootState.looting = null; }
+        else if (wd.remedy === 'drop_target' || wd.remedy === 'leave_camp') {
+          if (ctx.target != null) unreachable.add(ctx.target);
+          ctx.target = null;
+          ctx.walkStuck = 0;
+          if (bot.hunting) { bot.hunting.explorer.reset(); bot.hunting.zonesVisited = new Set(); }
+          else if (learned.camps.camp) learned.camps.leave(nowW, world.level, 'vigía: sin progreso', true, expLog);
+        } else if (wd.remedy === 'rewarp' || wd.remedy === 'warp_town') {
+          ctx.target = null;
+          ctx.walkStuck = 0;
+          journal('travel', `vigía: ${wd.remedy === 'warp_town' ? 'warp a Lorencia' : 'vuelvo a entrar al mapa'}`, { reason: 'watchdog', diagnosis: wd.diagnosis });
+          if (wd.remedy === 'warp_town') await warpAndWait(WARP_SPOTS.find((sp) => sp.index === 2)!);
+          else if (bot.hunting) {
+            const h = bot.hunting.hunt;
+            await warpAndWait({ index: h.warp, name: `cacería ${h.name}`, reqLevel: h.reqLevel, zen: 0, map: h.map });
+          } else {
+            if (wd.diagnosis === 'dry_map' && bot.currentSpot) dryAt.set(bot.currentSpot.index, nowW);
+            if (!(wd.diagnosis === 'dry_map' && (await maybeChangeSpot({ mapDead: true }))) && bot.currentSpot) await warpAndWait(bot.currentSpot);
+          }
+          continue;
+        } else if (wd.remedy === 'reconnect') {
+          bot.blind = true;
+          bot.kicked = true;
+          closeSockets();
+          break;
+        }
+      }
+    }
     ticks++;
     {
       const t = Date.now();
@@ -440,6 +502,23 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(500);
       continue;
     }
+    // Auto-recuperación del PK (recovery.ts): con el aviso del server o varios warps sin respuesta, manda /pkclear
+    // (tope de intentos, 20 s entre uno y otro y descanso de 30 min si no hay caso; el chat respeta el gap de 2 s).
+    {
+      const nowK = Date.now();
+      const act = pkGuard.next(nowK);
+      if (act && 'send' in act) {
+        if (sendServerCommand(act.send, nowK)) {
+          pkGuard.sent(nowK);
+          decide(`PK: mando ${act.send} (intento ${act.tryNo}/${PK_RECOVERY.maxTries}): ${act.why}.`, { tryNo: act.tryNo });
+          trackEvent('pk_clear', act.why, act.tryNo);
+          postInsight(`PK: /pkclear intento ${act.tryNo}`, { tryNo: act.tryNo, map: world.map }, 'pk', 60_000);
+        }
+      } else if (act && 'giveUp' in act) {
+        decide(`PK: ${act.giveUp}.`);
+        trackEvent('pk_clear', act.giveUp, -1);
+      }
+    }
     // Orden `warp` pendiente.
     if (bot.pendingWarp) {
       const sp = bot.pendingWarp;
@@ -469,7 +548,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
           (h.auto && world.map === h.hunt.map
             ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now: nowH,
-                next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: known() }) })
+                next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: known(), ...huntData(nowH) }) })
             : null);
       if (stop) trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((nowH - h.since) / 60_000).toFixed(1), red: !!h.red });
       if (stop) {
@@ -479,7 +558,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         // activa, al mejor mapa que quede. Devias se vació en 3 min con Noria en 38 y Lorencia en 28.
         if (h.auto && !h.red && !weakNow()) {
           const done = new Set([...(h.done ?? []), h.hunt.map]);
-          const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(nowH), knownMaps: known() });
+          const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(nowH), knownMaps: known(), ...huntData(nowH) });
           if (next.ok) {
             bot.hunting = { hunt: next.hunt, since: nowH, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true, done };
             decide(`Cazador: sigo en ${next.hunt.name} (${next.alive} vivos).`);
@@ -636,12 +715,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
     }
     if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting) {
-      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG) });
+      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG), ...huntData(nowG) });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);
         bot.hunting = { hunt: ch.hunt, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
         ctx.target = null;
-        decide(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}${freshDragonMap(nowG) === ch.hunt.map ? ' (el Golden Dragon está acá)' : ''}: salgo a cazar (corto con ${ch.hunt.stopAlive ?? AUTO_HUNT.stopAlive} o menos y sigo en otro mapa).`);
+        decide(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}${freshDragonMap(nowG) === ch.hunt.map ? ' (el Golden Dragon está acá)' : ''}: salgo a cazar (corto con ${ch.hunt.stopAlive ?? AUTO_HUNT.stopAlive} o menos y sigo en otro mapa${huntData(nowG).factor(ch.hunt.map) !== 1 ? `; datos de la base: ×${huntData(nowG).factor(ch.hunt.map).toFixed(2)} por cajas, muertes y rivales a esta hora` : ''}).`);
         journal('travel', `cazador automático: ${ch.hunt.name}`, { map: ch.hunt.map, alive: ch.alive, reason: 'auto-hunt' });
         continue;
       }
@@ -1019,6 +1098,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         castOnTheWay(ctx);
         await walkTowards(ctx, mem.x, mem.y);
         continue;
+      }
+      // Con el terreno del mapa solo recorre lo caminable y alcanzable, sin repetir, primero las celdas con
+      // dorados vistos (zones.ts); sin el .att del mapa, a ciegas como antes.
+      if (terrainOf(world.map)) {
+        const walk = walkableFor(world.map);
+        bot.hunting.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, bot.hunting.explorer.cell, now), avoidCells(insights(now), world.map, now));
       }
       const g = bot.hunting.explorer.next(world.x, world.y, now);
       bot.goalPoint = [g.x, g.y];
