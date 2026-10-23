@@ -21,6 +21,8 @@ import { neverSell, neverShop, opSummary, planSales, itemKey, type VendorRef } f
 import { WALK_PACE_MS } from './config';
 import { sendToGS, waitFor } from './connection';
 import { move } from './equip';
+import { findPath } from './path';
+import { walkableFor } from './terrain';
 import { decide, panelLog } from './journal';
 import { EventBus } from './net/eventBus';
 import { itemInfo } from './panel-logic';
@@ -189,7 +191,10 @@ async function pace(ms = 700) {
 /** Camina hasta quedar a <= `range` casillas del punto (como vault.ts: sin pathfinding, a ritmo de caminata). */
 async function walkNear(x: number, y: number, range = 2, maxSteps = 40): Promise<boolean> {
   for (let i = 0; i < maxSteps && chebyshev(world.x, world.y, x, y) > range; i++) {
-    step(directionTowards(world.x, world.y, x, y));
+    // Con el terreno del mapa (path.ts); si no hay camino, en línea recta como antes.
+    const path = findPath(walkableFor(world.map), { x: world.x, y: world.y }, { x, y }, 6000);
+    const next = path && path.length > 1 ? path[1] : { x, y };
+    step(directionTowards(world.x, world.y, next.x, next.y));
     await sleep(humanPace(WALK_PACE_MS));
     if (bot.kicked) return false;
   }
@@ -333,8 +338,17 @@ export async function runCommerce(op: CommerceOp): Promise<CommandResult> {
   return r;
 }
 
+/** NPC conocidos (OpenMU, Lorencia.cs): Amy, vendedora de pociones, cerca de (127,86). */
+const KNOWN_NPCS: Record<number, { map: number; x: number; y: number }> = { 253: { map: 0, x: 127, y: 86 } };
+
 async function goTalk(npcId: number): Promise<CommandResult | null> {
-  const npc = world.townNpcs.get(npcId);
+  let npc = world.townNpcs.get(npcId);
+  const known = KNOWN_NPCS[npcId];
+  if (!npc && known && world.map === known.map) {
+    // Fuera de la vista pero con posición conocida (vendedora de pociones de Lorencia): se camina hasta tenerla cerca.
+    await walkNear(known.x, known.y, 8, 140);
+    npc = world.townNpcs.get(npcId);
+  }
   if (!npc) return { ok: false, msg: `el NPC ${npcId} no está a la vista` };
   if (chebyshev(world.x, world.y, npc.x, npc.y) > TALK_RANGE && !(await walkNear(npc.x, npc.y, 3))) return { ok: false, msg: `no llegué a ${monsterName(npc.type)} (${npc.x},${npc.y})` };
   return null;
