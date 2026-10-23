@@ -7,6 +7,10 @@ import "@fontsource/geist-mono/latin-400.css";
 import { Station } from "./Station";
 import { Panel } from "./Panel";
 import "./style.css";
+import "./station.css";
+import { installMock } from "./mock";
+
+installMock();
 createRoot(document.getElementById("root")!).render(
   document.body.dataset.surface === "panel" ? <Panel /> : <Station />,
 );

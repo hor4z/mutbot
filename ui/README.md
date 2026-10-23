@@ -6,6 +6,8 @@ React + Vite, componentes Base UI, fuentes Geist y Geist Mono locales, radar Thr
 - `bun run ui:build`: compila y actualiza `../estacion.html` y `../panel.html`. Después recargar el navegador. No hace falta reiniciar la estación ni los bots.
 - `bun run tsc`: comprobación de tipos del proyecto y la interfaz.
 
+`bun run ui:dev` + `/?demo` abre la estación con datos simulados (sin tocar la estación ni los bots). Vistas: Flota, Personaje, Estrategias, Dorados, Ranking, Consola; atajos 1-6, N, A, ? y Ctrl/Cmd+K.
+
 Los HTML son artefactos generados: editar `src/`, no los bundles. Fuentes e ilustración se incluyen en el build para conservar las rutas HTTP existentes, sin CDN ni dependencias de red al abrir el panel.
 
 La estación conserva `/api/state`, `/api/log/:personaje` y `/api/do`. El panel usa el WebSocket de su mismo origen y el contrato de `panel-protocol.ts`. Cambiar de personaje o de vista no envía órdenes al bot.

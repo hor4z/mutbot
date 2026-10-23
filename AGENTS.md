@@ -705,6 +705,13 @@ su consola.
   `content-type: application/json` y un pedido de lista cerrada (`parseStationRequest`: `connect`,
   `disconnect`, `routine`, sin campos de más). No exponerla con ngrok ni similares.
 
+**Flota, estrategias y alertas** (`estacion-logic.ts`, tests en `estacion-tests.ts`; interfaz en `ui/src`: Flota, Personaje, Estrategias, Dorados, Ranking, Consola, paleta Ctrl/Cmd+K):
+
+- **Estrategia (`RoleAssign`)** por personaje, guardada en `characters.role` (migración 2 de `estacion-db.ts`). `golden` (rutina `hunt`), `route`, `explorer` y `support` (rutina `farm`), `spot` (+`warp`). `POST /api/do {action:'role', char, role}` la guarda y, si el bot está en el juego, aplica `roleRoutine(role)`. La rutina `{kind:'hunt'}` es nueva (orden `hunt` del panel). `GET /api/team` suma `role` en cada miembro.
+- **Exploración:** un explorador publica `POST /api/team {from, kind:'scout', map, x, y, players?, monsters?, golds?, note?}` (sin Origin). La estación guarda el último por explorador y mapa 10 min (`ScoutReport`) y los devuelve en `GET /api/team` (`scouts`) y `/api/state`. Los bots todavía no publican ni consumen esto: falta del lado del bot.
+- **Alertas:** `/api/state` devuelve `alerts` (más nueva primero, ≤120, `Alert`), `invasion`, `scouts` y `now`. La estación detecta muertes, bloqueos, bolsa llena, subidas de nivel, entradas/salidas, bots trabados (5 min sin moverse farmeando o cazando) e invasiones (`diffAlerts`). Los bots pueden sumar avisos con `POST /api/alert {from, kind:'pk'|'bagfull'|'stuck', text}` (sin Origin). `view()` de cada personaje suma `role`, `roleSaved`, `stuck` y en `game`: `mp`, `zen`, `bag`, `nearby`, `resetsPerDay`, `session`.
+- **Demo de la interfaz:** `bun run ui:dev` y abrir `/?demo`: datos simulados, no sale ninguna orden (`ui/src/mock.ts`).
+
 **Probado:** tests offline, y la estación contra un server inexistente (lanzar, adoptar al reiniciar
 la estación, desconectar, Origin ajeno rechazado). **Falta en vivo:** conectar contra el server real
 y ver la rutina aplicada al entrar.
