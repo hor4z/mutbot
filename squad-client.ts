@@ -205,6 +205,8 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       return false; // el loop ataca (dorados primero, GoldenRule)
     }
     case 'farm':
+      // El padrino vuelve a su ruta normal: se suelta el spot que se había fijado para esperar al más débil.
+      if (savedPin !== undefined) { bot.pinnedSpot = savedPin; savedPin = undefined; bot.canAdopt = true; log('Escuadra: el protegido ya puede con mi ruta, suelto el spot fijado.'); }
       return false;
     case 'follow':
     case 'hold': {
