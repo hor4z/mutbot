@@ -3,6 +3,8 @@ import { Button } from "@base-ui/react/button";
 import { Select } from "@base-ui/react/select";
 import { Tabs } from "@base-ui/react/tabs";
 import { Progress } from "@base-ui/react/progress";
+import { AlertDialog } from "@base-ui/react/alert-dialog";
+import { Dialog } from "@base-ui/react/dialog";
 import { ChevronDown, Check } from "lucide-react";
 export const fmt = (n?: number | null) =>
   n == null ? "—" : n.toLocaleString("es-AR");
@@ -194,5 +196,85 @@ export function Metric({
       <strong>{value}</strong>
       {note && <small>{note}</small>}
     </div>
+  );
+}
+
+/** Confirmación de una acción que cambia lo que hace el personaje (nunca se manda sin pasar por acá). */
+export function Confirm({
+  open,
+  onOpenChange,
+  title,
+  description,
+  confirmLabel,
+  onConfirm,
+  children,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  title: string;
+  description: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  children?: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
+      <AlertDialog.Portal>
+        <AlertDialog.Backdrop className="modal-backdrop" />
+        <AlertDialog.Viewport className="modal-viewport">
+          <AlertDialog.Popup className="modal-popup">
+            <AlertDialog.Title className="modal-title">{title}</AlertDialog.Title>
+            <AlertDialog.Description className="modal-body" render={<div />}>
+              {description}
+            </AlertDialog.Description>
+            {children}
+            <div className="modal-actions">
+              <AlertDialog.Close className="button">Cancelar</AlertDialog.Close>
+              <Button
+                className="button primary"
+                disabled={disabled}
+                onClick={() => {
+                  onConfirm();
+                  onOpenChange(false);
+                }}
+              >
+                {confirmLabel}
+              </Button>
+            </div>
+          </AlertDialog.Popup>
+        </AlertDialog.Viewport>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  );
+}
+/** Diálogo informativo (ayuda de atajos). */
+export function Modal({
+  open,
+  onOpenChange,
+  title,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="modal-backdrop" />
+        <Dialog.Viewport className="modal-viewport">
+          <Dialog.Popup className="modal-popup wide">
+            <Dialog.Title className="modal-title">{title}</Dialog.Title>
+            {children}
+            <div className="modal-actions">
+              <Dialog.Close className="button">Cerrar</Dialog.Close>
+            </div>
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

@@ -1,645 +1,104 @@
-import { useEffect, useRef, useState } from "react";
-import * as T from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-import { Crosshair, RotateCcw, Move3d, Trees, Maximize } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Box,
+  Compass as CompassIcon,
+  Copy,
+  Crosshair,
+  LocateFixed,
+  Map as MapIcon,
+  Maximize,
+  Minimize,
+  Minus,
+  Plane,
+  Plus,
+  RotateCcw,
+  RotateCw,
+  Trees,
+  X,
+} from "lucide-react";
 import type { PanelState } from "../../panel-protocol";
-import { Action, Segments } from "./components";
-import { loadRealMap, type RealMap } from "./map-assets";
+import { cheb } from "./hud-logic";
+import { counts, css, LAYER_META, loadLayers, saveLayers, type Info, type LayerKey, type Layers } from "./radar-model";
+import { makeRadar, type RadarApi } from "./radar-engine";
+import { Tactical, type TacticalApi } from "./Tactical";
+import { Segments } from "./components";
 
-type RadarApi = {
-  update: (s: PanelState) => void;
-  // "cam" = cámara: pegada al personaje, al ángulo del juego, con nombres arriba de cada uno.
-  zoom: (v: string) => void;
-  reset: () => void;
-  setObjects: (visible: boolean) => void;
-  dispose: () => void;
-};
-// Vos en blanco: en amarillo se confundía con los dorados (usuario, 2026-10-23). Los dragones con color
-// propio: Golden Dragon (79) naranja, Dragón Rojo (44) rojo.
-const colors = {
-  self: 0xffffff,
-  monster: 0xe86d7b,
-  gold: 0xffd361,
-  dragon: 0xff8c1a,
-  red: 0xff3b3b,
-  player: 0x77c6f1,
-  drop: 0xc6a0ff,
-  camp: 0x6ad7b0,
-  zone: 0xffd361,
-};
-function makeRadar(
-  el: HTMLDivElement,
-  onTerrain: (s: string) => void,
-  onHover: (s: string) => void,
-): RadarApi {
-  const scene = new T.Scene();
-  scene.background = new T.Color("#111619");
-  scene.fog = new T.FogExp2("#111619", 0.002);
-  const renderer = new T.WebGLRenderer({
-    antialias: true,
-    alpha: false,
-    powerPreference: "low-power",
-  });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8));
-  renderer.outputColorSpace = T.SRGBColorSpace;
-  renderer.setClearColor("#111619");
-  el.appendChild(renderer.domElement);
-  // Nombres arriba de monstruos y jugadores (solo en modo cámara).
-  const labels = new CSS2DRenderer();
-  labels.domElement.className = "radar-labels";
-  labels.domElement.style.display = "none";
-  el.appendChild(labels.domElement);
-  renderer.domElement.setAttribute(
-    "aria-label",
-    "Radar 3D. Arrastrá para girar, usá la rueda para acercar y el botón Centrar para volver al personaje.",
-  );
-  renderer.domElement.tabIndex = 0;
-  const camera = new T.PerspectiveCamera(42, 1, 0.1, 2500);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.09;
-  controls.minDistance = 10;
-  controls.maxDistance = 1600;
-  controls.maxPolarAngle = Math.PI * 0.46;
-  controls.minPolarAngle = 0.12;
-  controls.enablePan = true;
-  controls.target.set(0, 0, 0);
-  camera.position.set(34, 39, 34);
-  controls.update();
-  scene.add(new T.HemisphereLight(0xe8f1ff, 0x4b5040, 1.7));
-  const sun = new T.DirectionalLight(0xffefd5, 1.8);
-  sun.position.set(-25, 60, 30);
-  scene.add(sun);
-  const fill = new T.DirectionalLight(0xb2d8f0, 0.5);
-  fill.position.set(30, 10, -20);
-  scene.add(fill);
-  const ground = new T.Group(),
-    entities = new T.Group();
-  scene.add(ground, entities);
-  let state: PanelState | null = null,
-    map = -1,
-    span = 40,
-    cam = false,
-    terrain: Uint8Array | null = null,
-    terrainAbort: AbortController | null = null,
-    disposed = false,
-    frame = 0,
-    visible = true,
-    lastDraw = 0,
-    patchKey = "";
-  let real: RealMap | null = null;
-  let realAbort: AbortController | null = null;
-  let objectsVisible = true;
-  const elevation = (x: number, y: number) => real?.height(x, y) ?? 0;
-  const cache = new Map<number, Uint8Array | null>();
-  const matrix = new T.Object3D();
-  const wallMat = new T.MeshStandardMaterial({
-    color: 0x58666b,
-    roughness: 0.65,
-    metalness: 0.15,
-  });
-  const floorMat = new T.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.96,
-    metalness: 0.04,
-  });
-  const walls = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), wallMat, 65536);
-  const floors = new T.InstancedMesh(
-    new T.BoxGeometry(1, 1, 1),
-    floorMat,
-    65536,
-  );
-  walls.count = 0;
-  floors.count = 0;
-  walls.frustumCulled = false;
-  floors.frustumCulled = false;
-  ground.add(floors, walls);
-  const base = new T.Mesh(
-    new T.BoxGeometry(1, 1, 1),
-    new T.MeshStandardMaterial({ color: 0x151f25, roughness: 0.7 }),
-  );
-  ground.add(base);
-  const grid = new T.GridHelper(256, 64, 0x405055, 0x26383e);
-  grid.position.set(127.5, 0.04, -127.5);
-  scene.add(grid);
-  const lineMat = new T.LineBasicMaterial({
-    color: 0xd2b679,
-    transparent: true,
-    opacity: 0.75,
-  });
-  let trail = new T.Line(new T.BufferGeometry(), lineMat);
-  entities.add(trail);
-  const pool = new Map<string, T.Group>();
-  // Zonas de avistamiento de dragones (de la base): discos dorados en el piso con su cantidad.
-  const zoneGroup = new T.Group();
-  scene.add(zoneGroup);
-  const zoneMat = new T.MeshBasicMaterial({ color: 0xffd361, transparent: true, opacity: 0.18, depthWrite: false, side: T.DoubleSide });
-  const zoneRingMat = new T.MeshBasicMaterial({ color: 0xffd361, transparent: true, opacity: 0.55, depthWrite: false, side: T.DoubleSide });
-  let zoneKey = "";
-  function drawZones(s: PanelState) {
-    const key = `${s.where.map}:${JSON.stringify(s.zones ?? [])}:${!!real}`;
-    if (key === zoneKey) return;
-    zoneKey = key;
-    for (const c of [...zoneGroup.children]) {
-      zoneGroup.remove(c);
-      (c.getObjectByName("tag") as CSS2DObject | undefined)?.element.remove();
-      c.traverse((o) => { if (o instanceof T.Mesh) o.geometry.dispose(); });
-    }
-    for (const z of s.zones ?? []) {
-      const g = new T.Group();
-      const r = 6;
-      const disc = new T.Mesh(new T.CircleGeometry(r, 40), zoneMat);
-      const edge = new T.Mesh(new T.RingGeometry(r - 0.25, r, 40), zoneRingMat);
-      disc.rotation.x = edge.rotation.x = -Math.PI / 2;
-      g.add(disc, edge);
-      const div = document.createElement("div");
-      div.className = "radar-tag radar-tag-gold";
-      div.textContent = `Dragones ×${z.n}`;
-      const t = new CSS2DObject(div);
-      t.name = "tag";
-      t.position.y = 1.2;
-      g.add(t);
-      g.position.set(z.x, elevation(z.x, z.y) + 0.12, -z.y);
-      g.userData.label = `Zona de dragones · ${z.x}, ${z.y} · ${z.n} avistamientos`;
-      zoneGroup.add(g);
-    }
+type View = "3d" | "2d";
+// Alcance en tiles del ancho de la vista 2D para cada preset (el 3D usa su propio encuadre).
+const RANGE_TILES: Record<string, number> = { cam: 36, "40": 80, "90": 160, "256": 256 };
+
+function readView(): View {
+  try {
+    return localStorage.getItem("mubot.radar.view") === "2d" ? "2d" : "3d";
+  } catch {
+    return "3d";
   }
-  // Lo que falta mover de la cámara para seguir al personaje (se aplica de a poco en animate).
-  const follow = new T.Vector3();
-  const sphere = new T.SphereGeometry(0.42, 12, 8),
-    body = new T.CylinderGeometry(0.28, 0.45, 0.85, 8),
-    cone = new T.ConeGeometry(0.6, 1.5, 6),
-    gem = new T.OctahedronGeometry(0.7),
-    ring = new T.TorusGeometry(0.85, 0.065, 6, 36);
-  const materials = new Map<number, T.MeshStandardMaterial>();
-  function material(color: number) {
-    if (!materials.has(color))
-      materials.set(
-        color,
-        new T.MeshStandardMaterial({
-          color,
-          emissive: color,
-          emissiveIntensity: 0.3,
-          metalness: 0.35,
-          roughness: 0.4,
-          depthTest: true,
-          depthWrite: true,
-        }),
-      );
-    return materials.get(color)!;
-  }
-  const haloMat = new T.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.16,
-    depthWrite: false,
-  });
-  const halo = new T.Mesh(new T.RingGeometry(0.8, 1.4, 48), haloMat);
-  halo.rotation.x = -Math.PI / 2;
-  scene.add(halo);
-  function marker(
-    key: string,
-    kind: keyof typeof colors,
-    x: number,
-    y: number,
-    label: string,
-    target = false,
-    tag?: string,
-  ) {
-    let group = pool.get(key);
-    if (!group) {
-      group = new T.Group();
-      const mat = material(colors[kind]);
-      if (kind === "self" || kind === "player") {
-        const b = new T.Mesh(body, mat);
-        b.position.y = 0.425;
-        const h = new T.Mesh(sphere, mat);
-        h.position.y = 1.1;
-        group.add(b, h);
-      } else {
-        const mesh = new T.Mesh(kind === "monster" ? cone : gem, mat);
-        mesh.position.y = kind === "monster" ? 0.9 : 1;
-        // Los dragones, más grandes: se ven de lejos.
-        if (kind === "dragon" || kind === "red") mesh.scale.setScalar(1.7);
-        group.add(mesh);
-      }
-      const r = new T.Mesh(ring, mat);
-      r.rotation.x = -Math.PI / 2;
-      r.position.y = 0.07;
-      r.name = "ring";
-      group.add(r);
-      const div = document.createElement("div");
-      div.className = `radar-tag radar-tag-${kind}`;
-      const t = new CSS2DObject(div);
-      t.position.y = kind === "self" || kind === "player" ? 1.9 : 2;
-      t.name = "tag";
-      group.add(t);
-      pool.set(key, group);
-      entities.add(group);
-    }
-    group.visible = true;
-    // Destino: el animate lo desliza hasta ahí (la posición llega una vez por segundo; sin esto los
-    // personajes saltaban de tile en tile). Uno nuevo aparece directo en su lugar.
-    const to = new T.Vector3(x, elevation(x, y) + 0.02, -y);
-    if (!group.userData.to) group.position.copy(to);
-    group.userData.to = to;
-    // Characters keep their world size and are occluded by the actual scenery.
-    const scale = kind === "self" || kind === "player" || cam ? 1 : Math.max(1, span / 65);
-    group.scale.setScalar(scale);
-    group.userData.label = label;
-    const tagObj = group.getObjectByName("tag") as CSS2DObject;
-    // En cámara, nombres solo cerca del personaje (a <= 9 tiles), el objetivo y los dorados: con todos
-    // a la vista la pantalla se llenaba de carteles.
-    const me = state?.where;
-    const near = !!me && Math.hypot(x - me.x, y - me.y) <= 9;
-    tagObj.visible = cam && !!tag && (kind === "self" || kind === "gold" || target || near);
-    if (tag && tagObj.element.textContent !== tag) tagObj.element.textContent = tag;
-    tagObj.element.classList.toggle("is-target", target);
-    group.userData.target = target;
-    group.getObjectByName("ring")!.visible =
-      kind === "self" || kind === "camp" || target;
-  }
-  function reset() {
-    if (!state) return;
-    const bounds = real?.bounds ?? [0, 0, 256, 256];
-    const cx = (bounds[0] + bounds[2]) / 2,
-      cy = (bounds[1] + bounds[3]) / 2;
-    const fit =
-      span >= 256
-        ? Math.max(bounds[2] - bounds[0], bounds[3] - bounds[1]) * 1.05
-        : span;
-    const target =
-      span >= 256
-        ? new T.Vector3(cx, elevation(cx, cy), -cy)
-        : new T.Vector3(
-            state.where.x,
-            elevation(state.where.x, state.where.y),
-            -state.where.y,
-          );
-    controls.target.copy(target);
-    // Cámara: más cerca y más baja, como se ve el personaje en el juego.
-    const offset = cam ? new T.Vector3(8.5, 11, 8.5) : new T.Vector3(fit * 0.65, fit * 0.85, fit * 0.7);
-    if (span >= 256) {
-      const vertical = T.MathUtils.degToRad(camera.fov);
-      const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * camera.aspect);
-      const radius =
-        Math.hypot(bounds[2] - bounds[0], bounds[3] - bounds[1]) / 2;
-      offset
-        .normalize()
-        .multiplyScalar(
-          (radius / Math.sin(Math.min(vertical, horizontal) / 2)) * 1.06,
-        );
-    }
-    camera.position.copy(target).add(offset);
-    controls.update();
-  }
-  function buildGround() {
-    if (!state) return;
-    ground.visible = !real;
-    grid.visible = !real && !terrain;
-    if (real) return;
-    const radius = span >= 256 ? 256 : Math.ceil(span * 0.85);
-    const x0 =
-        span >= 256 ? 0 : Math.max(0, Math.floor(state.where.x - radius)),
-      x1 = span >= 256 ? 256 : Math.min(256, Math.ceil(state.where.x + radius));
-    const y0 =
-        span >= 256 ? 0 : Math.max(0, Math.floor(state.where.y - radius)),
-      y1 = span >= 256 ? 256 : Math.min(256, Math.ceil(state.where.y + radius));
-    const key = `${map}:${x0 >> 2}:${y0 >> 2}:${span}:${!!terrain}`;
-    if (patchKey === key) return;
-    patchKey = key;
-    let wi = 0,
-      fi = 0;
-    const color = new T.Color();
-    for (let y = y0; y < y1; y++)
-      for (let x = x0; x < x1; x++) {
-        const v = terrain?.[y * 256 + x] ?? 0;
-        if (terrain && v & 12) {
-          matrix.position.set(x, 0.8, -y);
-          matrix.scale.set(1, 1.65, 1);
-          matrix.updateMatrix();
-          walls.setMatrixAt(wi++, matrix.matrix);
-        } else {
-          matrix.position.set(x, -0.15, -y);
-          matrix.scale.set(0.985, 0.3, 0.985);
-          matrix.updateMatrix();
-          floors.setMatrixAt(fi, matrix.matrix);
-          color.setHex(
-            !terrain
-              ? 0x1e3037
-              : v & 1
-                ? 0x294d43
-                : v & 16
-                  ? 0x254957
-                  : (x + y) % 2
-                    ? 0x34454b
-                    : 0x314148,
-          );
-          floors.setColorAt(fi++, color);
-        }
-      }
-    walls.count = wi;
-    walls.instanceMatrix.needsUpdate = true;
-    floors.count = fi;
-    floors.instanceMatrix.needsUpdate = true;
-    if (floors.instanceColor) floors.instanceColor.needsUpdate = true;
-    base.position.set((x0 + x1 - 1) / 2, -1, -(y0 + y1 - 1) / 2);
-    base.scale.set(x1 - x0, 1.5, y1 - y0);
-    grid.visible = !terrain;
-  }
-  function update(s: PanelState) {
-    const previous = state;
-    state = s;
-    if (previous && previous.where.map === s.where.map && span < 256) {
-      const delta = new T.Vector3(
-        s.where.x - previous.where.x,
-        elevation(s.where.x, s.where.y) -
-          elevation(previous.where.x, previous.where.y),
-        previous.where.y - s.where.y,
-      );
-      // La cámara sigue al personaje deslizándose (follow se aplica de a poco en animate).
-      follow.add(delta);
-    }
-    if (map !== s.where.map) {
-      map = s.where.map;
-      // Mapa nuevo: nada se desliza desde el mapa anterior (aparece directo en su lugar).
-      pool.forEach((g) => delete g.userData.to);
-      follow.set(0, 0, 0);
-      realAbort?.abort();
-      if (real) {
-        scene.remove(real.group);
-        real.dispose();
-        real = null;
-      }
-      realAbort = new AbortController();
-      const controller = realAbort;
-      const requestedMap = map;
-      loadRealMap(map, controller.signal, (text) => {
-        if (!disposed && map === requestedMap) onTerrain(text);
-      })
-        .then((loaded) => {
-          if (disposed || controller.signal.aborted || map !== requestedMap) {
-            loaded.dispose();
-            return;
-          }
-          real = loaded;
-          real.setObjects(objectsVisible);
-          scene.add(real.group);
-          ground.visible = false;
-          grid.visible = false;
-          if (state) {
-            update(state);
-            reset();
-          }
-          onTerrain(
-            `Mapa original · ${loaded.objectCount.toLocaleString("es-AR")} objetos${loaded.missingTypes ? " · escenario parcial" : ""}`,
-          );
-        })
-        .catch((error) => {
-          if (!disposed && !controller.signal.aborted && map === requestedMap)
-            onTerrain("Vista de colisiones · escenario original no disponible");
-        });
-      patchKey = "";
-      terrain = cache.get(map) ?? null;
-      reset();
-      onTerrain("Cargando mapa original…");
-      terrainAbort?.abort();
-      terrainAbort = new AbortController();
-      const thisMap = map;
-      if (cache.has(map)) {
-        if (!real) onTerrain("Cargando escenario original…");
-      } else {
-        fetch(`/terrain/${map}`, { signal: terrainAbort.signal })
-          .then(async (r) => {
-            if (!r.ok) throw Error();
-            const b = new Uint8Array(await r.arrayBuffer());
-            if (b.length !== 65536) throw Error();
-            return b;
-          })
-          .then((b) => {
-            if (disposed || map !== thisMap) return;
-            cache.set(map, b);
-            terrain = b;
-            patchKey = "";
-            buildGround();
-            if (!real) onTerrain("Cargando escenario original…");
-          })
-          .catch((e) => {
-            if (disposed || e.name === "AbortError" || map !== thisMap) return;
-            cache.set(map, null);
-            if (!real) onTerrain("Cargando escenario original…");
-          });
-      }
-    }
-    buildGround();
-    drawZones(s);
-    pool.forEach((g) => (g.visible = false));
-    marker(
-      "self",
-      "self",
-      s.where.x,
-      s.where.y,
-      `${s.char.name} · ${s.where.x}, ${s.where.y}`,
-      false,
-      s.char.name,
-    );
-    halo.position.set(
-      s.where.x,
-      elevation(s.where.x, s.where.y) + 0.06,
-      -s.where.y,
-    );
-    halo.scale.setScalar(Math.max(1, span / 65));
-    for (const m of s.entities?.monsters ?? [])
-      marker(
-        `m${m.id}`,
-        m.type === 44 ? "red" : m.type === 79 ? "dragon" : m.gold ? "gold" : "monster",
-        m.x,
-        m.y,
-        `${m.name} · ${m.x}, ${m.y}${m.target ? " · Objetivo" : ""}`,
-        m.target,
-        m.name,
-      );
-    for (const p of s.entities?.players ?? [])
-      marker(`p${p.id}`, "player", p.x, p.y, `${p.name ?? "Jugador"}${p.mate ? " (compañero)" : ""} · ${p.x}, ${p.y}`, false, p.name ? `${p.name}${p.mate ? " ★" : ""}` : "Jugador");
-    for (const [i, d] of (s.entities?.drops ?? []).entries())
-      if (d.valuable)
-        marker(`d${i}`, "drop", d.x, d.y, `${d.name} · ${d.x}, ${d.y}`, false, d.name);
-    if (s.camp) marker("camp", "camp", ...s.camp, "Destino del personaje");
-    for (const [key, g] of pool)
-      if (!g.visible) {
-        entities.remove(g);
-        // El CSS2DRenderer no saca del DOM el cartel de un objeto que ya no está en la escena: quedaban
-        // nombres viejos pegados en la cámara (monstruos de otro mapa, objetivos que ya murieron).
-        (g.getObjectByName("tag") as CSS2DObject | undefined)?.element.remove();
-        pool.delete(key);
-      }
-    trail.geometry.dispose();
-    trail.geometry = new T.BufferGeometry().setFromPoints(
-      (s.trail ?? []).map(
-        ([x, y]) => new T.Vector3(x, elevation(x, y) + 0.18, -y),
-      ),
-    );
-  }
-  const raycaster = new T.Raycaster();
-  const pointer = new T.Vector2();
-  function hover(ev: PointerEvent) {
-    const rc = renderer.domElement.getBoundingClientRect();
-    pointer.set(
-      ((ev.clientX - rc.left) / rc.width) * 2 - 1,
-      (-(ev.clientY - rc.top) / rc.height) * 2 + 1,
-    );
-    raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObjects([...pool.values()], true)[0];
-    let o: T.Object3D | undefined = hit?.object;
-    while (o && !o.userData.label) o = o.parent ?? undefined;
-    if (o?.userData.label) onHover(o.userData.label);
-    else if (real) {
-      const tile = raycaster.intersectObject(real.group.children[0], false)[0];
-      if (tile) {
-        const x = Math.floor(tile.point.x),
-          y = Math.floor(-tile.point.z);
-        const flag = real.flags[Math.max(0, Math.min(65535, y * 256 + x))];
-        onHover(
-          `${x}, ${y} · ${flag & 1 ? "Zona segura" : flag & 4 ? "No transitable" : "Terreno"} · altura ${elevation(x, y).toFixed(2)}`,
-        );
-      } else onHover("");
-    } else onHover("");
-  }
-  const leave = () => onHover("");
-  renderer.domElement.addEventListener("pointermove", hover);
-  renderer.domElement.addEventListener("pointerleave", leave);
-  const keyboard = (e: KeyboardEvent) => {
-    if (e.key === "Home") {
-      e.preventDefault();
-      reset();
-    } else if (
-      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "+", "-"].includes(
-        e.key,
-      )
-    ) {
-      e.preventDefault();
-      const offset = camera.position.clone().sub(controls.target);
-      if (e.key === "+" || e.key === "-")
-        offset.multiplyScalar(e.key === "+" ? 0.9 : 1.1);
-      else if (e.key === "ArrowLeft" || e.key === "ArrowRight")
-        offset.applyAxisAngle(
-          new T.Vector3(0, 1, 0),
-          e.key === "ArrowLeft" ? 0.12 : -0.12,
-        );
-      else offset.y = Math.max(4, offset.y + (e.key === "ArrowUp" ? 4 : -4));
-      camera.position.copy(controls.target).add(offset);
-      controls.update();
-    }
-  };
-  renderer.domElement.addEventListener("keydown", keyboard);
-  const resize = new ResizeObserver(() => {
-    const w = el.clientWidth,
-      h = el.clientHeight;
-    if (!w || !h) return;
-    renderer.setSize(w, h);
-    labels.setSize(w, h);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    if (span >= 256) reset();
-  });
-  resize.observe(el);
-  const intersection = new IntersectionObserver(
-    (entries) => (visible = entries[0]?.isIntersecting ?? true),
-  );
-  intersection.observe(el);
-  function animate(t: number) {
-    frame = requestAnimationFrame(animate);
-    if (!visible || document.hidden || t - lastDraw < 32) return;
-    const dt = Math.min(200, t - lastDraw);
-    lastDraw = t;
-    // Deslizar hacia el destino (~90 % en 0,7 s: llega antes de la próxima posición).
-    const k = 1 - Math.exp(-dt / 300);
-    for (const g of pool.values()) {
-      const to = g.userData.to as T.Vector3 | undefined;
-      if (to) g.position.lerp(to, k);
-    }
-    const self = pool.get("self");
-    if (self) halo.position.set(self.position.x, self.position.y + 0.04, self.position.z);
-    if (follow.lengthSq() > 1e-6) {
-      const step = follow.clone().multiplyScalar(k);
-      controls.target.add(step);
-      camera.position.add(step);
-      follow.sub(step);
-    }
-    // El objetivo del personaje late (en cámara se ve a quién le está pegando).
-    const pulse = 1 + 0.25 * Math.sin(t / 140);
-    for (const g of pool.values())
-      if (g.userData.target) g.getObjectByName("ring")!.scale.setScalar(cam ? pulse : 1);
-    controls.update();
-    renderer.render(scene, camera);
-    if (cam) labels.render(scene, camera);
-  }
-  frame = requestAnimationFrame(animate);
-  return {
-    update,
-    setObjects(visible) {
-      objectsVisible = visible;
-      real?.setObjects(visible);
-    },
-    zoom(v) {
-      cam = v === "cam";
-      span = cam ? 16 : +v;
-      labels.domElement.style.display = cam ? "" : "none";
-      if (state) update(state);
-      patchKey = "";
-      buildGround();
-      reset();
-    },
-    reset,
-    dispose() {
-      disposed = true;
-      terrainAbort?.abort();
-      realAbort?.abort();
-      if (real) {
-        scene.remove(real.group);
-        real.dispose();
-      }
-      cancelAnimationFrame(frame);
-      resize.disconnect();
-      intersection.disconnect();
-      controls.dispose();
-      renderer.domElement.removeEventListener("pointermove", hover);
-      renderer.domElement.removeEventListener("pointerleave", leave);
-      renderer.domElement.removeEventListener("keydown", keyboard);
-      const geometries = new Set<T.BufferGeometry>();
-      const mats = new Set<T.Material>();
-      scene.traverse((o) => {
-        if (o instanceof T.Mesh || o instanceof T.Line) {
-          geometries.add(o.geometry);
-          for (const m of Array.isArray(o.material) ? o.material : [o.material])
-            mats.add(m);
-        }
-      });
-      geometries.forEach((g) => g.dispose());
-      [sphere, body, cone, gem, ring].forEach((g) => g.dispose());
-      materials.forEach((m) => m.dispose());
-      mats.forEach((m) => m.dispose());
-      renderer.dispose();
-      renderer.forceContextLoss();
-      renderer.domElement.remove();
-      labels.domElement.remove();
-    },
-  };
 }
-export function Radar({ state }: { state: PanelState | null }) {
+const nice = (n: number) => {
+  const steps = [1, 2, 5, 10, 20, 25, 50, 100];
+  return steps.filter((s) => s <= n).pop() ?? 1;
+};
+const bearing = (dx: number, dy: number) => {
+  const names = ["E", "NE", "N", "NO", "O", "SO", "S", "SE"];
+  return names[Math.round(((Math.atan2(dy, dx) + 2 * Math.PI) % (2 * Math.PI)) / (Math.PI / 4)) % 8]!;
+};
+
+export function Radar({ state, onRequestWarp }: { state: PanelState | null; onRequestWarp?: () => void }) {
   const host = useRef<HTMLDivElement>(null),
+    stage = useRef<HTMLDivElement>(null),
     api = useRef<RadarApi | null>(null),
+    tac = useRef<TacticalApi>(null),
     latest = useRef(state);
   latest.current = state;
-  const [zoom, setZoom] = useState("40"),
-    [terrain, setTerrain] = useState("Esperando posición"),
-    [hover, setHover] = useState(""),
+  const [view, setViewState] = useState<View>(readView),
+    [range, setRange] = useState("40"),
+    [follow, setFollowState] = useState(true),
+    [layers, setLayers] = useState<Layers>(loadLayers),
+    [showObjects, setShowObjects] = useState(true),
+    [legend, setLegend] = useState(true),
+    [status, setStatus] = useState("Esperando posición"),
     [error, setError] = useState(false),
-    [showObjects, setShowObjects] = useState(true);
+    [hover, setHover] = useState<{ i: Info; px: number; py: number } | null>(null),
+    [pick, setPick] = useState<{ i: Info; px: number; py: number } | null>(null),
+    [needle, setNeedle] = useState(45),
+    [tiles, setTiles] = useState(60),
+    [fs, setFs] = useState(false),
+    [copied, setCopied] = useState(false),
+    [fogV, setFogV] = useState(0);
+  const discovered = useRef(new Map<number, Uint8Array>());
+  const tilesRef = useRef(60);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  const setView = (v: View) => {
+    setViewState(v);
+    setPick(null);
+    setHover(null);
+    try {
+      localStorage.setItem("mubot.radar.view", v);
+    } catch {
+      /* ignorar */
+    }
+  };
+  const setFollow = useCallback((on: boolean) => {
+    setFollowState(on);
+    api.current?.setFollow(on);
+  }, []);
+
   useEffect(() => {
     try {
-      api.current = makeRadar(host.current!, setTerrain, setHover);
+      api.current = makeRadar(host.current!, {
+        terrain: setStatus,
+        hover: (i, px, py) => setHover(i ? { i, px, py } : null),
+        pick: (i, px, py) => setPick({ i, px, py }),
+        view: (n, t) => {
+          setNeedle(n);
+          setTiles(t);
+        },
+        free: () => setFollow(false),
+      });
+      api.current.setLayers(layers);
+      api.current.zoom(range);
       if (latest.current) api.current.update(latest.current);
     } catch {
       setError(true);
@@ -648,119 +107,334 @@ export function Radar({ state }: { state: PanelState | null }) {
       api.current?.dispose();
       api.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (state) api.current?.update(state);
+    if (!state) return;
+    api.current?.update(state);
+    // Niebla: lo recorrido (un círculo de ~14 tiles alrededor de cada posición).
+    let grid = discovered.current.get(state.where.map);
+    if (!grid) discovered.current.set(state.where.map, (grid = new Uint8Array(65536)));
+    let changed = false;
+    const mark = (cx: number, cy: number, r: number) => {
+      for (let y = Math.max(0, cy - r); y <= Math.min(255, cy + r); y++)
+        for (let x = Math.max(0, cx - r); x <= Math.min(255, cx + r); x++)
+          if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && !grid![y * 256 + x]) {
+            grid![y * 256 + x] = 1;
+            changed = true;
+          }
+    };
+    mark(state.where.x, state.where.y, 14);
+    for (const [x, y] of state.trail ?? []) mark(x, y, 8);
+    if (changed) setFogV((v) => v + 1);
   }, [state]);
+  useEffect(() => {
+    api.current?.setLayers(layers);
+    saveLayers(layers);
+  }, [layers]);
+  useEffect(() => {
+    const on = () => setFs(document.fullscreenElement === stage.current);
+    document.addEventListener("fullscreenchange", on);
+    return () => document.removeEventListener("fullscreenchange", on);
+  }, []);
+  // Al cambiar de mapa se cierra lo que apuntaba al anterior.
+  const mapId = state?.where.map;
+  useEffect(() => {
+    setPick(null);
+    setHover(null);
+  }, [mapId]);
+
+  const applyRange = (v: string) => {
+    setRange(v);
+    api.current?.zoom(v);
+    tac.current?.fit(RANGE_TILES[v] ?? 80);
+    if (!follow) setFollow(true);
+  };
+  const zoom = (f: number) => {
+    if (viewRef.current === "3d") api.current?.dolly(f);
+    else tac.current?.zoomBy(1 / f);
+  };
+  const center = useCallback(() => {
+    setFollow(true);
+    if (viewRef.current === "3d") api.current?.reset();
+    else tac.current?.recenter();
+  }, [setFollow]);
+  const toggleFs = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void stage.current?.requestFullscreen().catch(() => {});
+  };
+
+  // Atajos del mapa (no se activan escribiendo en un campo).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "m") setView(viewRef.current === "3d" ? "2d" : "3d");
+      else if (k === "f") setFollowState((f) => { api.current?.setFollow(!f); return !f; });
+      else if (k === "c") center();
+      else if (k === "n") api.current?.northUp();
+      else if (k === "q") api.current?.rotate(0.26);
+      else if (k === "e") api.current?.rotate(-0.26);
+      else if (k === "+" || k === "=") zoom(0.8);
+      else if (k === "-") zoom(1.25);
+      else if (k === "g") setShowObjects((v) => { api.current?.setObjects(!v); return !v; });
+      else if (k === "l") setLegend((v) => !v);
+      else if (k === "escape") setPick(null);
+      else return;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [center]);
+
+  const n = useMemo(() => counts(state), [state]);
+  const toggle = (k: LayerKey) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+  const me = state?.where;
+  const stageW = stage.current?.clientWidth ?? 600;
+  const scaleTiles = nice(Math.max(1, tiles / 5));
+  const scalePx = Math.round((scaleTiles / Math.max(1, tiles)) * stageW);
+  const clampPos = (p: { px: number; py: number }, w: number, h: number) => ({
+    left: Math.max(8, Math.min(stageW - w - 8, p.px + 12)),
+    top: Math.max(8, Math.min((stage.current?.clientHeight ?? 400) - h - 8, p.py + 12)),
+  });
+
   return (
-    <section className="radar surface">
-      <div className="radar-heading">
-        <div>
+    <section className="hud-map" aria-label="Mapa del personaje">
+      <div className="hud-map-head">
+        <div className="hud-map-title">
           <h2>
-            <Move3d size={17} />
-            Radar 3D
+            <MapIcon size={16} aria-hidden /> {state?.where.mapName ?? "Esperando al personaje"}
           </h2>
-          <span>
-            {state?.where.mapName ?? "Esperando al personaje"}{" "}
-            <span className="coordinates">
-              {state ? `${state.where.x}, ${state.where.y}` : ""}
-            </span>
+          <span className="coordinates" aria-live="off">
+            {me ? `${me.x}, ${me.y}` : ""}
           </span>
         </div>
-        <Segments
-          value={zoom}
-          onChange={(v) => {
-            setZoom(v);
-            api.current?.zoom(v);
-          }}
-          label="Alcance del radar"
-          items={[
-            { value: "cam", label: "Cámara" },
-            { value: "40", label: "Cerca" },
-            { value: "90", label: "Zona" },
-            { value: "256", label: "Mapa" },
-          ]}
-        />
+        <div className="hud-map-controls">
+          <Segments
+            label="Tipo de vista"
+            value={view}
+            onChange={(v) => setView(v as View)}
+            items={[
+              { value: "3d", label: "3D", icon: <Box size={13} /> },
+              { value: "2d", label: "Táctico", icon: <MapIcon size={13} /> },
+            ]}
+          />
+          <Segments
+            label="Alcance del mapa"
+            value={range}
+            onChange={applyRange}
+            items={[
+              { value: "cam", label: "Cámara" },
+              { value: "40", label: "Cerca" },
+              { value: "90", label: "Zona" },
+              { value: "256", label: "Mapa" },
+            ]}
+          />
+        </div>
       </div>
-      <div className="radar-stage">
-        <div ref={host} className="three-host" />
+      <div className={`hud-stage${fs ? " fs" : ""}`} ref={stage} data-view={view}>
+        <div className="hud-pane" hidden={view !== "3d"}>
+          <div ref={host} className="three-host" />
+        </div>
+        <div className="hud-pane" hidden={view !== "2d"}>
+          <Tactical
+            ref={tac}
+            state={state}
+            layers={layers}
+            discovered={me ? (discovered.current.get(me.map) ?? null) : null}
+            fogVersion={fogV}
+            active={view === "2d"}
+            follow={follow}
+            onFollow={setFollow}
+            onScale={(t) => viewRef.current === "2d" && Math.abs(t - tilesRef.current) > 0.5 && ((tilesRef.current = t), setTiles(t))}
+            onHover={(i, px, py) => setHover(i ? { i, px, py } : null)}
+            onPick={(i, px, py) => setPick({ i, px, py })}
+          />
+        </div>
+
         {!state && !error && (
-          <div className="radar-loading">Esperando datos del mundo…</div>
-        )}
-        {error && (
-          <div className="radar-loading">
-            No se pudo iniciar el radar 3D.
-            <br />
-            <small>
-              Activá la aceleración gráfica del navegador y recargá.
-            </small>
+          <div className="hud-empty" role="status">
+            <span className="hud-spinner" aria-hidden />
+            Esperando datos del mundo…
           </div>
         )}
-        <div className="radar-caption">
-          <span className="live-dot" />
-          {terrain}
-        </div>
-        <div className="radar-actions">
-          <Action
-            className="map-button"
-            aria-pressed={showObjects}
-            onClick={() => {
-              setShowObjects(!showObjects);
-              api.current?.setObjects(!showObjects);
-            }}
-            title="Mostrar u ocultar edificios, árboles y objetos originales"
-          >
-            <Trees size={14} />
-            {showObjects ? "Escenario" : "Solo terreno"}
-          </Action>
-          <Action
-            className="map-button"
-            aria-label="Ampliar radar"
-            onClick={() => {
-              const stage = host.current?.parentElement;
-              if (document.fullscreenElement) void document.exitFullscreen();
-              else void stage?.requestFullscreen().catch(() => {});
-            }}
-          >
-            <Maximize size={14} />
-          </Action>
-          <Action className="map-button" onClick={() => api.current?.reset()}>
-            <Crosshair size={14} />
-            Centrar
-          </Action>
-        </div>
-        {hover && <div className="map-tooltip">{hover}</div>}
-        {zoom === "cam" && state && (
-          <div className="radar-doing">{state.doing}</div>
+        {error && view === "3d" && (
+          <div className="hud-empty">
+            <strong>No se pudo iniciar el radar 3D.</strong>
+            <small>Activá la aceleración gráfica del navegador y recargá.</small>
+            <button className="hud-btn" onClick={() => setView("2d")}>
+              Usar la vista táctica
+            </button>
+          </div>
         )}
-      </div>
-      <div className="radar-footer">
-        <div className="map-legend">
-          {[
-            ["self", "Vos"],
-            ["monster", "Monstruos"],
-            ["gold", "Dorados"],
-            ["dragon", "Golden Dragon"],
-            ["red", "Dragón Rojo"],
-            ["player", "Jugadores"],
-            ["drop", "Objetos"],
-            ["zone", "Zonas de dragones"],
-          ].map(([key, label]) => (
-            <span key={key}>
-              <i
-                style={{
-                  background:
-                    "#" + colors[key as keyof typeof colors].toString(16),
-                }}
-              />
-              {label}
-            </span>
-          ))}
+
+        {/* Brújula + escala + posición: siempre visibles */}
+        <div className="hud-compass" role="img" aria-label="Brújula: el norte es +y">
+          <button className="hud-compass-dial" onClick={() => api.current?.northUp()} title="Norte arriba (N)" aria-label="Poner el norte arriba" disabled={view === "2d"}>
+            <i style={{ transform: `rotate(${view === "2d" ? 0 : needle}deg)` }}>
+              <b>N</b>
+            </i>
+          </button>
+          <div className="hud-scale" aria-label={`Escala: ${scaleTiles} tiles`}>
+            <span style={{ width: Math.max(18, scalePx) }} />
+            <small>{scaleTiles} tiles</small>
+          </div>
         </div>
-        <span className="map-help">
-          <RotateCcw size={12} />
-          Arrastrá para girar · rueda para zoom
-        </span>
+        <div className="hud-readout" aria-live="off">
+          <span className="hud-live" aria-hidden />
+          <span>{status}</span>
+        </div>
+
+        <div className="hud-toolbar" role="toolbar" aria-label="Controles del mapa">
+          <button className="hud-tool" aria-pressed={follow} onClick={() => setFollow(!follow)} title="Seguir al personaje (F)" aria-label="Seguir al personaje">
+            <LocateFixed size={15} />
+          </button>
+          <button className="hud-tool" onClick={center} title="Centrar en el personaje (C)" aria-label="Centrar">
+            <Crosshair size={15} />
+          </button>
+          <button className="hud-tool" onClick={() => zoom(0.8)} title="Acercar (+)" aria-label="Acercar">
+            <Plus size={15} />
+          </button>
+          <button className="hud-tool" onClick={() => zoom(1.25)} title="Alejar (-)" aria-label="Alejar">
+            <Minus size={15} />
+          </button>
+          {view === "3d" && (
+            <>
+              <button className="hud-tool" onClick={() => api.current?.rotate(0.26)} title="Girar a la izquierda (Q)" aria-label="Girar a la izquierda">
+                <RotateCcw size={15} />
+              </button>
+              <button className="hud-tool" onClick={() => api.current?.rotate(-0.26)} title="Girar a la derecha (E)" aria-label="Girar a la derecha">
+                <RotateCw size={15} />
+              </button>
+              <button className="hud-tool" onClick={() => api.current?.northUp()} title="Norte arriba (N)" aria-label="Norte arriba">
+                <CompassIcon size={15} />
+              </button>
+              <button
+                className="hud-tool"
+                aria-pressed={showObjects}
+                onClick={() => {
+                  setShowObjects(!showObjects);
+                  api.current?.setObjects(!showObjects);
+                }}
+                title="Edificios y árboles del escenario (G)"
+                aria-label="Mostrar el escenario"
+              >
+                <Trees size={15} />
+              </button>
+            </>
+          )}
+          {onRequestWarp && (
+            <button className="hud-tool" onClick={onRequestWarp} title="Viajar a un spot (pide confirmación)" aria-label="Viajar a un spot">
+              <Plane size={15} />
+            </button>
+          )}
+          <button className="hud-tool" onClick={toggleFs} title="Pantalla completa" aria-label={fs ? "Salir de pantalla completa" : "Pantalla completa"}>
+            {fs ? <Minimize size={15} /> : <Maximize size={15} />}
+          </button>
+        </div>
+
+        {/* Minimapa dentro de la vista 3D: un clic lo agranda */}
+        {view === "3d" && state && (
+          <button className="hud-mini" onClick={() => setView("2d")} aria-label="Abrir el mapa táctico" title="Mapa táctico (M)">
+            <Tactical
+              state={state}
+              layers={layers}
+              discovered={me ? (discovered.current.get(me.map) ?? null) : null}
+              fogVersion={fogV}
+              active={view === "3d"}
+              mini
+              follow
+              onFollow={() => {}}
+            />
+          </button>
+        )}
+
+        {view === "3d" && range === "cam" && state && <div className="hud-doing">{state.doing}</div>}
+
+        {hover && !pick && (
+          <div className="hud-tip" style={clampPos(hover, 200, 90)} role="tooltip">
+            <strong>{hover.i.title}</strong>
+            {hover.i.lines.map((l, i) => (
+              <small key={i}>{l}</small>
+            ))}
+            {me && hover.i.kind !== "self" && hover.i.kind !== "tile" && <small>{cheb(hover.i.x, hover.i.y, me.x, me.y)} tiles de vos</small>}
+          </div>
+        )}
+        {pick && me && (
+          <div className="hud-pick" style={clampPos(pick, 230, 170)} role="dialog" aria-label="Detalle del punto">
+            <button className="hud-x" onClick={() => setPick(null)} aria-label="Cerrar">
+              <X size={13} />
+            </button>
+            <strong>{pick.i.title}</strong>
+            <div className="hud-pick-coords">
+              <span className="coordinates">
+                {pick.i.x}, {pick.i.y}
+              </span>
+              <small>
+                {cheb(pick.i.x, pick.i.y, me.x, me.y)} tiles al {bearing(pick.i.x - me.x, pick.i.y - me.y)}
+              </small>
+            </div>
+            {pick.i.lines.map((l, i) => (
+              <small key={i}>{l}</small>
+            ))}
+            <div className="hud-pick-actions">
+              <button
+                className="hud-btn"
+                onClick={() => {
+                  try {
+                    void navigator.clipboard.writeText(`${pick.i.x}, ${pick.i.y}`);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1200);
+                  } catch {
+                    /* sin portapapeles */
+                  }
+                }}
+              >
+                <Copy size={12} /> {copied ? "Copiado" : "Copiar"}
+              </button>
+              <button
+                className="hud-btn"
+                onClick={() => {
+                  if (viewRef.current === "3d") {
+                    api.current?.centerOn(pick.i.x, pick.i.y);
+                    setFollow(false);
+                  } else tac.current?.centerOn(pick.i.x, pick.i.y);
+                  setPick(null);
+                }}
+              >
+                <Crosshair size={12} /> Centrar acá
+              </button>
+              {onRequestWarp && (
+                <button
+                  className="hud-btn warn"
+                  onClick={() => {
+                    setPick(null);
+                    onRequestWarp();
+                  }}
+                  title="El bot viaja a spots fijos, no a coordenadas: se elige el spot y se confirma"
+                >
+                  <Plane size={12} /> Viajar…
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className={`hud-legend${legend ? "" : " collapsed"}`} role="group" aria-label="Capas del mapa">
+          <button className="hud-legend-toggle" onClick={() => setLegend(!legend)} aria-expanded={legend} title="Capas (L)">
+            Capas
+          </button>
+          {legend &&
+            LAYER_META.filter((l) => view === "2d" || l.key !== "fog").map((l) => (
+              <button key={l.key} className="hud-chip" aria-pressed={layers[l.key]} onClick={() => toggle(l.key)} title={l.hint}>
+                <i style={{ background: css(l.color) }} />
+                {l.label}
+                {l.key !== "fog" && <b>{n[l.key]}</b>}
+              </button>
+            ))}
+        </div>
       </div>
     </section>
   );

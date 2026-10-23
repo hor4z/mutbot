@@ -9,9 +9,11 @@ import { Panel } from "./Panel";
 import { SquadsDemo } from "./Squads";
 import "./style.css";
 import "./station.css";
+import "./panel.css";
 import { installMock } from "./mock";
 
 installMock();
-createRoot(document.getElementById("root")!).render(
-  document.body.dataset.surface === "panel" ? <Panel /> : new URLSearchParams(location.search).has("demo") ? <SquadsDemo /> : <Station />,
-);
+// `panel.html` trae data-surface="panel"; en `ui:dev` se abre con `?panel` (y `&demo` para el bot simulado).
+const q = new URLSearchParams(location.search);
+const panel = document.body.dataset.surface === "panel" || q.has("panel");
+createRoot(document.getElementById("root")!).render(panel ? <Panel /> : q.has("squadsdemo") ? <SquadsDemo /> : <Station />);
