@@ -48,7 +48,6 @@ import { watchMoney } from './world';
 // Autoevaluación en consola cada esto (ver SelfReport en farming.ts).
 const REPORT_EVERY_MS = 5 * 60_000;
 // Cazando, a un monstruo común solo se le pega si está a esto (no frena la búsqueda).
-const HUNT_NORMAL_RANGE = 3;
 // Cacería: un dorado visto se recuerda 3 min (para volver después de morir) y se le avisa al compañero
 // (como mucho un aviso cada 15 s).
 const HUNT_SPOT_TTL_MS = 3 * 60_000;
@@ -237,6 +236,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
+    const dead = world.npcs.get(p.KilledId & 0x7fff);
     world.npcs.delete(p.KilledId & 0x7fff);
     ctx.npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === bot.playerId) {
@@ -253,6 +253,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // Para los datos: quién mata en nuestro sector.
       const kid = p.KillerId & 0x7fff;
       const who = world.players.get(kid);
+      // Dorado muerto a la vista y quién lo mató: "vistos contra matados" y quién nos gana los dragones.
+      if (dead && GOLDEN_TYPES.has(dead.type)) {
+        const mine = kid === bot.playerId;
+        trackEvent('golden_kill', monsterName(dead.type), dead.type, mine ? 1 : 0, { gx: dead.x, gy: dead.y, killer: mine ? bot.charName : who?.name ?? null, hunting: !!bot.hunting });
+      }
       if (kid === bot.playerId) killsSeen.me++;
       else if (who?.name && isMate(who.name)) killsSeen.mate++;
       else if (who) {
@@ -812,7 +817,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const hunting = bot.hunting;
     if (hunting) {
       // Cacería: un dorado siempre manda sobre los comunes, pero con correa (stickyGolden): no se suelta
-      // el que ya tiene el golpe salvo por un dragón. A los comunes solo si están a HUNT_NORMAL_RANGE.
+      // el que ya tiene el golpe salvo por un dragón. A los comunes, nunca.
       const now = Date.now();
       const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t));
       const gd = gold ? chebyshev(world.x, world.y, gold.x, gold.y) : Infinity;
@@ -846,27 +851,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         targetType = gold.type;
         targetSince = now;
         stuckCount = 0;
-      } else if (ctx.target != null) {
-        const t = ctx.npcs.get(ctx.target)!;
-        if (!isGolden(t) && chebyshev(world.x, world.y, t.x, t.y) > HUNT_NORMAL_RANGE) ctx.target = null;
-      }
-      if (ctx.target == null) {
-        let near: ScopedNpc | null = null;
-        let nd = Infinity;
-        for (const n of ctx.npcs.values()) {
-          if (unreachable.has(n.id)) continue;
-          const d = chebyshev(world.x, world.y, n.x, n.y);
-          if (d <= HUNT_NORMAL_RANGE && d < nd) {
-            nd = d;
-            near = n;
-          }
-        }
-        if (near) {
-          ctx.target = near.id;
-          targetType = near.type;
-          targetSince = now;
-          stuckCount = 0;
-        }
+      } else if (ctx.target != null && !isGolden(ctx.npcs.get(ctx.target)!)) {
+        // Cazando no se pelea con comunes (EVENTOS.md; el usuario lo vio el 2026-10-23: "mata monstruos
+        // irrelevantes"): cada golpe frena ~1 s y lo único que importa es llegar al próximo dorado.
+        ctx.target = null;
       }
     } else if (early.active() && !goldHold) {
       // Arranque: objetivo con correa del campamento; uno que se alejó más de 10 se suelta.

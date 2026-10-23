@@ -10,7 +10,7 @@ import { sendAreaSkill, step } from './actions';
 import { CAMP, castCandidate } from './camp';
 import { AREA_SKILLS, SKILL_MIN_MANA, pickAttackSkill } from './combat';
 import type { TimeKind } from './farming';
-import { world, type ScopedNpc } from './state';
+import { bot, world, type ScopedNpc } from './state';
 import { directionTowards, humanPace, sleep } from './util';
 
 export type LoopCtx = {
@@ -61,6 +61,8 @@ export async function walkTowards(ctx: LoopCtx, x: number, y: number) {
 export function castOnTheWay(ctx: LoopCtx): boolean {
   const now = Date.now();
   if (now - ctx.lastCastAt < SKILL_PACE_MS) return false;
+  // Cazando no: el skill frena la caminata y lo que importa es llegar al dorado (2026-10-23).
+  if (bot.hunting) return false;
   const skill = pickAttackSkill();
   if (!skill || !AREA_SKILLS.has(skill.number)) return false;
   if (world.maxMana > 0 && world.mana / world.maxMana < SKILL_MIN_MANA) return false;

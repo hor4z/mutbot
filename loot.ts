@@ -12,6 +12,7 @@ import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
 import { world } from './state';
+import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
 type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean };
@@ -19,7 +20,7 @@ export const drops = new Map<number, ScopedDrop>();
 
 // Drop que se está yendo a buscar, y cuántos se levantaron en total (panel e informe).
 export const lootState = {
-  looting: null as { id: number; since: number; pickAt?: number } | null,
+  looting: null as { id: number; since: number; pickAt?: number; drop?: { group: number; num: number; x: number; y: number } } | null,
   count: 0,
 };
 
@@ -63,13 +64,20 @@ export function watchDrops(): () => void {
   // Lo que se estaba levantando entró al inventario (o es zen, FE): ya no está en el piso.
   const onAdded = (raw: any) => {
     const b = toBytes(raw);
-    if (b[3] < 0xfe && lootState.looting?.pickAt != null) drops.delete(lootState.looting.id); // FE zen, FF no se pudo
+    const lt = lootState.looting;
+    if (b[3] < 0xfe && lt?.pickAt != null) { // FE zen, FF no se pudo
+      const d = drops.get(lt.id) ?? lt.drop;
+      if (d) trackEvent('loot_ok', `${d.group}/${d.num}`, d.group, d.num, { x: d.x, y: d.y, ms: Date.now() - lt.since });
+      drops.delete(lt.id);
+    }
   };
   const onServerMessage = (raw: any) => {
     const line = parseServerMessage(toBytes(raw));
     const lt = lootState.looting;
     if (!line || !lt || lt.pickAt == null || !/doesn't belong to you/i.test(line.text)) return;
     foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
+    const d = drops.get(lt.id) ?? lt.drop;
+    if (d) trackEvent('loot_foreign', `${d.group}/${d.num}`, d.group, d.num, { x: d.x, y: d.y });
     log(`El drop Id=${lt.id} es de otro: lo dejo y vuelvo a probar en ${FOREIGN_RETRY_MS / 1000} s si sigue ahí.`);
     lootState.looting = null;
   };
@@ -148,7 +156,7 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });
-    lootState.looting = { id: d.id, since: now };
+    lootState.looting = { id: d.id, since: now, drop: { group: d.group, num: d.num, x: d.x, y: d.y } };
   }
   if (chebyshev(world.x, world.y, d.x, d.y) > 1) {
     step(directionTowards(world.x, world.y, d.x, d.y));
