@@ -12,7 +12,7 @@ import {
   processRunsAccount, routineCommands, type CharConfig,
   accountProblem, type NewCharRequest,
   isRoleAssign, roleRoutine, roleFromRoutine, roleLabel, ROLE_KEYS, parseScoutReport, applyScout, freshScouts, scoutHeat, SCOUT_TTL_MS,
-  newAlertMemory, diffAlerts, pushAlert, parseBotAlert, bagUsage, STUCK_MS, type CharSnap, type Alert,
+  newAlertMemory, diffAlerts, pushAlert, parseBotAlert, parseBotInsight, bagUsage, STUCK_MS, type CharSnap, type Alert,
 } from './estacion-logic';
 import { coolName, coolNames, joinParts, validCharName } from './names';
 import { EstacionDb, MAX_CHARS_PER_ACCOUNT } from './estacion-db';
@@ -232,6 +232,40 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   ok('alertas: aviso de un bot', parseBotAlert({ from: 'Horaz', kind: 'pk', text: 'PK a mi lado' }, 5)?.tone === 'bad' && parseBotAlert({ from: 'Horaz', kind: 'bagfull', text: 'llena' }, 5)?.tone === 'warn');
   ok('alertas: aviso inválido → null', parseBotAlert({ from: 'Horaz', kind: 'otra', text: 'x' }, 0) === null && parseBotAlert({ from: 'Horaz', kind: 'pk', text: '  ' }, 0) === null && parseBotAlert([], 0) === null);
   ok('bolsa: uso por casillas', bagUsage(undefined) === null && bagUsage([{ w: 2, h: 4 }, {}]) === 9 / 64 && bagUsage(Array(80).fill({})) === 1);
+}
+
+// --- Órdenes puntuales al bot ---------------------------------------------------------------
+{
+  const bot = (command: unknown) => parseStationRequest({ action: 'bot', char: 'horaz', command });
+  ok('bot: equipplan, equip y /pkclear pasan', bot({ cmd: 'equipplan' })?.action === 'bot' && bot({ cmd: 'equip' })?.action === 'bot' && bot({ cmd: 'say', text: '/pkclear' })?.action === 'bot');
+  ok('bot: el resto no pasa', bot({ cmd: 'say', text: 'hola' }) === null && bot({ cmd: 'say', text: '/pkclear', to: 'x' }) === null && bot({ cmd: 'warp', warp: 2 }) === null && bot({ cmd: 'hunt' }) === null && bot({ cmd: 'say', text: '/move lorencia' }) === null);
+  ok('bot: sin char válido o con claves de más → null', parseStationRequest({ action: 'bot', char: 'Ho raz', command: { cmd: 'equip' } }) === null && parseStationRequest({ action: 'bot', char: 'horaz', command: { cmd: 'equip' }, x: 1 }) === null);
+}
+
+// --- Insights de los bots ---------------------------------------------------------------------
+{
+  const msg = (o: object) => ({ from: 'Horaz', kind: 'insight', at: 1, ...o });
+  const pk = parseBotInsight(msg({ topic: 'pk', note: 'PK: /pkclear intento 1', data: { tryNo: 1 } }), 9);
+  ok('insight: pk → alerta mala', pk?.topic === 'pk' && pk.alert.kind === 'pk' && pk.alert.tone === 'bad' && pk.alert.char === 'Horaz' && pk.alert.at === 9, pk);
+  const st = parseBotInsight(msg({ topic: 'stuck', note: 'trabado 6 min: pared → reintentar', data: null }), 9);
+  ok('insight: stuck → alerta warn', st?.topic === 'stuck' && st.alert.kind === 'stuck' && st.alert.tone === 'warn', st);
+  ok('insight: pk sin nota → null', parseBotInsight(msg({ topic: 'pk', note: '  ' }), 0) === null);
+  const d = parseBotInsight(msg({
+    topic: 'data', note: 'dragón Devias',
+    data: {
+      dragon: { map: 2, name: 'Devias', n: 5, share: 0.8, scope: 'hora' },
+      hunt: [{ map: 2, name: 'Devias', minutes: 40.5, boxes: 12, factor: 1.2 }, { map: 'x' }],
+      thieves: [{ name: 'Ladron', n: 3 }, { name: '', n: 1 }],
+      lethal: [{ map: 3, name: 'Noria', cells: ['4,5', 'malo', '12,3'] }],
+      extra: 'no pasa',
+    },
+  }), 9);
+  ok('insight: data completo, filtrado campo por campo', d?.topic === 'data' && d.summary.dragon?.map === 2 && d.summary.hunt.length === 1 && d.summary.thieves.length === 1 && d.summary.lethal[0].cells.join() === '4,5,12,3' && !('extra' in d.summary), d);
+  const empty = parseBotInsight(msg({ topic: 'data', note: 'sin datos', data: null }), 9);
+  ok('insight: data nulo (el bot recortó por tamaño) → resumen vacío', empty?.topic === 'data' && empty.summary.dragon === null && empty.summary.hunt.length === 0, empty);
+  ok('insight: inválidos → null', parseBotInsight(msg({ topic: 'otro', note: 'x' }), 0) === null && parseBotInsight({ from: '', kind: 'insight', topic: 'pk', note: 'x' }, 0) === null && parseBotInsight([], 0) === null && parseBotInsight({ from: 'A', kind: 'corner', topic: 'pk', note: 'x' }, 0) === null);
+  const big = parseBotInsight(msg({ topic: 'data', note: 'x'.repeat(500), data: { hunt: Array.from({ length: 100 }, (_, i) => ({ map: i, minutes: 1, boxes: 1, factor: 1 })), thieves: Array.from({ length: 50 }, () => ({ name: 'a', n: 1 })) } }), 0);
+  ok('insight: topes de tamaño', big?.topic === 'data' && big.summary.hunt.length === 12 && big.summary.thieves.length === 5 && big.summary.note.length === 120, big);
 }
 
 if (fails) process.exit(1);

@@ -6,6 +6,7 @@ import { ROLES } from "../../estacion-logic";
 import { Action } from "./components";
 import { ago, countdown, useNow, type Actions, type Character, type StationData } from "./station-data";
 import { Card, Empty, RoleChip } from "./station-kit";
+import { IntelCard } from "./Intel";
 
 const alertIcon: Record<AlertKind, (s: number) => ReactNode> = {
   gold: (s) => <Sparkles size={s} />,
@@ -186,6 +187,7 @@ export function GoldsView({ data, actions, onPick }: { data: StationData; action
           <GoldList data={data} actions={actions} />
         </Card>
         <EventsCard data={data} />
+        <IntelCard data={data} />
         <Card title="Quiénes cazan" icon={<Target size={15} />}>
           <ul className="plain-list">
             {data.chars.map((c: Character) => (

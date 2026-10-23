@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { ArrowUpRight, Boxes, CirclePause, Layers, MapPin, Pause, Play, Plug, Power, Search, Skull, Sparkles, TriangleAlert, UserPlus, X, Zap, Gauge, Swords } from "lucide-react";
 import { Action, compact, fmt } from "./components";
 import { AlertFeed, GoldsCard } from "./Golds";
+import { IntelCard } from "./Intel";
 import { attention, classNames, isOnline, isPaused, stored, store, type Actions, type Character, type StationData } from "./station-data";
 import { Avatar, Bar, Check2, Empty, RoleChip, RoleMenu, Skeleton, StatusPill, visual } from "./station-kit";
 
@@ -251,6 +252,7 @@ export function FleetView({
         </div>
         <aside className="fleet-side">
           <GoldsCard data={data} actions={actions} onOpen={() => onGoto("dorados")} />
+          <IntelCard data={data} />
           <AlertFeed alerts={data.alerts} limit={12} onPick={byName} />
         </aside>
       </div>

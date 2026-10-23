@@ -1,10 +1,11 @@
 /** Vistas de un personaje (panel), consola y ranking. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Copy, Plug, Search, Terminal, Trophy, UserRound } from "lucide-react";
+import { ArrowDownToLine, Copy, Eraser, Plug, Search, Terminal, Trophy, UserRound } from "lucide-react";
 import { Action, fmt } from "./components";
 import knight from "../../assets/ui/knight-alpha.webp";
 import { isOnline, isPaused, useToasts, type Actions, type Character, type StationData } from "./station-data";
-import { Avatar, Card, Empty, RoleChip, RoleMenu, StatusPill } from "./station-kit";
+import { Avatar, Card, ConfirmDialog, Empty, RoleChip, RoleMenu, StatusPill } from "./station-kit";
+import { EquipCard } from "./Equip";
 
 /** Selector de personaje en fila (para Personaje y Consola). */
 export function CharTabs({ chars, value, onChange }: { chars: Character[]; value: string; onChange: (key: string) => void }) {
@@ -22,6 +23,7 @@ export function CharTabs({ chars, value, onChange }: { chars: Character[]; value
 
 export function CharacterView({ data, selected, onPick, actions, demo }: { data: StationData; selected: string; onPick: (key: string) => void; actions: Actions; demo: boolean }) {
   const c = data.chars.find((x) => x.key === selected);
+  const [pkAsk, setPkAsk] = useState(false);
   if (!c) {
     return (
       <Empty icon={<UserRound size={22} />} title="Elegí un personaje">
@@ -54,12 +56,22 @@ export function CharacterView({ data, selected, onPick, actions, demo }: { data:
             ) : (
               <Action className="quiet small" onClick={() => void actions.pause(c)}>Pausar</Action>
             )}
+            <Action className="quiet small" disabled={c.status !== "on"} title="Manda /pkclear (limpia el estado de PK)" onClick={() => setPkAsk(true)}><Eraser size={14} />Limpiar PK</Action>
             <Action className="quiet small danger-text" onClick={() => void actions.disconnect(c)}>Desconectar</Action>
           </>
         ) : (
           <Action className="primary small" disabled={c.account === "blocked"} onClick={() => void actions.connect(c)}><Plug size={14} />Conectar</Action>
         )}
       </div>
+      <EquipCard c={c} actions={actions} />
+      <ConfirmDialog
+        open={pkAsk}
+        onOpenChange={setPkAsk}
+        title={`Limpiar PK de ${c.char}`}
+        warning="Manda el comando /pkclear del server en nombre del personaje. Solo sirve si tiene estado de PK; si no, no hace nada."
+        confirmLabel="Sí, limpiar PK"
+        onConfirm={() => void actions.run({ action: "bot", char: c.key, command: { cmd: "say", text: "/pkclear" } })}
+      />
       <div className="panel-frame">
         {c.panel && !demo ? (
           <iframe key={c.port} src={`http://127.0.0.1:${c.port}/panel`} title={`Panel de ${c.char}`} />

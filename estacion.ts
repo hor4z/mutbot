@@ -25,12 +25,12 @@ import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
   CHAR_CLASSES, parseEnvFile, type NewCharRequest,
   type Alert, type ScoutReport, type RoleAssign, newAlertMemory, diffAlerts, pushAlert, bagUsage, parseBotAlert,
-  parseScoutReport, applyScout, freshScouts, roleFromRoutine, roleRoutine, roleLabel,
+  parseScoutReport, parseBotInsight, type InsightSummary, applyScout, freshScouts, roleFromRoutine, roleRoutine, roleLabel,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
 import { mapName } from './panel-logic';
-import type { PanelServerMessage, PanelState } from './panel-protocol';
+import type { EventTimer, PanelServerMessage, PanelState } from './panel-protocol';
 
 const ROOT = import.meta.dir;
 const PORT = Number(process.env.ESTACION_PORT ?? 8787);
@@ -73,6 +73,9 @@ const say = (...a: unknown[]) => console.log('[estación]', ...a);
 const alerts: Alert[] = [];
 const alertMem = newAlertMemory();
 const scouts = new Map<string, ScoutReport>();
+// Último resumen de datos (insights.ts) que mandó cada bot; vence a las 2 h, como en el bot.
+const insights = new Map<string, InsightSummary>();
+const INSIGHT_TTL_MS = 2 * 60 * 60_000;
 let invasionActive = false;
 
 // --- Personajes -----------------------------------------------------------------------------
@@ -461,7 +464,7 @@ function view() {
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine,
       role: s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine), roleSaved: !!s.cfg.role, stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
-      panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
+      panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending, equipPlan: st?.equipPlan ?? null,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
         map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
@@ -544,6 +547,19 @@ function trackAlerts() {
   invasionActive = active;
 }
 
+/** Insights vigentes, el más nuevo primero. */
+function freshInsights(now: number) {
+  for (const [k, i] of insights) if (now - i.at > INSIGHT_TTL_MS) insights.delete(k);
+  return [...insights.values()].sort((a, b) => b.at - a.at);
+}
+
+/** Aperturas de Devil Square / Blood Castle / Chaos Castle: la respuesta más reciente de cualquier bot por evento. */
+function events() {
+  const best = new Map<string, EventTimer>();
+  for (const s of slots.values()) for (const e of s.state?.events ?? []) if (!best.has(e.key) || e.at > best.get(e.key)!.at) best.set(e.key, e);
+  return [...best.values()];
+}
+
 /** Última invasión que reportó algún bot. */
 function invasion() {
   let best: NonNullable<PanelState['invasion']> | null = null;
@@ -581,7 +597,7 @@ Bun.serve({
       if (url.pathname === '/api/names') return json({ names: coolNames(8, [...slots.values()].map((s) => s.cfg.char)) });
       if (url.pathname === '/api/state') return json({
         chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })),
-        alerts, invasion: invasion(), scouts: team().scouts, now: Date.now(),
+        alerts, invasion: invasion(), events: events(), insights: freshInsights(Date.now()), scouts: team().scouts, now: Date.now(),
       });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -601,6 +617,13 @@ Bun.serve({
         const isNew = !scouts.has(`${sc.from}:${sc.map}`);
         applyScout(scouts, sc);
         if (isNew && sc.golds > 0) addAlert({ at: sc.at, kind: 'scout', tone: 'good', char: sc.from, text: `${sc.from} vio ${sc.golds} dorado${sc.golds === 1 ? '' : 's'} en ${mapName(sc.map)}` });
+        return json({ ok: true });
+      }
+      if ((raw as { kind?: unknown } | null)?.kind === 'insight') {
+        const ins = parseBotInsight(raw, Date.now());
+        if (!ins) return json({ ok: false, msg: 'insight inválido' }, 400);
+        if (ins.topic === 'data') insights.set(ins.summary.from.toLowerCase(), ins.summary);
+        else addAlert(ins.alert);
         return json({ ok: true });
       }
       const r = parseTeamRequest(raw, Date.now());
@@ -659,6 +682,11 @@ Bun.serve({
       }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
+      if (r.action === 'bot') {
+        if (s.pid == null || s.status !== 'on') return json({ ok: false, msg: `${s.cfg.char} no está en el juego` }, 409);
+        const res = await sendCommand(s, r.command);
+        return json(res, res.ok ? 200 : 409);
+      }
       if (r.action === 'role') {
         db.setRole(s.cfg.char, r.role);
         refreshSlots();

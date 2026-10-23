@@ -20,6 +20,7 @@ const game = (o: Partial<NonNullable<Character["game"]>>): NonNullable<Character
   zen: 4_200_000, bag: 0.4, nearby: { monsters: 18, players: 1 }, resetsPerDay: 6, session: { since: Date.now() - 95 * min, kills: 640, deaths: 0, exp: 7_900_000 }, ...o,
 });
 
+let planAt = 0;
 let chars: M[] = [
   mk({ key: "horaz", char: "Horaz", user: "cuenta1", cls: "dk", status: "on", pid: 101, port: 8791, panel: true, msg: "en el juego", routine: { kind: "farm" }, role: { role: "route" }, game: game({}) }),
   mk({ key: "melu", char: "Melu", user: "cuenta2", cls: "dw", status: "on", pid: 102, port: 8792, panel: true, msg: "en el juego", routine: { kind: "hunt" }, role: { role: "golden" }, game: game({ mode: "hunt", doing: "cazando dorados en Devias 3", level: 412, resets: 31, map: "Devias 3", x: 140, y: 88, hp: [900, 2100], expPerMin: 61_000, session: { since: Date.now() - 40 * min, kills: 210, deaths: 2, exp: 2_400_000 } }) }),
@@ -37,10 +38,30 @@ const alerts: Alert[] = [
   { id: 6, at: now0 - 9 * min, kind: "bagfull", tone: "warn", char: "Hume", text: "Hume tiene la bolsa casi llena" },
   { id: 5, at: now0 - 15 * min, kind: "scout", tone: "good", char: "Hume", text: "Hume vio 1 dorado en Noria" },
   { id: 4, at: now0 - 31 * min, kind: "level", tone: "good", char: "Horaz", text: "Horaz subió a nivel 380" },
+  { id: 10, at: now0 - 3 * min, kind: "stuck", tone: "warn", char: "Hume", text: "trabado 6 min: pared en Noria (112, 90) → reintentar otra celda" },
   { id: 3, at: now0 - 48 * min, kind: "pk", tone: "bad", char: "Horaz", text: "PK a 3 casillas de Horaz en Arena 4" },
   { id: 2, at: now0 - 70 * min, kind: "blocked", tone: "bad", char: "Lythgard", text: "La cuenta de Lythgard quedó bloqueada por el server" },
   { id: 1, at: now0 - 95 * min, kind: "status", tone: "good", char: "Horaz", text: "Horaz entró al juego" },
 ];
+const insights = () => [{
+  from: "Melu", at: Date.now() - 4 * min, note: "dragón Devias; ladrones Ladron1, Rata",
+  dragon: { map: 2, name: "Devias", n: 7, share: 0.71, scope: "hora" },
+  hunt: [{ map: 2, name: "Devias", minutes: 220, boxes: 41, factor: 1.25 }, { map: 3, name: "Noria", minutes: 90, boxes: 9, factor: 0.8 }, { map: 1, name: "Dungeon", minutes: 35, boxes: 3, factor: 0.9 }],
+  thieves: [{ name: "Ladron1", n: 6 }, { name: "Rata", n: 3 }],
+  lethal: [{ map: 3, name: "Noria", cells: ["4,5", "12,3"] }, { map: 2, name: "Devias", cells: ["7,7"] }],
+}];
+const equipPlan = (at: number) => ({
+  at, source: "vivo" as const,
+  steps: ["1. Sacar del baúl [4] Great Dragon Helm +9 → bolsa casilla 25", "2. Equipar Great Dragon Helm +9 en Casco", "3. Sacar del baúl [7] Dragon Boots +7 → bolsa casilla 33", "4. Equipar Dragon Boots +7 en Botas"],
+  gains: [
+    { slot: 2, slotName: "Casco", before: "Bronze Helm +3", after: "Great Dragon Helm +9", scoreBefore: 21, scoreAfter: 58, delta: 37 },
+    { slot: 5, slotName: "Botas", before: null, after: "Dragon Boots +7", scoreBefore: 0, scoreAfter: 33, delta: 33 },
+    { slot: 0, slotName: "Mano derecha", before: "Katana +4", after: "Katana +4", scoreBefore: 40, scoreAfter: 40, delta: 0 },
+  ],
+  blocked: [{ name: "Dragon Armor +5", slot: 3, reason: "pide 170 de fuerza y tiene 140" }],
+  notes: ["Los anillos se dejan como están."],
+  summary: "2 mejoras: +70 de puntaje, 1 pieza bloqueada",
+});
 const golds = () => [
   { id: 4401, from: "Hume", name: "Golden Titan", mapName: "Noria", x: 101, y: 77, at: Date.now() - 12_000 },
   { id: 4402, from: "Melu", name: "Golden Budge Dragon", mapName: "Devias 3", x: 150, y: 90, at: Date.now() - 41_000 },
@@ -115,6 +136,15 @@ function apply(body: Record<string, unknown>): { status: number; body: Record<st
       if (c.pid && c.game) { c.game.mode = c.role.role === "golden" ? "hunt" : "farm"; c.game.doing = c.role.role === "golden" ? "cazando dorados" : "farmeando por la ruta"; c.routine = roleRoutine(c.role); }
       return { status: 200, body: { ok: true, msg: `${c.char}: estrategia cambiada (demo)` } };
     }
+    case "bot": {
+      if (!c) return bad("no conozco a ese personaje", 404);
+      if (!c.pid || c.status !== "on") return bad(`${c.char} no está en el juego`);
+      const cmd = body.command as { cmd: string; text?: string };
+      if (cmd.cmd === "equipplan") { planAt = Date.now(); (c as M & { equipPlan?: unknown }).equipPlan = equipPlan(planAt); return { status: 200, body: { ok: true, msg: "2 mejoras: +70 de puntaje (baúl: vivo; solo mostrado, para ejecutar mandá equip) (demo)" } }; }
+      if (cmd.cmd === "equip") { (c as M & { equipPlan?: unknown }).equipPlan = null; return { status: 200, body: { ok: true, msg: "voy a Lorencia a equiparme (demo: no se movió nada)" } }; }
+      if (cmd.cmd === "say" && cmd.text === "/pkclear") return { status: 200, body: { ok: true, msg: `${c.char}: /pkclear enviado (demo)` } };
+      return bad("pedido inválido", 400);
+    }
     case "probe":
       return { status: 200, body: { ok: true, msg: `${body.user}: 2 personajes (demo)`, chars: [{ name: "Viejo", level: 120 }, { name: "Otro", level: 33 }] } };
     case "create":
@@ -137,7 +167,7 @@ export function installMock() {
     await new Promise((r) => setTimeout(r, 60));
     if (url.pathname === "/api/state") {
       return json({
-        chars, golds: golds(), alerts, scouts: scouts(), now: Date.now(),
+        chars, golds: golds(), alerts, insights: insights(), scouts: scouts(), now: Date.now(),
         invasion: { status: "active", total: 24, maps: [{ map: 2, name: "Devias", alive: 14 }, { map: 3, name: "Noria", alive: 10 }], at: Date.now(), nextAt: Date.now() + 40 * min },
         events: [{ key: "devilSquare", minutes: 12, opensAt: Date.now() + 12 * min, users: 3, at: Date.now() }, { key: "bloodCastle", minutes: 0, opensAt: null, users: 8, at: Date.now() }, { key: "chaosCastle", minutes: null, opensAt: null, users: 0, at: Date.now() }],
       });
