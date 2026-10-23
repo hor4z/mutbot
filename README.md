@@ -35,7 +35,7 @@ bun run db:up && bun run db:init
 bun run ui:build
 
 # 3. Chequeo
-bun run tsc && bun run test
+bun run tsc
 
 # 4. Arrancar
 bun run estacion          # http://127.0.0.1:8787/panel
@@ -73,7 +73,7 @@ A la derecha se ve el panel del bot (mapa, nivel, exp, log) o su consola. **Desc
   está conectada en otro lado (lo muestra como "cuenta abierta").
 - Los bots siguen jugando aunque cierres la estación. Al volver a abrirla, los encuentra solos.
 - Para dejarla corriendo sin terminal abierta (todo el día):
-  `setsid nohup bun run estacion >> ~/.mubot/logs/estacion.log 2>&1 < /dev/null &`. Si reiniciás la
+  `nohup bun run estacion >> ~/.mubot/logs/estacion.log 2>&1 < /dev/null &`. Si reiniciás la
   computadora, la base vuelve sola (Docker) pero la estación no: volvé a correrla y conectá a los
   personajes.
 - Cuando quieras jugar vos en el navegador, desconectá el personaje desde la estación.
@@ -168,7 +168,6 @@ bun run aprender    # respuestas de los datos y ~/.mubot/knowledge.json (la esta
 ## Comandos
 
 ```bash
-bun run test        # tests offline (no tocan el server)
 bun run tsc         # typecheck
 bun run estacion    # la estación (panel y control de personajes)
 bun run aprender    # qué dicen los datos (ver "Datos y aprendizaje")

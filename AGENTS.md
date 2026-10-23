@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health, scout, party, formation, squad
+# (los tests se eliminaron a pedido del usuario el 2026-10-23; están en el historial de git)
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -775,7 +775,7 @@ su consola.
   el WebSocket del bot cuando entra al mundo (`mode` ≠ `connecting` y nivel > 0). Farmear = `farm`;
   spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); pausa = `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en
   el panel del bot.
-- **Los bots sobreviven a la estación:** corren con `setsid` y escriben en
+- **Los bots sobreviven a la estación:** corren con `Bun.spawn({ detached: true })` (macOS no tiene `setsid`) y escriben en
   `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas; al lanzarlo, un log de más
   de 50 MB se rota a `.log.1`). Al arrancar
   (y cada 2 s) la estación busca en `/proc` los `headless-bot.ts` de cada cuenta (`--user`,

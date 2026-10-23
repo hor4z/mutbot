@@ -33,7 +33,7 @@ de nada".
 - **No mandar la rutina "farm" después de conectar:** cancela una cacería en curso.
 - **Sin compras** salvo pedido explícito. Están pendientes de autorización las pociones y la quest de
   Blade Knight; la quest ya está hecha, porque Hume ya es BK.
-- Antes de dar algo por terminado: `bun run tsc` limpio y `bun run test` en verde. Después, PR a
+- Antes de dar algo por terminado: `bun run tsc` limpio (los tests se eliminaron). Después, rama y merge a
   `main` en `hor4z/mutbot`, que es el repo personal del usuario (el usuario pidió PR y merge).
 
 ## Cómo se opera
