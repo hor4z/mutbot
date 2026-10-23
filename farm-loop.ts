@@ -776,6 +776,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         } else if (r.kind === 'golden') {
           const hm = HUNT_MAPS.find((h) => h.map === r.map);
           if (isPriorityChar(bot.charName) && !bot.hunting) decide(`${r.from} vio ${r.note}: sigo en la carrera de resets, que vaya ${r.from}.`);
+          else if (world.level < AUTO_HUNT.minLevel && !(bot.hunting && bot.hunting.hunt.map === r.map)) decide(`${r.from} vio ${r.note}: soy débil (nivel ${world.level}, hace falta ${AUTO_HUNT.minLevel}): no voy a cazarlo, sigo con lo mío.`);
           else if (bot.hunting && bot.hunting.hunt.map === r.map) {
             (bot.hunting.spots ??= new Map()).set(-r.at, { x: r.x, y: r.y, type: 0, at: nowG });
             decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
