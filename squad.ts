@@ -264,6 +264,8 @@ export type Mission = {
   phaseAt: number;
   /** campaña: desde cuándo están todos juntos en el pueblo (para dar tiempo a la party) */
   readyAt?: number;
+  /** campaña: desde cuándo el padrino espera a su sombra (no farmea hasta tenerla al lado) */
+  waitSince?: number;
   /** campaña: el warp (spot) donde el padrino espera al más débil; los protegidos viajan a ESE mismo spot para caer pegados */
   pinWarp?: number;
   maxMs: number;
@@ -326,6 +328,10 @@ export const MISSION = {
  * Todo SUPUESTO sin medir en vivo (docs/escuadras.md).
  */
 export const FOLLOW_MISSION = {
+  /** El padrino no farmea hasta tener a todos sus protegidos en su mapa y a <= esto. */
+  TOGETHER_TILES: 14,
+  /** Tope de la espera: si la sombra no llega (muerta, desconectada), el padrino sigue solo. */
+  HOLD_MAX_MS: 120_000,
   /** Reunión en Lorencia: con todos juntos y a <= 8 tiles, se espera esto para que la party quede armada. */
   GATHER_PARTY_MS: 35_000,
   /** Tope de la reunión: pasado esto parten igual. */
@@ -647,6 +653,18 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
   // El padrino NO se adapta ni se fija en ningún mapa: hace su recorrido normal y el protegido lo sigue (idea del usuario:
   // "cuando el fuerte pega la sombra va detrás"). Si el protegido no puede entrar a un mapa, espera en zona segura.
   m.pinWarp = undefined;
+  // El padrino no gana exp hasta tener a su sombra al lado (idea del usuario): quieto hasta que lleguen, con tope de espera.
+  if (m.phase === 'follow' && P && wards.length) {
+    const together = wards.every((w) => w.map === P.map && dist(w, P) <= FOLLOW_MISSION.TOGETHER_TILES);
+    if (together) { m.waitSince = undefined; delete m.notes[pad]; }
+    else {
+      m.waitSince ??= now;
+      if (now - m.waitSince <= FOLLOW_MISSION.HOLD_MAX_MS) {
+        out.orders.set(pad, { kind: 'idle', why: 'espero a mi sombra' });
+        note(P.char, 'espero a mi sombra antes de farmear');
+      }
+    }
+  }
 
   if (m.phase === 'retreat') {
     // El padrino sigue con lo suyo; los protegidos van a Lorencia (o se quedan quietos si no pueden).
