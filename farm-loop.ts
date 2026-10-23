@@ -226,6 +226,11 @@ function hookAggro() {
   }
 }
 
+// Espera en Lorencia con el reset frenado (ver waitTown en el loop).
+const LORENCIA_WAIT_WARP = 2;
+let lastTownTry = 0;
+let townPin: Spot | null | undefined;
+
 // Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
 const fightHeat = new FightHeat();
 // Remate del golpe final (finisher.ts) y qué hizo en la pelea actual (campo `finisher` de dragon_fight).
@@ -827,6 +832,31 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (supportWaits && world.level >= RESET_LEVEL && Date.now() - supportHoldLogged > 60_000) {
       supportHoldLogged = Date.now();
       decide(`Nivel ${world.level}: espero que ${prio!.char} resetee para resetear yo (sostengo la esquina).`);
+    }
+    // En el nivel de reset con el reset frenado por la invasión (:30 a :05): esperar en Lorencia, en zona segura y a un
+    // warp de cualquier mapa de la invasión, en vez de farmear sin exp que sirva en una esquina donde se muere
+    // (idea del usuario, 2026-10-23). MUBOT_WAIT_TOWN=0 la apaga.
+    const waitTown = process.env.MUBOT_WAIT_TOWN !== '0' && AUTO_HUNT_ON && !isPriorityChar(bot.charName) && !supportWaits && !bot.hunting && !goldHold
+      && world.level >= RESET_LEVEL && resetBlockedByInvasion(Date.now());
+    if (waitTown) {
+      const town = WARP_SPOTS.find((sp) => sp.index === LORENCIA_WAIT_WARP);
+      if (town && world.map !== town.map && !bot.pendingWarp && Date.now() - lastTownTry > 60_000) {
+        lastTownTry = Date.now();
+        if (townPin === undefined) townPin = bot.pinnedSpot ?? null;
+        bot.pendingWarp = town;
+        bot.pinnedSpot = town;
+        decide(`Nivel ${world.level} y el reset frenado hasta las :05: espero la invasión en ${town.name} (zona segura).`);
+        continue;
+      }
+      if (town && world.map === town.map) {
+        bot.doing = `espero la invasión en ${town.name}`;
+        await sleep(humanPace(1000));
+        continue;
+      }
+    } else if (townPin !== undefined) {
+      // Terminó la espera (invasión o :05): se suelta el fijado para que la ruta siga sola.
+      bot.pinnedSpot = townPin;
+      townPin = undefined;
     }
     if (!supportWaits && !bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
