@@ -4,7 +4,7 @@ import { nextZone } from './zones';
  *
  *   bun run golden-tests.ts
  */
-import { GOLDEN_RULE, GoldenRule, stickyGolden } from './golden';
+import { DRAGON_RUSH_MS, DragonFight, GOLDEN_RULE, GoldenRule, dragonRush, stickyGolden } from './golden';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -60,6 +60,40 @@ const me = { x: 100, y: 100 };
   ok('zonas: la más cercana sin visitar', nextZone(zs, me, new Set())?.y === 218);
   ok('zonas: salta las visitadas', nextZone(zs, me, new Set(['223,218']))?.x === 240);
   ok('zonas: todas visitadas → null', nextZone(zs, me, new Set(['223,218', '229,176', '240,183'])) === null);
+}
+
+// --- Datos de la pelea con el dragón (dragon_fight) y carrera por el dragón ---------------------------------
+{
+  const f = new DragonFight((t) => (t === 79 ? 100_000 : null));
+  const d = { id: 9, type: 79, x: 192, y: 155 };
+  ok('pelea: sin pelea no hay registro', f.lost() === null && f.killed(9, 0, 'x', false) === null);
+  f.see(d, 12_000, 0);
+  f.players(['camberra1', undefined, 'camberra1']);
+  f.hit(9, 20_000);
+  f.hit(9, 21_000);
+  f.damage(9, 700);
+  f.damage(8, 5000); // otro id: no cuenta
+  f.see({ ...d, x: 190 }, 30_000, 0);
+  const r = f.killed(9, 72_000, 'camberra1', false)!;
+  ok('pelea: tiempos desde el aviso y desde que se lo vio', r.seenS === 12 && r.firstHitS === 20 && r.seenToHitS === 8 && r.seenToEndS === 60 && r.hitToEndS === 52, r);
+  ok('pelea: golpes, daño visto, vida estimada, killer y jugadores', r.hits === 2 && r.dmgSeen === 700 && r.hpEst === 99_300 && r.killer === 'camberra1' && !r.mine && r.others.join() === 'camberra1', r);
+  ok('pelea: posición de inicio y de fin', r.sx === 192 && r.ex === 190);
+  ok('pelea: cerrada, la siguiente empieza limpia', f.current === null);
+  const g = new DragonFight();
+  g.see(d, 0, null);
+  ok('pelea: sin aviso → seenS null; sin golpe → firstHitS null', (() => { const x = g.lost()!; return x.seenS === null && x.firstHitS === null && x.outcome === 'lost' && x.hpEst === null; })());
+  const h = new DragonFight();
+  h.see(d, 0, null);
+  ok('pelea: no vencida a los 10 s, vencida a los 20 s', !h.expired(10_000) && h.expired(20_000));
+  const lostRec = h.see({ id: 11, type: 79, x: 1, y: 1 }, 30_000, null);
+  ok('pelea: otro dragón tras perder al anterior → registro de "lost" con el último instante visto', lostRec?.outcome === 'lost' && lostRec.seenToEndS === 0 && h.current === 11, lostRec);
+}
+{
+  const base = { now: 60_000, announceAt: 0, huntMap: 2, dragonMap: 2, dragonVisible: false, hasZone: true };
+  ok('carrera: en la ventana, en el mapa, sin dragón y con zona', dragonRush(base));
+  ok('carrera: con un dragón a la vista no (se lo ataca)', !dragonRush({ ...base, dragonVisible: true }));
+  ok('carrera: pasados 3 min no', !dragonRush({ ...base, now: DRAGON_RUSH_MS }));
+  ok('carrera: otro mapa / sin aviso / sin zona: como siempre', !dragonRush({ ...base, huntMap: 3 }) && !dragonRush({ ...base, announceAt: null }) && !dragonRush({ ...base, hasZone: false }));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE DORADOS PASARON' : `\n${fails} TEST(S) DE DORADOS FALLARON`);

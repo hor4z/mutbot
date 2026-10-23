@@ -94,6 +94,16 @@ export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): b
   return b.length === 8 && b[0] === 0xc1 && b[2] === 0x15;
 }
 
+/**
+ * El 0x15 de 10 bytes (ObjectHit 0.97d): daño de un golpe sobre un objeto, id u16 BE @3 y daño u16 BE @5.
+ * Solo para estadísticas (`dragon_fight`); null si no mide 10. Layout sin verificar contra bytes reales.
+ */
+export function parseHitDamage(raw: Uint8Array | DataView | ArrayBuffer): { id: number; damage: number } | null {
+  const b = u8(raw);
+  if (b.length !== 10 || b[0] !== 0xc1 || b[2] !== 0x15) return null;
+  return { id: ((b[3] << 8) | b[4]) & 0x7fff, damage: (b[5] << 8) | b[6] };
+}
+
 // ---------------------------------------------------------------------------
 // Ítems. Este server manda casi todos los ítems en 5 bytes (formato clásico 0.97); el cliente web los
 // convierte a 12 antes de leerlos. Confirmado con bytes reales de Horaz (2026-10-11): inventario y
