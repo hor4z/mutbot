@@ -653,28 +653,36 @@ async function squadAccountsTick() {
 }
 // Seguir al humano (idea del usuario, 2026-10-23): los bots elegidos se pegan a un personaje que juega el usuario a mano.
 // La estación les sirve una orden `follow` firmada con ese nombre de líder; aceptan su party y lo siguen mientras lo ven.
-const humanFollow = { human: '', followers: new Set<string>() };
+const humanFollow = { human: '', listenUntil: 0, active: false, followers: new Set<string>() };
+const LISTEN_MS = 3 * 60_000;
+const LISTEN_NAME = '*escucha*';
 function humanAssignment(who: string): Assignment | null {
   const k = who.toLowerCase();
-  if (!humanFollow.human || !humanFollow.followers.has(k)) return null;
+  if (!humanFollow.active || !humanFollow.followers.has(k)) return null;
   const now = Date.now();
   return {
-    v: 1, char: k, squadId: 'human', missionId: 'follow-human', role: null, order: { kind: 'follow', leader: humanFollow.human, tight: true },
-    leader: humanFollow.human, members: [humanFollow.human, ...humanFollow.followers], invite: [], buffs: [], seq: now, issuedAt: now, expiresAt: now + ASSIGNMENT_TTL_MS,
+    v: 1, char: k, squadId: 'human', missionId: 'follow-human', role: null, order: { kind: 'follow', leader: humanFollow.human || LISTEN_NAME, tight: true },
+    leader: humanFollow.human || LISTEN_NAME, members: [humanFollow.human || LISTEN_NAME, ...humanFollow.followers], invite: [], buffs: [],
+    ...(!humanFollow.human && now < humanFollow.listenUntil ? { acceptAnyUntil: humanFollow.listenUntil } : {}), seq: now, issuedAt: now, expiresAt: now + ASSIGNMENT_TTL_MS,
   };
 }
 function humanFollowAction(r: Extract<StationRequest, { action: 'human-follow' | 'human-follow-stop' }>): { ok: boolean; msg: string } {
   refreshSlots();
   if (r.action === 'human-follow-stop') {
     humanFollow.human = '';
+    humanFollow.active = false;
+    humanFollow.listenUntil = 0;
     humanFollow.followers.clear();
     return { ok: true, msg: 'los bots dejan de seguir al humano y vuelven a su rutina en unos segundos' };
   }
   const unknown = r.chars.filter((c) => !slots.has(c));
   if (unknown.length) return { ok: false, msg: `no conozco a ${unknown.join(', ')}` };
-  if ([...slots.keys()].includes(r.human.toLowerCase())) return { ok: false, msg: `${r.human} es un personaje con bot de la estación: ese lo maneja la estación, no se juega a mano (desconectá su bot primero)` };
+  if (r.human && [...slots.keys()].includes(r.human.toLowerCase())) return { ok: false, msg: `${r.human} es un personaje con bot de la estación: ese lo maneja la estación, no se juega a mano (desconectá su bot primero)` };
   humanFollow.human = r.human.toLowerCase();
+  humanFollow.active = true;
+  humanFollow.listenUntil = r.human ? 0 : Date.now() + LISTEN_MS;
   humanFollow.followers = new Set(r.chars);
+  if (!r.human) return { ok: true, msg: `Escuchando 3 minutos: invitá a la party a ${r.chars.join(', ')} desde tu personaje. Acepta solo a un miembro de tu crew (guild) y desde ahí te sigue.` };
   say(`seguir al humano: ${r.chars.join(', ')} siguen a ${r.human}`);
   return { ok: true, msg: `${r.chars.join(', ')} te siguen como ${r.human}: aceptan tu party y se pegan a vos cuando te ven` };
 }

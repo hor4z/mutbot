@@ -176,6 +176,8 @@ export type Assignment = {
   members: string[];
   /** a quién invita este bot a la party ahora (solo el líder, y solo hasta completar) */
   invite: string[];
+  /** seguir al humano: hasta cuándo se acepta como dueño al primero del crew que invite a la party (0/ausente = no) */
+  acceptAnyUntil?: number;
   buffs: BuffStep[];
   /** orden creciente: un bot ignora lo más viejo que lo último que vio */
   seq: number;

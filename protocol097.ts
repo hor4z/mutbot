@@ -367,3 +367,23 @@ export function buildTalkNpc(npcId: number): Uint8Array {
 export function buildCloseNpc(): Uint8Array {
   return Uint8Array.from([0xc1, 0x03, 0x31]);
 }
+
+/**
+ * AssignCharacterToGuild (C2 65, docs/Packets/C2-65 de OpenMU; el 0x5B del 0.75 es parecido): jugadores a la vista con su guild.
+ * Cuenta @4 y, desde @5, entradas de 12 bytes: guildId u32 LE @0, rol @4, y @7-8 el id del jugador (u16 BE, bit alto del byte 7 = "recién
+ * visto"). Devuelve [idJugador, idGuild]. Si el largo no cierra, vacío. SIN VERIFICAR contra bytes reales.
+ */
+export function parseGuildRelations(raw: Uint8Array | DataView | ArrayBuffer): [number, number][] {
+  const b = u8(raw);
+  if (b[0] !== 0xc2 || b[3] !== 0x65) return [];
+  const n = b[4];
+  if (n === 0 || b.length < 5 + 12 * n) return [];
+  const out: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const o = 5 + 12 * i;
+    const guild = (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+    const id = (((b[o + 7] & 0x7f) << 8) | b[o + 8]) & 0x7fff;
+    out.push([id, guild]);
+  }
+  return out;
+}

@@ -210,8 +210,8 @@ function FollowHuman({ chars, call, say }: { chars: CharRow[]; call: Call; say: 
         {!bots.length && <p className="empty-copy">No hay bots conectados para que te sigan.</p>}
       </div>
       <div className="squad-form">
-        <input className="squad-input" placeholder="Tu personaje (nombre en el juego)" maxLength={10} value={human} onChange={(e) => setHuman(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))} />
-        <Action className="primary" disabled={!pick.length || !human.trim()} onClick={async () => {
+        <input className="squad-input" placeholder="Tu personaje (vacío = el primero de tu crew que invite)" maxLength={10} value={human} onChange={(e) => setHuman(e.target.value.replace(/[^A-Za-z0-9_]/g, ""))} />
+        <Action className="primary" disabled={!pick.length} onClick={async () => {
           const r = await call({ action: "human-follow", human: human.trim(), chars: pick });
           say(r.msg);
         }}>

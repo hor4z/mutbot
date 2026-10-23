@@ -186,7 +186,7 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   if (typeof r.action === 'string' && r.action.startsWith('squad-')) return parseSquadRequest(v);
   if (r.action === 'human-follow') {
     if (Object.keys(r).sort().join() !== 'action,chars,human') return null;
-    if (typeof r.human !== 'string' || !/^[A-Za-z0-9_]{1,10}$/.test(r.human)) return null;
+    if (typeof r.human !== 'string' || (r.human !== '' && !/^[A-Za-z0-9_]{1,10}$/.test(r.human))) return null;
     if (!Array.isArray(r.chars) || r.chars.length < 1 || r.chars.length > 5 || !r.chars.every((c) => typeof c === 'string' && /^[a-z0-9_]{1,10}$/.test(c))) return null;
     return { action: 'human-follow', human: r.human, chars: r.chars as string[] };
   }

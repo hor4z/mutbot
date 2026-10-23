@@ -14,6 +14,7 @@
  * para (formation.ts). Sin verificar en vivo (docs/escuadras.md).
  */
 import { SKILL_PACE_MS } from './config';
+import { EventBus } from './net/eventBus';
 import { sendToGS } from './connection';
 import { sendTargetedSkill } from './actions';
 import { walkTowards, type LoopCtx } from './loop-ctx';
@@ -23,9 +24,9 @@ import { walkableFor } from './terrain';
 import { dist } from './corner';
 import { Follower, wardTile } from './formation';
 import { InviteScheduler, decideInvite, parsePartyList } from './party';
-import { buildPartyInvite, buildPartyKick } from './protocol097';
+import { buildPartyInvite, buildPartyKick, parseGuildRelations } from './protocol097';
 import { FOLLOW_MISSION, verifyAssignment, type Assignment } from './squad';
-import { humanPace, log, sleep } from './util';
+import { humanPace, log, sleep, toBytes } from './util';
 
 const KEY = process.env.MUBOT_SQUAD_KEY ?? '';
 const URL_ = process.env.MUBOT_SQUAD_URL ?? 'http://127.0.0.1:8787/api/squad';
@@ -44,6 +45,21 @@ const invites = new InviteScheduler();
 const follower = new Follower();
 let lastShortcutAt = 0;
 let lastSquadWarpAt = 0;
+// Seguir al humano: guild de cada jugador a la vista (AssignCharacterToGuild) y el dueño aprendido de su party.
+const guildOf = new Map<number, number>();
+let learnedLeader = '';
+const LISTEN_NAME = '*escucha*';
+let guildHooked = false;
+function hookGuilds() {
+  if (guildHooked) return;
+  guildHooked = true;
+  for (const ev of ['AssignCharacterToGuild', 'AssignCharacterToGuild075']) {
+    EventBus.on(ev, (raw: any) => {
+      for (const [id, g] of parseGuildRelations(toBytes(raw))) guildOf.set(id, g);
+      if (guildOf.size > 500) guildOf.clear();
+    });
+  }
+}
 /** Campaña de crianza: correa corta (2-6 tiles) detrás del padrino. */
 const tightFollower = new Follower(Math.random, FOLLOW_MISSION.LEASH_FAR);
 let warpSeenAt = 0;
@@ -56,6 +72,7 @@ const loopback = (u: string) => {
 
 /** Arranca la consulta (una vez por proceso). Sin clave o con URL no local, no hace nada. */
 export function startSquadPolling() {
+  hookGuilds();
   if (polling || !KEY || !loopback(URL_)) return;
   polling = true;
   const poll = async () => {
@@ -63,9 +80,9 @@ export function startSquadPolling() {
       const r = await fetch(`${URL_}?char=${encodeURIComponent(bot.charName)}`, { signal: AbortSignal.timeout(2000) });
       if (r.ok) {
         const body = (await r.json()) as unknown;
-        if ((body as { none?: boolean })?.none) { current = null; return; }
+        if ((body as { none?: boolean })?.none) { current = null; learnedLeader = ''; return; }
         const v = verifyAssignment(KEY, body, bot.charName, Date.now(), lastSeq);
-        if ('a' in v) { current = v.a; lastSeq = v.a.seq; }
+        if ('a' in v) { if (v.a.squadId !== 'human') learnedLeader = ''; current = v.a; lastSeq = v.a.seq; }
         else if (v.err && /vieja/i.test(String(v.err))) {
           // La estación reinició o hay una misión nueva: su seq empieza de 0 y no puede quedar descartada hasta alcanzar el viejo.
           const raw = body as { squadId?: string; missionId?: string; seq?: number };
@@ -101,8 +118,22 @@ export function squadMembers(): string[] | null {
 
 /** Decisión de party con escuadra (null = sin escuadra, queda la regla de world.ts). */
 export function squadPartyDecision(from: string | null | undefined) {
+  hookGuilds();
+  const a = current;
+  // Modo escucha ("Que me sigan" sin nombre): el primero del MISMO crew (guild) que invite se vuelve mi dueño.
+  if (a && a.squadId === 'human' && a.acceptAnyUntil && Date.now() < a.acceptAnyUntil && from && !learnedLeader) {
+    const myGuild = guildOf.get(bot.playerId & 0x7fff);
+    const who = [...world.players].find(([, p]) => p.name?.toLowerCase() === from.toLowerCase());
+    const theirGuild = who ? guildOf.get(who[0]) : undefined;
+    if (myGuild == null) { log(`Seguir al humano: ${from} me invita, pero no sé de qué guild soy: no acepto.`); return { accept: false, why: 'no sé mi guild' }; }
+    if (theirGuild == null || theirGuild !== myGuild) { log(`Seguir al humano: ${from} me invita pero no es de mi crew: no acepto.`); return { accept: false, why: 'no es del crew' }; }
+    learnedLeader = from.toLowerCase();
+    log(`Seguir al humano: ${from} es de mi crew y me invitó: acepto y lo sigo.`);
+    return { accept: true, why: 'dueño aprendido (mismo crew)' };
+  }
   const m = squadMembers();
-  return m ? decideInvite(from, m, false) : null;
+  if (!m) return null;
+  return decideInvite(from, learnedLeader ? [...m, learnedLeader] : m, false);
 }
 
 export function onPartyList(raw: Uint8Array) {
@@ -210,7 +241,9 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       return false;
     case 'follow':
     case 'hold': {
-      const L = byName(o.leader);
+      const leaderName = o.leader === LISTEN_NAME ? learnedLeader : o.leader;
+      if (!leaderName) { bot.doing = 'escuadra: espero que me invites a la party'; await sleep(humanPace(900)); return true; }
+      const L = byName(leaderName);
       if (!L) {
         if (o.kind === 'follow' && o.tight) {
           // Campaña de crianza: no lo veo, voy hacia donde la estación dice que está (sin pelear salvo defensa propia).
