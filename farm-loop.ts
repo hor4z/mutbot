@@ -26,7 +26,7 @@ import { equipStep } from './equip';
 import { attackerOf, buildPartyInvite, ownAreaSkill, ownTargetedSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS, pinActive } from './route';
-import { readVault } from './vault';
+import { readVault, runEquip } from './vault';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
 import { SelfReport, classFamily, isFreshChar } from './farming';
@@ -455,6 +455,15 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       bot.pendingVault = false;
       const r = await readVault();
       panelLog(`Baúl: ${r.msg}`);
+      bot.currentSpot = null;
+      ctx.target = null;
+      continue;
+    }
+    // Orden `equip` (solo si alguien la manda): sacar del baúl y equipar (vault.ts, runEquip).
+    if (bot.pendingEquip && !bot.hunting) {
+      bot.pendingEquip = false;
+      const r = await runEquip();
+      panelLog(`Equipo: ${r.msg}`);
       bot.currentSpot = null;
       ctx.target = null;
       continue;

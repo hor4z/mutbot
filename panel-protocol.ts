@@ -72,6 +72,8 @@ export type PanelState = {
   /** tickets de eventos en el inventario, ej. { "Devil's Invitation +4": 1 } */
   tickets: Record<string, number>;
   nearby: { monsters: number; players: number };
+  /** último plan de la orden `equipplan` (solo mostrar); se borra al ejecutar `equip` */
+  equipPlan?: EquipPlanView | null;
   /** slots de equipo 0-11 ocupados (del inventario que trackea el bot) */
   equipment?: EquippedItem[];
   /** inventario (slots 12-75) */
@@ -96,6 +98,21 @@ export type PanelState = {
 /** Ítem del personaje. `slot`: 0-11 equipo, 12-75 inventario (grilla de 8×8 desde el 12). `w`×`h`: casillas que ocupa. */
 export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean; name?: string; w?: number; h?: number };
 
+/** Plan de equipamiento (orden `equipplan`): lo que saldría de equiparse con el baúl. Solo se muestra. */
+export type EquipPlanView = {
+  at: number;
+  /** de dónde salió el baúl: lectura viva de esta sesión o el archivo vault-<pj>.json */
+  source: 'vivo' | 'archivo';
+  /** una línea legible por paso, en orden ("1. Sacar del baúl [4] Great Dragon Helm +9 ... → bolsa casilla 25") */
+  steps: string[];
+  /** por lugar: qué lleva y qué llevaría (puntaje = defensa equivalente, heurística nuestra) */
+  gains: { slot: number; slotName: string; before: string | null; after: string; scoreBefore: number; scoreAfter: number; delta: number }[];
+  /** piezas que no se pueden usar o no entran, con el motivo */
+  blocked: { name: string; slot: number; reason: string }[];
+  notes: string[];
+  summary: string;
+};
+
 /** Órdenes que acepta el bot. Cualquier otra se rechaza. */
 export type PanelCommand =
   | { cmd: 'pause' }
@@ -111,9 +128,13 @@ export type PanelCommand =
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
   | { cmd: 'warp'; warp: number }
   /** leer el baúl (Baz, Lorencia) con el equipo y la bolsa: solo lee, no mueve nada */
-  | { cmd: 'vault' };
+  | { cmd: 'vault' }
+  /** calcular y MOSTRAR el plan de equipamiento con el baúl leído (no mueve nada, no camina); sale en `equipPlan` del estado */
+  | { cmd: 'equipplan' }
+  /** EJECUTAR el plan: va a Baz, saca las piezas del baúl y se las pone, con ritmo humano. Solo si alguien la manda. */
+  | { cmd: 'equip' };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault', 'equipplan', 'equip'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -129,7 +150,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'], equipplan: ['cmd'], equip: ['cmd'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {

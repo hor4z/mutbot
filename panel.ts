@@ -11,7 +11,9 @@ import { drops, lootState } from './loot';
 import {
   EVENT_KEYS, GOLD_URL, HuntExplorer, chooseHuntMap, countTickets, mapName, resetsPerDay, toPanelCycle,
   validateWarp, type GoldGone, type GoldSighting, itemInfo } from './panel-logic';
-import type { BotMode, EventTimer, PanelCommand, PanelState } from './panel-protocol';
+import type { BotMode, EquipPlanView, EventTimer, PanelCommand, PanelState } from './panel-protocol';
+import { describeStep, summarizePlan } from './equip-plan';
+import { equipPlanNow } from './vault';
 import { WARP_SPOTS } from './route';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
 import { chebyshev } from './util';
@@ -54,7 +56,9 @@ export function stopHunt(reason: string) {
   panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
 }
 
-function runPanelCommand(c: PanelCommand): CommandResult {
+let equipPlanView: EquipPlanView | null = null;
+
+async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
   switch (c.cmd) {
     case 'pause':
       if (bot.paused) return { ok: true, msg: 'ya estaba en pausa' };
@@ -91,6 +95,24 @@ function runPanelCommand(c: PanelCommand): CommandResult {
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
       bot.pendingVault = true;
       return { ok: true, msg: 'voy a Lorencia a leer el baúl (solo leo, no muevo nada)' };
+    case 'equipplan': {
+      // Solo calcula con el baúl ya leído (vivo o archivo) y el equipo de ahora: no camina ni mueve nada.
+      const r = await equipPlanNow();
+      if (!r.ok) return { ok: false, msg: r.msg };
+      const summary = summarizePlan(r.plan);
+      const steps = r.plan.steps.map((s, i) => describeStep(s, i + 1));
+      equipPlanView = { at: Date.now(), source: r.source, steps, gains: r.plan.gains, blocked: r.plan.blocked, notes: r.plan.notes, summary };
+      for (const l of steps) panelLog(`Plan de equipo: ${l}`);
+      for (const b of r.plan.blocked) panelLog(`Plan de equipo: no puedo ${b.name}: ${b.reason}`);
+      return { ok: true, msg: `${summary} (baúl: ${r.source}; solo mostrado, para ejecutar mandá equip)` };
+    }
+    case 'equip':
+      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      if (bot.hunting) return { ok: false, msg: 'estoy cazando: cortá la cacería (farm) y mandá equip de nuevo' };
+      bot.pendingEquip = true;
+      equipPlanView = null;
+      return { ok: true, msg: 'voy a Lorencia, saco las piezas del baúl y me las pongo (lee el baúl de nuevo y arma el plan con datos de ahora)' };
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
@@ -108,7 +130,7 @@ function runPanelCommand(c: PanelCommand): CommandResult {
 }
 
 export async function handlePanelCommand(c: PanelCommand): Promise<CommandResult> {
-  const r = runPanelCommand(c);
+  const r = await runPanelCommand(c);
   panelLog(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`);
   journal('command', `${c.cmd}: ${r.msg}`, { command: c, ok: r.ok });
   return r;
@@ -195,6 +217,7 @@ export function buildPanelState(now: number): PanelState {
       monsters: [...world.npcs.values()].filter((n) => chebyshev(n.x, n.y, world.x, world.y) <= 10).length,
       players: world.players.size,
     },
+    equipPlan: equipPlanView,
     equipment,
     inventory,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
