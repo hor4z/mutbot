@@ -124,7 +124,7 @@ type Running = { pid: number; wsPort: number | null; cmdline: string[]; environ:
 function scanProcs(): Running[] {
   const out: Running[] = [];
   if (!existsSync('/proc')) {
-    // macOS: sin /proc. `ps` da el cmdline (sin environ), alcanza para --user/--env-file/--ws-port.
+    // macOS: sin /proc. `ps` da el cmdline y, con `eww`, el entorno; alcanza para --user/--env-file/--ws-port.
     const ps = Bun.spawnSync(['ps', '-axo', 'pid=,command=']).stdout.toString();
     for (const line of ps.split('\n')) {
       const m = line.match(/^\s*(\d+)\s+(.*)$/);
@@ -132,7 +132,10 @@ function scanProcs(): Running[] {
       const cmdline = m[2].split(/\s+/).filter(Boolean);
       if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) continue;
       const i = cmdline.indexOf('--ws-port');
-      out.push({ pid: Number(m[1]), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ: [] });
+      // `ps eww` agrega el entorno al final de la línea: alcanza para reconocer la clave de escuadra y MUBOT_USER.
+      const env = Bun.spawnSync(['ps', 'eww', '-o', 'command=', '-p', m[1]]).stdout.toString();
+      const environ = env.match(/MUBOT_[A-Z_]+=\S*/g) ?? [];
+      out.push({ pid: Number(m[1]), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ });
     }
     return out;
   }
@@ -629,7 +632,8 @@ function squadSnapshot(now: number): Snapshot {
     const online = s.pid != null && !!st && st.mode !== 'connecting';
     members.set(s.cfg.key, {
       char: s.cfg.key, cls: st ? classKey(st.char.classId) : (s.cfg.cls ?? null), level: st?.char.level ?? 0, map: st?.where.map ?? 0, x: st?.where.x ?? 0, y: st?.where.y ?? 0,
-      hpPct: st && st.char.hp[1] > 0 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, obeys: s.pid != null && obeyPids.has(s.pid),
+      // Con el tope de 16 bits (65.535) la lectura no es la vida real: 0 = desconocida (el chequeo la ignora).
+      hpPct: st && st.char.hp[1] > 0 && st.char.hp[1] < 65535 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, obeys: s.pid != null && obeyPids.has(s.pid),
     });
   }
   // Lo que la escuadra ve: los dorados que ya compartimos (/api/gold). Peligro y hostiles: sin fuente todavía (docs/escuadras.md).

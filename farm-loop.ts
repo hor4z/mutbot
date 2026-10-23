@@ -597,7 +597,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now: nowH, maxMs: RED_HUNT_MS })
         : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
           (h.auto && world.map === h.hunt.map
-            ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now: nowH,
+            ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now: nowH, since: h.since,
                 next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: known(), ...huntData(nowH) }) })
             : null);
       if (stop && !h.scout) trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((nowH - h.since) / 60_000).toFixed(1), red: !!h.red });

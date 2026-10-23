@@ -233,6 +233,11 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   const dryInv = inv(1, [[2, 2], [0, 25]], t0);
   const other = pickHuntMap({ invasion: dryInv, level: 400, done: new Set([2]) });
   ok('a secas: 2 min sin ver un dorado y otro mapa con más → se va', huntDryOut({ invasion: dryInv, map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS, next: other }) !== null);
+  const fewInv = inv(1, [[2, 3], [0, 26]], t0);
+  const fewNext = pickHuntMap({ invasion: fewInv, level: 400, done: new Set([2]) });
+  ok('pocos vivos acá y muchos en otro: se pasa sin esperar los 2 min', huntDryOut({ invasion: fewInv, map: 2, lastSeenAt: t0 + 60_000, now: t0 + 60_000, since: t0, next: fewNext }) !== null);
+  ok('pocos vivos acá: antes de 45 s todavía se queda', huntDryOut({ invasion: fewInv, map: 2, lastSeenAt: t0 + 20_000, now: t0 + 20_000, since: t0, next: fewNext }) === null);
+  ok('sin since (llamada vieja) no cambia nada', huntDryOut({ invasion: fewInv, map: 2, lastSeenAt: t0 + 60_000, now: t0 + 60_000, next: fewNext }) === null);
   ok('a secas: viendo dorados hace poco → se queda', huntDryOut({ invasion: dryInv, map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS - 1, next: other }) === null);
   ok('a secas: el otro mapa tiene menos → se queda', huntDryOut({ invasion: inv(1, [[2, 9], [0, 3]], t0), map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS, next: pickHuntMap({ invasion: inv(1, [[2, 9], [0, 3]], t0), level: 400, done: new Set([2]) }) }) === null);
   // La invasión del 2026-10-23 09:50: Devias se vació en 3 min con Noria 38, Lorencia 28, Atlans 26 y Tarkan 18.

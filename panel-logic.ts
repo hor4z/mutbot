@@ -184,9 +184,18 @@ export const HUNT_DRAGON_BONUS = 100;
 // últimos 1-2 a ciegas cuesta más dorados de los que da.
 export const HUNT_DRY_MS = 2 * 60_000;
 /** ¿Dejar este mapa por otro? Solo si hace HUNT_DRY_MS que no se ve un dorado y el otro tiene más vivos. */
-export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice }): string | null {
-  if (inp.now - inp.lastSeenAt < HUNT_DRY_MS || !inp.next.ok) return null;
+// Quedan pocos acá (los pelea la competencia, que los mata antes) y otro mapa tiene muchos más: se pasa
+// sin esperar los 2 min (hecho medido: 5 min en Devias con 3 vivos mientras Lorencia tenía 26 y las cajas fueron de otros).
+export const HUNT_FEW_ALIVE = 3;
+export const HUNT_FEW_MIN_STAY_MS = 45_000;
+export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice; since?: number }): string | null {
+  if (!inp.next.ok) return null;
   const here = inp.invasion?.maps.find((m) => m.map === inp.map)?.alive ?? 0;
+  const next = inp.next.alive ?? 0;
+  if (inp.since != null && inp.now - inp.since >= HUNT_FEW_MIN_STAY_MS && here <= HUNT_FEW_ALIVE && next >= 8 && next >= 3 * Math.max(here, 1)) {
+    return `quedan ${here} vivos acá y ${next} en ${inp.next.hunt.name}: me paso antes de que la competencia los limpie`;
+  }
+  if (inp.now - inp.lastSeenAt < HUNT_DRY_MS) return null;
   if ((inp.next.alive ?? 0) <= here) return null;
   return `${Math.round(HUNT_DRY_MS / 60_000)} min sin ver un dorado (${here} vivos acá, ${inp.next.alive} en ${inp.next.hunt.name})`;
 }
