@@ -27,6 +27,7 @@ import { DEFENSE, Defense } from './defense';
 import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
 import { goldFeedHints } from './gold-feed';
 import monstersData from './data/monsters.json';
+import { SweepPlanner, zonePrior } from './sweep';
 import { canFight, monsterCombat } from './power';
 import { farmMiddleware, statPower } from './farm-middleware';
 import { ObserverTracker } from './observer';
@@ -1020,9 +1021,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
       // Recordar dónde está cada dorado a la vista (y avisar al compañero de los nuevos, rápido).
       const spots = (hunting.spots ??= new Map());
+      // Radio de visión medido: la mayor distancia a la que se vio algo en scope (sweep.ts lo acota a 8-12).
+      if (world.map === hunting.hunt.map) for (const n of ctx.npcs.values()) hunting.scopeMax = Math.max(hunting.scopeMax ?? 0, chebyshev(world.x, world.y, n.x, n.y));
       for (const n of ctx.npcs.values()) {
         if (!isGolden(n)) continue;
         if (world.map === hunting.hunt.map) hunting.lastSeenAt = now;
+        if (world.map === hunting.hunt.map) hunting.sweep?.hint(n.x, n.y);
         if (!spots.has(n.id) && world.map === hunting.hunt.map) {
           askHelp('golden', world.map, n.x, n.y, monsterName(n.type), HUNT_SHARE_MS);
           trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
@@ -1242,16 +1246,32 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
       // Con el terreno del mapa solo recorre lo caminable y alcanzable, sin repetir, primero las celdas con
       // dorados vistos (zones.ts); sin el .att del mapa, a ciegas como antes.
-      if (terrainOf(world.map)) {
-        const walk = walkableFor(world.map);
-        bot.hunting.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, bot.hunting.explorer.cell, now), avoidCells(insights(now), world.map, now));
+      // Rastrillaje por visión (sweep.ts): carriles por el interior, lo visto a <= R cuenta, sin ir a las puntas
+      // ni parar; el previo sale de las zonas con dorados vistos y las celdas donde murieron se evitan.
+      const hs = bot.hunting;
+      if (world.map === hs.hunt.map && hs.sweepMap !== world.map && terrainOf(world.map)) {
+        hs.sweepMap = world.map;
+        try {
+          const zs = [...dragonZones(world.map), ...goldenZones(world.map)];
+          const zp = zonePrior(zs);
+          const avoid = avoidCells(insights(now), world.map, now);
+          hs.sweep = new SweepPlanner(walkableFor(world.map), (x, y) => isSafeZone(world.map, x, y), { x: world.x, y: world.y }, hs.scopeMax ?? 0,
+            (x, y) => zp(x, y) * (avoid?.has(hs.explorer.cellKey(x, y)) ? 0.2 : 1));
+        } catch { hs.sweep = undefined; }
       }
-      const g = bot.hunting.explorer.next(world.x, world.y, now);
+      const sw = world.map === hs.hunt.map ? hs.sweep : undefined;
+      if (!sw && terrainOf(world.map)) {
+        const walk = walkableFor(world.map);
+        hs.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, hs.explorer.cell, now), avoidCells(insights(now), world.map, now));
+      }
+      const g = sw ? sw.next(world.x, world.y, now) : hs.explorer.next(world.x, world.y, now);
       bot.goalPoint = [g.x, g.y];
-      bot.doing = bot.hunting.scout ? `explorando ${bot.hunting.hunt.name} sin pelear: recorro la celda (${g.x},${g.y})` : `cazando dorados en ${bot.hunting.hunt.name}: recorro la celda (${g.x},${g.y})`;
+      bot.doing = sw
+        ? `${hs.scout ? 'explorando' : 'cazando dorados en'} ${hs.hunt.name}${hs.scout ? ' sin pelear' : ''}: rastrillo hacia (${g.x},${g.y}), visto ${(sw.coverage * 100).toFixed(0)} %`
+        : hs.scout ? `explorando ${hs.hunt.name} sin pelear: recorro la celda (${g.x},${g.y})` : `cazando dorados en ${hs.hunt.name}: recorro la celda (${g.x},${g.y})`;
       ctx.phase = 'walk';
       castOnTheWay(ctx);
-      await walkTowards(ctx, g.x, g.y);
+      await walkTowards(ctx, g.x, g.y, !!sw);
       continue;
     }
     if (explorer.isDry(now) && !early.initial()) {
