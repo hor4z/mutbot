@@ -262,6 +262,10 @@ export type Mission = {
   startedAt: number;
   phase: Phase;
   phaseAt: number;
+  /** campaña: desde cuándo están todos juntos en el pueblo (para dar tiempo a la party) */
+  readyAt?: number;
+  /** campaña: el warp (spot) donde el padrino espera al más débil; los protegidos viajan a ESE mismo spot para caer pegados */
+  pinWarp?: number;
   maxMs: number;
   roles: Record<string, SquadRole>;
   /** punto de reunión (null hasta que llegan al mapa) */
@@ -322,6 +326,10 @@ export const MISSION = {
  * Todo SUPUESTO sin medir en vivo (docs/escuadras.md).
  */
 export const FOLLOW_MISSION = {
+  /** Reunión en Lorencia: con todos juntos y a <= 8 tiles, se espera esto para que la party quede armada. */
+  GATHER_PARTY_MS: 35_000,
+  /** Tope de la reunión: pasado esto parten igual. */
+  GATHER_MAX_MS: 4 * 60_000,
   /** Con todos los protegidos desde este nivel el padrino vuelve a su ruta normal (Arena 2 pide 100). */
   ROUTE_FREE_LEVEL: 100,
   /** Tras un reset el padrino queda en nivel <= esto: ahí arranca solo una misión armada. */
@@ -587,7 +595,7 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
         m.resetsDone = 0;
         m.overtaken = false;
         m.map = P.map;
-        setPhase(m, 'follow', now, out, `el padrino reseteó (nivel ${P.level}): arranca la campaña, ${d.msg}`);
+        setPhase(m, 'gather', now, out, `el padrino reseteó (nivel ${P.level}): arranca la campaña, primero se juntan en Lorencia para armar la party (${d.msg})`);
         reset = false; // este reset ya es el de arranque
       }
     }
@@ -609,13 +617,42 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
     }
   }
 
+  // Reunión: todos al pueblo (Lorencia), se arma la party con el padrino quieto y los protegidos pegados; después parten juntos.
+  if (m.phase === 'gather' && P) {
+    const hub = squadMapByWarp(2)!;
+    const all = [P, ...wards];
+    if (all.every((a) => a.map === hub.map)) {
+      m.readyAt ??= now;
+      const near = wards.every((w) => dist(w, P) <= 8);
+      out.orders.set(pad, { kind: 'idle', why: 'armo la party con mis protegidos' });
+      for (const w of wards) out.orders.set(key(w.char), { kind: 'follow', leader: pad, tight: true, at: { x: P.x, y: P.y } });
+      if (!near) m.readyAt = now; // los 35 s corren con todos pegados
+      if (now - m.readyAt >= FOLLOW_MISSION.GATHER_PARTY_MS || now - m.phaseAt > FOLLOW_MISSION.GATHER_MAX_MS) {
+        m.readyAt = undefined;
+        setPhase(m, 'follow', now, out, 'party armada: parten juntos');
+      }
+    } else {
+      m.readyAt = undefined;
+      for (const a of all) {
+        const k = key(a.char);
+        if (a.map !== hub.map) {
+          m.warpDelays[k] ??= Math.round(MISSION.WARP_STAGGER_MS[0] + rand() * 6000);
+          out.orders.set(k, { kind: 'warp', warp: hub.warp, map: hub.map, delayMs: m.warpDelays[k] });
+        } else out.orders.set(k, { kind: 'idle', why: 'espero a los demás en Lorencia' });
+      }
+    }
+    if (m.phase === 'gather') return out;
+  }
+
   // El padrino se adapta al más débil: mientras algún protegido no pueda entrar al mapa siguiente de su ruta (Arena 2
   // pide nivel 100), se queda cazando en el mejor mapa al que los protegidos sí entran. Con todos al nivel, vuelve a su ruta.
   if (m.phase === 'follow' && P && wards.length) {
     const minWard = Math.min(...wards.map((w) => w.level));
+    if (minWard >= FOLLOW_MISSION.ROUTE_FREE_LEVEL) m.pinWarp = undefined;
     if (minWard < FOLLOW_MISSION.ROUTE_FREE_LEVEL) {
       const opt = nurtureOptions(P.level, wards.map((w) => w.level))[0];
       if (opt) {
+        m.pinWarp = opt.warp;
         out.orders.set(pad, { kind: 'warp', warp: opt.warp, map: opt.map, delayMs: 0 });
         note(P.char, `me quedo en ${opt.name} hasta que ${wards.find((w) => w.level === minWard)!.char} llegue al ${FOLLOW_MISSION.ROUTE_FREE_LEVEL}`);
       }
@@ -647,7 +684,8 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
   if (m.overtaken && wards.every((w) => w.level >= p.level)) { finish('done', 'el protegido alcanzó al padrino'); return out; }
   if (m.map !== p.map) out.events.push(`el padrino cambió de mapa (${m.map} → ${p.map})`);
   m.map = p.map;
-  const target = warpForMap(p.map);
+  // Si el padrino espera en un spot fijado, los protegidos viajan a ESE spot (misma entrada: caen pegados, sin caminar).
+  const target = (m.pinWarp != null ? squadMapByWarp(m.pinWarp) : null) ?? warpForMap(p.map);
   for (const w of wards) {
     const k = key(w.char);
     if (w.map === p.map) {
@@ -778,7 +816,7 @@ export class SquadBook {
       const maxMs = Math.round((req.maxMin ?? 0) * 60_000) || FOLLOW_MISSION.DEFAULT_MAX_MS;
       const roles = Object.fromEntries(s.members.map((c) => [c, c === padrino ? 'padrino' : 'protegido'])) as Record<string, SquadRole>;
       const m: Mission = {
-        id: `${id}-m${++s.seq}`, kind: 'nurture', warp: 0, map: pm.map, startedAt: snap.now, phase: d.ok ? 'follow' : 'armed', phaseAt: snap.now, maxMs,
+        id: `${id}-m${++s.seq}`, kind: 'nurture', warp: 0, map: pm.map, startedAt: snap.now, phase: d.ok ? 'gather' : 'armed', phaseAt: snap.now, maxMs,
         roles, meet: null, targetLevel: req.targetLevel ?? 0, padrino, visited: [], danger: [], cellOf: {}, found: null, foundAt: 0, deaths: {}, warpDelays: {}, result: null,
         follow: true, untilResets: req.untilResets ?? 0, resetsDone: 0, lastPadResets: pm.resets ?? null, lastPadLevel: pm.level, resetSeenAt: 0, overtaken: false,
         lastShared: wards.some((w) => w.map === pm.map) ? { map: pm.map, x: pm.x, y: pm.y } : null, notes: {},
