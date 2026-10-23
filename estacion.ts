@@ -632,8 +632,8 @@ function squadSnapshot(now: number): Snapshot {
     const online = s.pid != null && !!st && st.mode !== 'connecting';
     members.set(s.cfg.key, {
       char: s.cfg.key, cls: st ? classKey(st.char.classId) : (s.cfg.cls ?? null), level: st?.char.level ?? 0, map: st?.where.map ?? 0, x: st?.where.x ?? 0, y: st?.where.y ?? 0,
-      // Con el tope de 16 bits (65.535) la lectura no es la vida real: 0 = desconocida (el chequeo la ignora).
-      hpPct: st && st.char.hp[1] > 0 && st.char.hp[1] < 65535 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, resets: st?.char.resets ?? undefined, obeys: s.pid != null && obeyPids.has(s.pid),
+      // Con el máximo topado en 65.535 la lectura no es la vida real: 0 = desconocida (el chequeo la ignora). Más de eso ya viene corregido (HpTracker).
+      hpPct: st && st.char.hp[1] > 0 && st.char.hp[1] !== 65535 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, resets: st?.char.resets ?? undefined, obeys: s.pid != null && obeyPids.has(s.pid),
     });
   }
   // Lo que la escuadra ve: los dorados que ya compartimos (/api/gold). Peligro y hostiles: sin fuente todavía (docs/escuadras.md).
