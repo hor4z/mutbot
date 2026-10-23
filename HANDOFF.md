@@ -136,3 +136,23 @@ Golden Dragon). La invasión de las 10:50 dio 7 cajas.
 
 La memoria del usuario para Claude está en `~/.claude/projects/-home-horaz-self-mubot/memory/`. En una
 máquina nueva no existe: este archivo la reemplaza.
+
+## Qué se aprendió el 2026-10-23 (tarde)
+
+- **La caja es del que da el golpe final**, no del que más daño hizo. Fuente: OpenMU `AttackableNpcBase.OnDeathAsync` (el drop usa al
+  atacante del último golpe y a su party) y `DroppedItem.cs` (10 s de prioridad para los dueños, después libre y gana el primero que la
+  pide). Los 4 casos de hoy coinciden. Por eso una party de personajes propios pegando juntos reparte la propiedad de la caja.
+- **La barra de vida del blanco llega en el golpe extendido** (`C1 16 11`, `parseHitExtended`): vida restante en fracciones de 1/250 y
+  daño real del golpe, solo de los golpes en los que participa el propio personaje. `dragon_fight` lo guarda (`ownDmgAvg`, `hpLeftPct`).
+  Con eso se puede reescribir el remate (hoy apagado: `MUBOT_FINISHER=1` lo enciende).
+- **Invasión dorada por defecto en OpenMU:** 10 Golden Dragons en UN solo mapa (Lorencia, Noria o Devias, al azar), el resto de los dorados
+  en su mapa propio, spawns en casillas caminables al azar al inicio, 30 min de duración. El server tiene horario propio (cada hora, :50).
+- **Crianza que funciona (campaña follow):** arranca cuando el fuerte resetea; se juntan por warp en Lorencia, el fuerte invita a la party,
+  parten juntos a un spot de Devias donde el débil entra y el fuerte espera hasta que el débil llegue al 100. Medido: Zamu 93 → 216 en
+  ~20 min (18 M exp/min contra 13 M del fuerte), sin muertes. Costo: el fuerte no sube a 380 a tiempo para la invasión de la hora.
+- **Lo que rompía la coordinación:** el vigía y la reconexión por "sin exp" corrían también para la sombra; el atajo por warp se evaluaba
+  después de la defensa; el protegido respondía a pedidos de ayuda de dorados siendo nivel 86; la ruta fija lo warpeaba a su tramo. Todo
+  corregido (ver `docs/revision.md` para lo que sigue pendiente: la sombra todavía no aísla cacería ni cazador automático del todo).
+- **Los bots a veces se caen al reiniciar la estación:** no está claro por qué (ver `docs/revision.md` §4). Cuando el usuario ve un bot
+  descoordinado lo desconecta él: "salió (código 0)" es una señal, no necesariamente un fallo. No reiniciar la estación con los bots vivos.
+- Los tests se eliminaron a pedido del usuario (quedan en el historial de git).
