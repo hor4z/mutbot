@@ -210,6 +210,11 @@ function hookAggro() {
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
     EventBus.on(ev, (raw: any) => {
       const f = parseFight(toBytes(raw));
+      if (f) {
+        // Un monstruo le pega a un compañero (la sombra): se anota para defenderlo (ver "Guardián" en el loop).
+        const tgt = world.players.get(f.target);
+        if (tgt?.name && isMate(tgt.name) && world.npcs.has(f.attacker)) mateAggro.set(f.attacker, Date.now());
+      }
       if (!f || f.attacker === (bot.playerId & 0x7fff)) return;
       const a = world.players.get(f.attacker);
       if (a && !isMate(a.name ?? '')) { fightHeat.record(f.attacker, a.x, a.y, Date.now()); finisher.other(f.target, f.attacker, Date.now()); }
@@ -234,6 +239,9 @@ let townPin: Spot | null | undefined;
 
 // Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
 const fightHeat = new FightHeat();
+// Monstruos que le pegaron a un compañero hace poco (id → cuándo), para que el fuerte los mate primero.
+const mateAggro = new Map<number, number>();
+let lastGuardLog = 0;
 // Remate del golpe final (finisher.ts) y qué hizo en la pelea actual (campo `finisher` de dragon_fight).
 const finisher = new Finisher();
 let finisherMode: 'wait' | 'strike' | 'none' = 'none';
@@ -1045,6 +1053,27 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // 8) Elegir / mantener objetivo: campamento (camp.ts) + exp/s (farming.ts).
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
+    // Guardián (idea del usuario, 2026-10-23: "Hume farmea normal, solo es más defensivo de su sombra"): lo que le pega a un
+    // compañero a la vista pasa a ser el objetivo, antes que el campamento. MUBOT_GUARD=0 lo apaga.
+    if (process.env.MUBOT_GUARD !== '0' && mateAggro.size && !bot.hunting?.scout) {
+      const nowGd = Date.now();
+      let guard: ScopedNpc | null = null;
+      let gdist = Infinity;
+      for (const [id, t] of mateAggro) {
+        if (nowGd - t > 3000) { mateAggro.delete(id); continue; }
+        const n = ctx.npcs.get(id);
+        if (!n) continue;
+        const d = chebyshev(world.x, world.y, n.x, n.y);
+        if (d <= 12 && d < gdist) { guard = n; gdist = d; }
+      }
+      if (guard && ctx.target !== guard.id) {
+        ctx.target = guard.id;
+        targetType = guard.type;
+        targetSince = nowGd;
+        stuckCount = 0;
+        if (nowGd - lastGuardLog > 15_000) { lastGuardLog = nowGd; decide(`Guardián: ${monsterName(guard.type)} le pega a mi compañero: lo mato primero.`); }
+      }
+    }
     const hunting = bot.hunting;
     // Dragones primero (golden.ts, dragonRush): en la ventana del aviso, sin dragón a la vista y con zona
     // conocida a donde ir, ni dorados comunes nuevos ni recordados: directo a las zonas de dragones.
