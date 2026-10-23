@@ -336,7 +336,7 @@ export const FOLLOW_MISSION = {
   /** Armada sin que el padrino resetee: se cae sola (24 h). */
   ARM_MAX_MS: 24 * 60 * 60_000,
   /** Protegido que muere esto en DEATH_WINDOW_MS: retirada. */
-  DEATHS_ABORT: 2,
+  DEATHS_ABORT: 99, // la campaña no se corta porque el protegido muera: reaparece y vuelve con el padrino
   /** Correa corta (tiles) del protegido: pasa a Follower(far). */
   LEASH_FAR: 6,
   MAX_UNTIL_RESETS: 20,
@@ -598,9 +598,9 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
     let why: string | null = null;
     if (now - m.startedAt > m.maxMs) { finish('done', 'tiempo cumplido'); return out; }
     if (!P) why = 'el padrino no está disponible';
-    else if (!wards.length) why = 'no queda ningún protegido activo';
+    // Sin protegido activo (murió y reaparece, o se reconecta): se espera, no se aborta.
     else if (recent >= FOLLOW_MISSION.DEATHS_ABORT) why = `${recent} muerte(s) del protegido en 10 min`;
-    else if (hostile) why = 'jugador hostil cerca';
+    // Hostiles: en la campaña el padrino mata lo que moleste, no se aborta por eso.
     if (why) {
       setPhase(m, 'retreat', now, out, `retirada (${why})`);
       m.result = `retirada: ${why}`;

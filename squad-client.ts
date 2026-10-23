@@ -41,6 +41,7 @@ let savedPin: typeof bot.pinnedSpot | undefined;
 let released = '';
 const invites = new InviteScheduler();
 const follower = new Follower();
+let lastShortcutAt = 0;
 /** Campaña de crianza: correa corta (2-6 tiles) detrás del padrino. */
 const tightFollower = new Follower(Math.random, FOLLOW_MISSION.LEASH_FAR);
 let warpSeenAt = 0;
@@ -185,6 +186,22 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
         if (o.kind === 'follow' && o.tight) {
           // Campaña de crianza: no lo veo, voy hacia donde la estación dice que está (sin pelear salvo defensa propia).
           if (recentlyHit(ctx)) return false;
+          // Lejos del padrino en el mismo mapa: en vez de caminar cientos de tiles, warp a la entrada más cercana a él
+          // (Devias tiene 3: ahorra 100+ tiles por 2-2,5 mil zen). Una vez cada 3 min y solo si ahorra >= 60 tiles.
+          if (o.at && dist(world, o.at) > 70 && !bot.pendingWarp && Date.now() - lastShortcutAt > 180_000) {
+            const best = WARP_SPOTS.filter((s) => s.map === world.map && s.arrival && s.reqLevel <= world.level)
+              .map((s) => ({ s, d: dist(s.arrival!, o.at!) })).sort((x, y) => x.d - y.d)[0];
+            if (best && dist(world, o.at) - best.d >= 60 && best.d < dist(world, o.at)) {
+              lastShortcutAt = Date.now();
+              if (savedPin === undefined) savedPin = bot.pinnedSpot;
+              bot.pendingWarp = best.s;
+              bot.pinnedSpot = best.s;
+              bot.hunting = null;
+              bot.doing = `escuadra: atajo a ${best.s.name}, cerca del padrino`;
+              log(`Escuadra: el padrino está a ${Math.round(dist(world, o.at))} tiles; atajo por el warp a ${best.s.name} (a ${Math.round(best.d)}).`);
+              return false;
+            }
+          }
           if (o.at && dist(world, o.at) > 4) { bot.doing = 'escuadra: voy con el padrino'; await walkTowards(ctx, o.at.x, o.at.y); return true; }
           bot.doing = 'escuadra: espero al padrino';
           await sleep(humanPace(900));
