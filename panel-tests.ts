@@ -70,9 +70,9 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('0x91 CC sin byte 6 → null', parseOpeningState(Uint8Array.from([0xc1, 6, 0x91, 4, 0, 0]), NOW) === null);
 }
 
-// --- isPanelCommand: solo las 10 órdenes con sus campos ----------------------------
+// --- isPanelCommand: solo las 12 órdenes con sus campos ----------------------------
 {
-  ok('PANEL_COMMANDS son 10 (equipplan, equip y scout, aditivas)', PANEL_COMMANDS.length === 10 && PANEL_COMMANDS.includes('scout') && !isPanelCommand({ cmd: 'scout', map: 1 }) && PANEL_COMMANDS.includes('equipplan') && PANEL_COMMANDS.includes('equip'));
+  ok('PANEL_COMMANDS son 12 (equipplan, equip, scout, shops y commerce, aditivas)', PANEL_COMMANDS.length === 12 && PANEL_COMMANDS.includes('shops') && PANEL_COMMANDS.includes('commerce') && PANEL_COMMANDS.includes('scout') && !isPanelCommand({ cmd: 'scout', map: 1 }) && PANEL_COMMANDS.includes('equipplan') && PANEL_COMMANDS.includes('equip'));
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
     { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'say', text: '/pkclear' }, { cmd: 'vault' }, { cmd: 'equipplan' }, { cmd: 'equip' }, { cmd: 'scout' },
@@ -250,6 +250,17 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('dragón: otros avisos no', dragonMapFromServerMessage('Hume entered the game.') === null && dragonMapFromServerMessage('[Kalima] Golden invasion!') === null);
   const at = (h: number, m: number) => new Date(2026, 9, 11, h, m, 0).getTime();
   ok('sin reset entre :30 y :05', resetBlockedByInvasion(at(13, 30)) && resetBlockedByInvasion(at(13, 50)) && resetBlockedByInvasion(at(13, 4)) && !resetBlockedByInvasion(at(13, 5)) && !resetBlockedByInvasion(at(13, 29)));
+}
+
+// --- shops (lectura) y commerce (con confirmación): forma exacta -----------------------
+{
+  ok('shops sin campos, con npc o con player', isPanelCommand({ cmd: 'shops' }) && isPanelCommand({ cmd: 'shops', npc: 12 }) && isPanelCommand({ cmd: 'shops', player: 300 }));
+  ok('shops: npc y player juntos, ids raros o campos de más → no', !isPanelCommand({ cmd: 'shops', npc: 1, player: 2 }) && !isPanelCommand({ cmd: 'shops', npc: -1 }) && !isPanelCommand({ cmd: 'shops', npc: 'x' }) && !isPanelCommand({ cmd: 'shops', all: true }));
+  const sell = { kind: 'sell', npc: 5, items: [{ slot: 12, group: 7, num: 1, level: 0 }], confirm: 'x' };
+  ok('commerce sell válido', isPanelCommand({ cmd: 'commerce', op: sell }));
+  ok('commerce: sin confirm, kind raro, campos de más o sin ítems → no', !isPanelCommand({ cmd: 'commerce', op: { ...sell, confirm: undefined } }) && !isPanelCommand({ cmd: 'commerce', op: { ...sell, kind: 'robar' } }) && !isPanelCommand({ cmd: 'commerce', op: { ...sell, extra: 1 } }) && !isPanelCommand({ cmd: 'commerce', op: { ...sell, items: [] } }) && !isPanelCommand({ cmd: 'commerce' }));
+  ok('commerce: más de 8 ítems a vender → no', !isPanelCommand({ cmd: 'commerce', op: { ...sell, items: Array.from({ length: 9 }, (_, i) => ({ slot: 12 + i, group: 7, num: 1, level: 0 })) } }));
+  ok('commerce: cerrar tienda y cancelar trade van sin confirm', isPanelCommand({ cmd: 'commerce', op: { kind: 'shop-close' } }) && isPanelCommand({ cmd: 'commerce', op: { kind: 'trade-cancel' } }));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DEL PANEL PASARON' : `\n${fails} TEST(S) DEL PANEL FALLARON`);

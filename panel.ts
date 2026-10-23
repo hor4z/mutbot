@@ -14,6 +14,7 @@ import {
 import type { BotMode, EquipPlanView, EventTimer, PanelCommand, PanelState } from './panel-protocol';
 import { describeStep, summarizePlan } from './equip-plan';
 import { equipPlanNow } from './vault';
+import { runCommerce, runShops, shopsView } from './commerce';
 import { WARP_SPOTS } from './route';
 import { ScoutPublisher, ScoutTour } from './scout';
 import { scoutCovered } from './team';
@@ -116,6 +117,10 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       bot.pendingEquip = true;
       equipPlanView = null;
       return { ok: true, msg: 'voy a Lorencia, saco las piezas del baúl y me las pongo (lee el baúl de nuevo y arma el plan con datos de ahora)' };
+    case 'shops':
+      return runShops(c);
+    case 'commerce':
+      return runCommerce(c.op);
     case 'scout': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
@@ -236,6 +241,7 @@ export function buildPanelState(now: number): PanelState {
       players: world.players.size,
     },
     equipPlan: equipPlanView,
+    shops: shopsView(now),
     equipment,
     inventory,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
