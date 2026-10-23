@@ -114,7 +114,7 @@ Golden Dragon). La invasión de las 10:50 dio 7 cajas.
 2. **Resumen por invasión desde la base:** vistos, matados por Hume y por otros (y por quién), cajas
    propias y de otros, y el tiempo desde el aviso hasta el primer golpe. Ajustar con eso, invasión por
    invasión.
-3. **Equipar a Hume con el Great Dragon del baúl.** Es lo que más sube su daño y su aguante, y hace que
+3. **Equipar a Hume con el Great Dragon del baúl.** (Hecho en código, sin correr en vivo: órdenes `equipplan` y `equip`, ver AGENTS.md "Ítems y baúl"; falta verificar sacar del baúl con el packet `C3 0D 24 02 …` y mandar `equip` a mano.) Es lo que más sube su daño y su aguante, y hace que
    las cajas de los dragones sean suyas. Hace falta mover del baúl al inventario y equipar: el packet
    C3 24 con el depósito del baúl, sin verificar. Mostrarle el plan al usuario antes.
 4. **Leer la vida real** (sin el tope de 65.535).
