@@ -27,6 +27,7 @@ import { DEFENSE, Defense } from './defense';
 import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
 import { goldFeedHints } from './gold-feed';
 import { FightHeat, parseFight } from './fight-heat';
+import { Finisher, finisherOn } from './finisher';
 import monstersData from './data/monsters.json';
 import { SweepPlanner, zonePrior } from './sweep';
 import { canFight, monsterCombat } from './power';
@@ -210,7 +211,7 @@ function hookAggro() {
       const f = parseFight(toBytes(raw));
       if (!f || f.attacker === (bot.playerId & 0x7fff)) return;
       const a = world.players.get(f.attacker);
-      if (a && !isMate(a.name ?? '')) fightHeat.record(f.attacker, a.x, a.y, Date.now());
+      if (a && !isMate(a.name ?? '')) { fightHeat.record(f.attacker, a.x, a.y, Date.now()); finisher.other(f.target, f.attacker, Date.now()); }
     });
   }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
@@ -227,6 +228,9 @@ function hookAggro() {
 
 // Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
 const fightHeat = new FightHeat();
+// Remate del golpe final (finisher.ts) y qué hizo en la pelea actual (campo `finisher` de dragon_fight).
+const finisher = new Finisher();
+let finisherMode: 'wait' | 'strike' | 'none' = 'none';
 let lastHeatLog = 0;
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
@@ -303,17 +307,19 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // Datos de cada pelea con un dragón (golden.ts, DragonFight): evento `dragon_fight`.
   const dragonFight = new DragonFight((t) => (monstersData as { Numb: number; HP: number }[]).find((m) => m.Numb === t)?.HP ?? null);
   const trackFight = (rec: ReturnType<DragonFight['lost']>) => {
-    if (rec) trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map });
+    if (rec) { trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map, finisher: finisherMode }); finisherMode = 'none'; }
   };
   // ObjectHit (0x15 de 10 bytes): el daño que se ve sobre el dragón de la pelea (de cualquiera).
   const onHitDamage = (raw: any) => {
     const h = parseHitDamage(toBytes(raw));
-    if (h) dragonFight.damage(h.id, h.damage);
+    if (h) { dragonFight.damage(h.id, h.damage); finisher.damage(h.id, h.damage, Date.now()); }
   };
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
     const dead = world.npcs.get(p.KilledId & 0x7fff);
+    if (finisher.waited(p.KilledId & 0x7fff)) decide(`Remate: ${dead ? monsterName(dead.type) : 'el objetivo'} murió ${p.KillerId === bot.playerId ? 'por mi golpe final' : 'mientras esperaba el golpe final'}.`);
+    finisher.forget(p.KilledId & 0x7fff);
     if (dead && DRAGON_TYPES.has(dead.type)) {
       const kid0 = p.KillerId & 0x7fff;
       const mine0 = kid0 === bot.playerId;
@@ -799,7 +805,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
     }
     if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting) {
-      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG), ...huntData(nowG) });
+      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG), ...huntData(nowG) });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);
         bot.hunting = { hunt: ch.hunt, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
@@ -1165,13 +1171,26 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           await sleep(SKILL_PACE_MS - sinceCast);
           continue;
         }
+        if (finisherOn() && isGolden(t)) {
+          // Golpe final: con otros bajándolo, esperar a rango y rematar (finisher.ts). Sin datos: pega como siempre.
+          const fv = finisher.decide(target, (monstersData as { Numb: number; HP: number }[]).find((m) => m.Numb === t.type)?.HP ?? null, Date.now());
+          if (fv.verdict === 'wait') {
+            if (finisherMode !== 'wait') decide(`Remate: espero a rango sin pegar a ${monsterName(t.type)}, otros lo bajan (${fv.why}).`);
+            finisherMode = 'wait';
+            await sleep(humanPace(400));
+            continue;
+          }
+          if (fv.verdict === 'strike' && finisherMode !== 'strike') { finisherMode = 'strike'; decide(`Remate: a rematar a ${monsterName(t.type)} (${fv.why}).`); }
+        }
         if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
           ctx.lastCastAt = Date.now();
+          finisher.cast(target, ctx.lastCastAt);
           ctx.skillsUsed++;
           if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, ctx.lastCastAt);
           await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
+          finisher.cast(target, Date.now());
           if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, Date.now());
           await sleep(humanPace(ATTACK_PACE_MS));
         } else {
