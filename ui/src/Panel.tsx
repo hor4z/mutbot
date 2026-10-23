@@ -16,7 +16,7 @@ import {
   MessageSquare,
   Send,
 } from "lucide-react";
-import type { PanelCommand, PanelState } from "../../panel-protocol";
+import type { EquippedItem, PanelCommand, PanelState } from "../../panel-protocol";
 import {
   Action,
   Badge,
@@ -28,6 +28,62 @@ import {
   compact,
 } from "./components";
 import { Radar } from "./Radar";
+// Equipo e inventario: íconos del cliente (assets/items, servidos por el bot en /radar-assets/items).
+const SLOT_NAMES = ["Arma", "Escudo / 2ª arma", "Casco", "Armadura", "Pantalones", "Guantes", "Botas", "Alas", "Mascota", "Collar", "Anillo", "Anillo"];
+const ICON_TIERS = [15, 13, 11, 9, 7, 5, 3, 0];
+function iconSources(it: EquippedItem): string[] {
+  const tier = ICON_TIERS.find((t) => it.level >= t) ?? 0;
+  const base = (lv: number, e: boolean) => `/radar-assets/items/item_${it.group}_${it.num}_${lv}${e ? "_e" : ""}.png`;
+  const list = [base(it.level, it.excellent), base(tier, it.excellent), base(0, it.excellent), base(it.level, false), base(tier, false), base(0, false)];
+  return [...new Set(list)];
+}
+function ItemIcon({ it }: { it: EquippedItem }) {
+  const sources = iconSources(it);
+  const [i, setI] = useState(0);
+  useEffect(() => setI(0), [sources[0]]);
+  const title = `${it.name ?? `${it.group}/${it.num}`}${it.level ? ` +${it.level}` : ""}${it.excellent ? " (excelente)" : ""}`;
+  if (i >= sources.length) return <span className="item-name" title={title}>{it.name ?? `${it.group}/${it.num}`}</span>;
+  return <img className="item-icon" src={sources[i]} alt={title} title={title} onError={() => setI(i + 1)} />;
+}
+function Equipment({ items }: { items: EquippedItem[] }) {
+  return (
+    <div className="equipment">
+      {SLOT_NAMES.map((label, slot) => {
+        const it = items.find((x) => x.slot === slot);
+        return (
+          <div key={slot} className={`equip-slot ${it ? "filled" : ""} ${it?.excellent ? "exc" : ""}`}>
+            <div className="equip-icon">{it && <ItemIcon it={it} />}</div>
+            <div className="equip-text">
+              <small>{label}</small>
+              <strong>{it ? `${it.name}${it.level ? ` +${it.level}` : ""}` : "—"}</strong>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function Inventory({ items }: { items: EquippedItem[] }) {
+  return (
+    <div className="inventory-grid">
+      {Array.from({ length: 64 }, (_, i) => (
+        <div key={`c${i}`} className="inv-cell" style={{ gridColumn: (i % 8) + 1, gridRow: Math.floor(i / 8) + 1 }} />
+      ))}
+      {items.map((it) => {
+        const pos = it.slot - 12;
+        return (
+          <div
+            key={it.slot}
+            className={`inv-item ${it.excellent ? "exc" : ""}`}
+            style={{ gridColumn: `${(pos % 8) + 1} / span ${Math.min(it.w ?? 1, 8 - (pos % 8))}`, gridRow: `${Math.floor(pos / 8) + 1} / span ${it.h ?? 1}` }}
+          >
+            <ItemIcon it={it} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 import knight from "../../assets/ui/knight-alpha.webp";
 type Log = { at: number; text: string; kind: string };
 // Decisiones del bot (el diario): viajes, reset, órdenes, cambios de modo y decisiones con motivo.
@@ -207,16 +263,31 @@ function Controls({
     [advanced, setAdvanced] = useState(false);
   return (
     <Section title="Acciones">
+      {/* Solo lo que cambia algo: farmeando por la ruta no se ofrece "Farmear". */}
+      <p className="muted action-now">
+        {s?.mode === "paused"
+          ? "En pausa."
+          : s?.mode === "hunt"
+            ? `Cazando dorados${s.where.spot ? ` (${s.where.spot.replace(/^cacería /, "")})` : ""}.`
+            : s?.where.pinned
+              ? `Farmeando fijo en ${s.where.spot ?? "un spot"}.`
+              : s?.mode === "farm"
+                ? "Farmeando por la ruta."
+                : ""}
+      </p>
       <div className="main-actions">
+        {(s?.mode === "hunt" || s?.where.pinned) && (
+          <Action
+            className="primary"
+            disabled={disabled}
+            onClick={() => send({ cmd: "farm" })}
+          >
+            <Swords size={15} />
+            {s?.mode === "hunt" ? "Dejar de cazar" : "Volver a la ruta"}
+          </Action>
+        )}
         <Action
-          className="primary"
-          disabled={disabled}
-          onClick={() => send({ cmd: "farm" })}
-        >
-          <Swords size={15} />
-          Farmear
-        </Action>
-        <Action
+          className={s?.mode === "paused" ? "primary" : ""}
           disabled={disabled}
           onClick={() =>
             send({ cmd: s?.mode === "paused" ? "resume" : "pause" })
@@ -272,6 +343,50 @@ function Controls({
               Cazar
             </Action>
           </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+// Dorados de un vistazo (usuario, 2026-10-23: "en el panel no puedo ver rápido dónde quedan criaturas"):
+// los que se ven, con distancia y flecha (arriba = +y, igual que el radar), y los vivos por mapa en la invasión.
+const ARROWS = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"];
+const arrow = (dx: number, dy: number) =>
+  dx === 0 && dy === 0 ? "•" : ARROWS[Math.round(((Math.atan2(dy, dx) + 2 * Math.PI) % (2 * Math.PI)) / (Math.PI / 4)) % 8];
+function Goldens({ s }: { s: PanelState }) {
+  const me = s.where;
+  const golds = (s.entities?.monsters ?? [])
+    .filter((m) => m.gold)
+    .map((m) => ({ ...m, d: Math.max(Math.abs(m.x - me.x), Math.abs(m.y - me.y)), dragon: m.type === 44 || m.type === 79 }))
+    .sort((a, b) => Number(b.dragon) - Number(a.dragon) || a.d - b.d);
+  const inv = s.invasion?.status === "active" ? s.invasion : null;
+  return (
+    <Section title="Dorados" extra={<span className="count">{golds.length}</span>}>
+      <div className="near-list">
+        {golds.map((g) => (
+          <div key={g.id}>
+            <span className={g.type === 44 ? "red-dragon" : g.type === 79 ? "golden-dragon" : "gold"}>
+              {arrow(g.x - me.x, g.y - me.y)} {g.name}
+              {g.target ? <small> · objetivo</small> : null}
+            </span>
+            <small>
+              {g.d} tiles · {g.x},{g.y}
+            </small>
+          </div>
+        ))}
+        {!golds.length && <p className="empty-copy">Ningún dorado a la vista.</p>}
+      </div>
+      {inv && (
+        <div className="near-footer">
+          {inv.maps
+            .filter((m) => m.alive > 0)
+            .map((m) => (
+              <span key={m.map} className={m.map === me.map ? "gold" : ""}>
+                {m.name} {m.alive}
+                {" · "}
+              </span>
+            ))}
+          {inv.total} vivos
         </div>
       )}
     </Section>
@@ -541,6 +656,7 @@ export function Panel() {
             <Radar state={s} />
             <div className="overview-side">
               <Controls s={s} send={send} disabled={!online || !s} />
+              {s && <Goldens s={s} />}
               <Section title="Estado del personaje">
                 <Meter
                   value={s?.char.hp[0] ?? 0}
@@ -614,6 +730,15 @@ export function Panel() {
                   <strong>{s.where.spot}</strong>
                 </div>
               )}
+            </Section>
+            <Section title="Equipo">
+              <Equipment items={s?.equipment ?? []} />
+            </Section>
+            <Section
+              title="Inventario"
+              extra={<small>{(s?.inventory ?? []).length} objetos · {fmt(s?.char.zen)} zen</small>}
+            >
+              <Inventory items={s?.inventory ?? []} />
             </Section>
             <Section
               title="Esta sesión"

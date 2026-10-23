@@ -5,6 +5,7 @@
  * recorrido del mapa en celdas. Fuera de `headless-bot.ts` para poder testearlo
  * offline (`panel-tests.ts`): importar el bot lo arranca.
  */
+import itemsData from './data/items.json';
 import type { CycleRecord, EventKey, EventTimer, Invasion, MapName } from './panel-protocol';
 
 const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
@@ -17,7 +18,7 @@ const cheb = (ax: number, ay: number, bx: number, by: number) => Math.max(Math.a
 // ---------------------------------------------------------------------------
 export const MAP_NAMES: Record<number, string> = {
   0: 'Lorencia', 1: 'Dungeon', 2: 'Devias', 3: 'Noria', 4: 'Lost Tower', 6: 'Arena',
-  7: 'Atlans', 8: 'Tarkan', 83: 'Arena 2', 84: 'Arena 3', 85: 'Arena 4',
+  7: 'Atlans', 8: 'Tarkan', 33: 'Aida', 83: 'Arena 2', 84: 'Arena 3', 85: 'Arena 4',
 };
 export const mapName = (n: number): MapName => MAP_NAMES[n] ?? `mapa ${n}`;
 
@@ -81,6 +82,15 @@ export function parseInvasion(raw: Uint8Array | DataView | ArrayBuffer, now: num
 }
 
 // ---------------------------------------------------------------------------
+// Ítems: nombre y tamaño en la grilla del inventario (data/items.json del cliente).
+const ITEM_INFO = new Map<number, { name: string; w: number; h: number }>(
+  (itemsData as { Group: number; Index: number; ItemName: string; X: number; Y: number }[])
+    .map((i) => [i.Group * 512 + i.Index, { name: i.ItemName, w: i.X || 1, h: i.Y || 1 }]),
+);
+export function itemInfo(group: number, num: number): { name: string; w: number; h: number } {
+  return ITEM_INFO.get(group * 512 + num) ?? { name: `ítem ${group}/${num}`, w: 1, h: 1 };
+}
+
 // Tickets de eventos en el inventario (group/num de data/items.json).
 // ---------------------------------------------------------------------------
 export type InvItem = { group: number; num: number; level?: number };
@@ -131,12 +141,78 @@ export function goldenTypes(rows: Iterable<{ Numb: number; Name: string }>): Set
 // ---------------------------------------------------------------------------
 // Cacería: a qué mapa ir y cuándo cortar.
 // ---------------------------------------------------------------------------
-export type HuntMap = { map: number; warp: number; reqLevel: number; name: string };
+// value: cuánto vale cada dorado del mapa (la caja que suelta, guía "Invasión Dorada"): Noria Goblin +1;
+// Lorencia Budge +2; Devias Soldier/Titan +2; Atlans Vepar +3 y Lizard King +4; Tarkan Wheel +3 y
+// Tantallos +5. stopAlive 0 en todos (usuario, 2026-10-23: "debe cazar dorados hasta que no quede
+// ninguno, esa es la prioridad máxima"); la salida es HUNT_DRY_MS (sin ver un dorado y otro mapa con más).
+// Warps de la lista de /move del cliente 0.97d.
+export type HuntMap = { map: number; warp: number; reqLevel: number; name: string; value?: number; stopAlive?: number };
 export const HUNT_MAPS: readonly HuntMap[] = [
-  { map: 0, warp: 2, reqLevel: 0, name: 'Lorencia' },
-  { map: 3, warp: 3, reqLevel: 10, name: 'Noria' },
-  { map: 2, warp: 6, reqLevel: 20, name: 'Devias' },
+  { map: 0, warp: 2, reqLevel: 0, name: 'Lorencia', value: 2, stopAlive: 0 },
+  { map: 3, warp: 3, reqLevel: 10, name: 'Noria', value: 1, stopAlive: 0 },
+  { map: 2, warp: 6, reqLevel: 20, name: 'Devias', value: 2, stopAlive: 0 },
+  { map: 7, warp: 11, reqLevel: 70, name: 'Atlans', value: 3.5, stopAlive: 0 },
+  { map: 8, warp: 21, reqLevel: 140, name: 'Tarkan', value: 4, stopAlive: 0 },
 ];
+
+/**
+ * Mapa del Golden Dragon: a las :50 el server avisa "[Devias] Golden invasion!" (visto 2026-10-23; en
+ * pantalla sale con "¡El Dragón Dorado está invadiendo!"). Devuelve el número de mapa o null.
+ */
+export function dragonMapFromServerMessage(text: string): number | null {
+  // Solo el aviso de inicio ("... Golden invasion!"); el de cierre es "... Golden invasion has ended.".
+  const m = /^\[([^\]]+)\]\s*golden invasion!\s*$/i.exec(text.trim());
+  if (!m) return null;
+  const name = m[1].trim().toLowerCase();
+  const hit = Object.entries(MAP_NAMES).find(([, n]) => n.toLowerCase() === name);
+  return hit ? Number(hit[0]) : null;
+}
+
+/** Invasión del Dragón Rojo: "[Lorencia] Red Dragon invasion!" (aviso de OpenMU, EVENTOS.md). Mapa o null. */
+export function redDragonMapFromServerMessage(text: string): number | null {
+  const m = /^\[([^\]]+)\]\s*red dragon invasion!\s*$/i.exec(text.trim());
+  if (!m) return null;
+  const name = m[1].trim().toLowerCase();
+  const hit = Object.entries(MAP_NAMES).find(([, n]) => n.toLowerCase() === name);
+  return hit ? Number(hit[0]) : null;
+}
+// Dura 30 min y no hay cuenta de vivos (no hay 0xFD): se caza RED_HUNT_MS y se vuelve.
+export const RED_HUNT_MS = 12 * 60_000;
+
+export const HUNT_DRAGON_BONUS = 100;
+// Sin ver un dorado en este tiempo, y con otro mapa que tenga más vivos, se pasa a ese: buscar los
+// últimos 1-2 a ciegas cuesta más dorados de los que da.
+export const HUNT_DRY_MS = 2 * 60_000;
+/** ¿Dejar este mapa por otro? Solo si hace HUNT_DRY_MS que no se ve un dorado y el otro tiene más vivos. */
+export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice }): string | null {
+  if (inp.now - inp.lastSeenAt < HUNT_DRY_MS || !inp.next.ok) return null;
+  const here = inp.invasion?.maps.find((m) => m.map === inp.map)?.alive ?? 0;
+  if ((inp.next.alive ?? 0) <= here) return null;
+  return `${Math.round(HUNT_DRY_MS / 60_000)} min sin ver un dorado (${here} vivos acá, ${inp.next.alive} en ${inp.next.hunt.name})`;
+}
+/**
+ * Mejor mapa para cazar ahora (auto y encadenado): vivos (tope 30, más no se llegan a matar) × valor de
+ * sus cajas, más un bonus grande para el mapa del Golden Dragon. Solo mapas con más vivos que su
+ * stopAlive, al alcance del nivel y no hechos ya en esta invasión.
+ */
+// Un mapa sin zonas conocidas (nunca se vio un dorado ahí) se busca a ciegas: vale esta fracción.
+export const HUNT_UNKNOWN_FACTOR = 0.25;
+export function pickHuntMap(inp: { invasion: Invasion | null; level: number; done?: ReadonlySet<number>; dragonMap?: number | null; knownMaps?: ReadonlySet<number> }): HuntChoice {
+  const inv = inp.invasion;
+  if (!inv || inv.status !== 'active') return { ok: false, msg: 'no hay invasión activa' };
+  let best: HuntMap | null = null;
+  let bestScore = 0;
+  let bestAlive = 0;
+  for (const h of HUNT_MAPS) {
+    if (inp.level < h.reqLevel || inp.done?.has(h.map)) continue;
+    const alive = inv.maps.find((x) => x.map === h.map)?.alive ?? 0;
+    if (alive <= (h.stopAlive ?? AUTO_HUNT.stopAlive)) continue;
+    const known = !inp.knownMaps || inp.knownMaps.has(h.map) || inp.dragonMap === h.map;
+    const score = Math.min(alive, 30) * (h.value ?? 1) * (known ? 1 : HUNT_UNKNOWN_FACTOR) + (inp.dragonMap === h.map ? HUNT_DRAGON_BONUS : 0);
+    if (score > bestScore) { best = h; bestScore = score; bestAlive = alive; }
+  }
+  return best ? { ok: true, hunt: best, alive: bestAlive } : { ok: false, msg: 'no queda un mapa con dorados que valga la pena' };
+}
 export const HUNT_MAX_MS = 15 * 60_000;
 
 export type HuntChoice = { ok: true; hunt: HuntMap; alive: number | null } | { ok: false; msg: string };
@@ -180,33 +256,39 @@ export function shouldStopHunt(inp: { invasion: Invasion | null; map: number; si
   if (inv.status !== 'active') return 'no hay invasión activa';
   const alive = inv.maps.find((m) => m.map === inp.map)?.alive ?? 0;
   if (alive <= 0) return `no quedan dorados vivos en ${mapName(inp.map)}`;
-  if (inp.stopAlive != null && alive <= inp.stopAlive) return `quedan ${alive} dorados en ${mapName(inp.map)}: no vale la pena`;
+  if (inp.stopAlive != null && alive <= (HUNT_MAPS.find((h) => h.map === inp.map)?.stopAlive ?? inp.stopAlive)) return `quedan ${alive} dorados en ${mapName(inp.map)}: no vale la pena`;
   return null;
 }
 
 // ---------------------------------------------------------------------------
 // Cazador automático (port de hunter.js): con la invasión dorada activa y más de AUTO_HUNT.startAlive
-// vivos en un mapa al alcance, sale a cazar solo, una vez por invasión; corta con AUTO_HUNT.stopAlive
-// o menos vivos ("si quedan pocos no tiene sentido buscar"). Entre :47 y :51 no resetea, para llegar
-// a la invasión de las :50 con el nivel para entrar.
+// vivos en un mapa al alcance, sale a cazar solo, una vez por invasión; corta con el stopAlive del mapa
+// o menos vivos ("si quedan pocos no tiene sentido buscar") y encadena el siguiente mapa (pickHuntMap).
+// Entre :30 y :05 no resetea, para llegar a la invasión de las :50 en 400.
 // ---------------------------------------------------------------------------
-export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, noResetFromMin: 47, noResetToMin: 51 } as const;
+export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, noResetFromMin: 30, noResetToMin: 5, minLevel: 380 } as const;
 
 /** Clave de la invasión (la hora en la que empezó): una cacería automática por invasión. */
 export const invasionKey = (inv: Invasion) => Math.floor(inv.at / 3_600_000);
 
-export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null }): HuntChoice | null {
+export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; dragonMap?: number | null; knownMaps?: ReadonlySet<number> }): HuntChoice | null {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active' || inp.now - inv.at > AUTO_HUNT.freshMs) return null;
   if (inp.lastKey === invasionKey(inv)) return null;
-  const ch = chooseHuntMap({ invasion: inv, level: inp.level });
-  return ch.ok && (ch.alive ?? 0) > AUTO_HUNT.startAlive ? ch : null;
+  // Recién reseteado no le gana a un dorado (usuario, 2026-10-23): sigue farmeando hasta el 400.
+  if (inp.level < AUTO_HUNT.minLevel) return null;
+  const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps });
+  return ch.ok ? ch : null;
 }
 
-/** ¿Minuto de la hora en que no se resetea (para no perder la invasión de las :50)? */
+/**
+ * ¿Minuto de la hora en que no se resetea? Desde las :30 hasta las :05 (la invasión de las :50 dura 15
+ * min): el usuario, 2026-10-23: "si justo no está en lvl 400 no sirve" (recién reseteado no le gana a un
+ * dorado). Solo frena el reset: en 400 sigue farmeando.
+ */
 export function resetBlockedByInvasion(now: number): boolean {
   const m = new Date(now).getMinutes();
-  return m >= AUTO_HUNT.noResetFromMin && m < AUTO_HUNT.noResetToMin;
+  return m >= AUTO_HUNT.noResetFromMin || m < AUTO_HUNT.noResetToMin;
 }
 
 // ---------------------------------------------------------------------------

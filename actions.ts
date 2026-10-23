@@ -14,7 +14,7 @@ import { DIR_DELTA, log } from './util';
 // WalkRequest075 (code 0x10), que además empuja TargetRotation en el nibble alto
 // del mismo byte que StepCount. Con 0xD4 el server ignora el paso en silencio.
 // Un packet armado byte a byte, listo para sendToGS.
-function rawPacket(bytes: number[]): DataView {
+export function rawPacket(bytes: number[]): DataView {
   return new DataView(Uint8Array.from(bytes, (b) => b & 0xff).buffer);
 }
 
@@ -63,6 +63,15 @@ export function sendAreaSkill(skillIndex: number, x: number, y: number, dir: num
 // Ping (C3 0E/00) cada 5s con el TickCount, como el cliente: el server lo usa
 // para su detector de speed hack. AttackSpeed en 0, igual que en la captura.
 const botStart = performance.now();
+/**
+ * Levantar un drop: `C3 05 22 <id BE>` (PickupItemRequest, cifrado), como el cliente web. El bot
+ * mandaba PickupItemRequest075 (C1 22) y este server lo ignora en silencio: nunca levantó nada, ni el
+ * zen (Hume, 2026-10-12: 15 "Levanto" y el zen en 0).
+ */
+export function sendPickup(itemId: number) {
+  sendToGS(rawPacket([0xc3, 0x05, 0x22, itemId >> 8, itemId]));
+}
+
 export function sendPing() {
   const tick = Math.floor(performance.now() - botStart) >>> 0;
   sendToGS(rawPacket([0xc3, 0x0c, 0x0e, 0x00, tick, tick >> 8, tick >> 16, tick >>> 24, 0, 0, 0, 0]));

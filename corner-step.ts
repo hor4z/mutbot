@@ -6,7 +6,10 @@
 import { ATTACK_PACE_MS, PARTY_MATES, SKILL_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { buildPartyInvite, buildPartyKick } from './protocol097';
+import { duoRole, partyGain, wardSpot } from './duo';
+import { isFreshChar } from './farming';
 import { isPriorityChar, partyWanted } from './knowledge';
+import { teammates } from './team';
 import { topRank } from './rivals';
 import { sendHit, sendTargetedSkill } from './actions';
 import { castReach, isMage, mageNeedsPower, pickAttackSkill, useSkill } from './combat';
@@ -16,7 +19,7 @@ import { lootStep } from './loot';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 import { WARP_COOLDOWN_MS, WARP_SPOTS, warpAndWait } from './route';
 import { bot, expLog, isMate, monsterName, world } from './state';
-import { chebyshev, directionTowards, log, sleep } from './util';
+import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 
 // Esquina de Arena 2: afuera hasta (llena), desde cuándo está adentro, punto del camino, último buff,
 // el lado elegido (esquina/medio/este) y la exp ya anotada a ese lado.
@@ -25,6 +28,8 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
   rivalSpot: { name: string; x: number; y: number; at: number } | null; rivalSpotTaken: boolean; rivalSaidAt: Map<string, number>; sides: CornerSides; expSeen: number;
   // compañeros que ya estaban en la esquina (para anunciar cuando llega uno)
   matesHere: Set<string>;
+  // dúo de crianza (duo.ts): con quién y en qué rol se anunció
+  duoSaid: string | null;
   // exp/min medida en cada Arena de afuera (warp → promedio móvil), para decidir si la esquina rinde menos.
   altRates: Map<number, number> };
 
@@ -32,7 +37,7 @@ export type CornerState = { awayUntil: number; since: number | null; routeIdx: n
 const rivalPlayers = () => [...world.players.values()].filter((q) => q.name == null || !isMate(q.name));
 
 export function newCornerState(): CornerState {
-  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, inviteAt: 0, partyUse: null, rivalSpot: null, rivalSpotTaken: false, rivalSaidAt: new Map(), sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set() };
+  return { awayUntil: 0, since: null, routeIdx: null, routeAt: 0, buffAt: 0, mateBuffAt: 0, inviteAt: 0, partyUse: null, rivalSpot: null, rivalSpotTaken: false, rivalSaidAt: new Map(), sides: new CornerSides(), expSeen: 0, altRates: new Map(), matesHere: new Set(), duoSaid: null };
 }
 
 export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
@@ -59,6 +64,20 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
   const r = spinRange(skill?.number);
   const mons = [...ctx.npcs.values()];
   const here = inCorner(me);
+  // Dúo de crianza (duo.ts): un compañero a <= 15 con stats de otra liga (uno nuevo y uno fuerte, por
+  // isFreshChar; la estación los pasa en /api/team). El fuerte es padrino, el nuevo protegido.
+  const crew = teammates();
+  const meFresh = isFreshChar(world.resets, world.stats);
+  const duo = [...world.players].map(([id, q]) => {
+    const tm = q.name != null && isMate(q.name) ? crew.find((m) => m.char.toLowerCase() === q.name!.toLowerCase()) : undefined;
+    return { id, q, tm, role: tm ? duoRole(meFresh, tm.fresh) : null };
+  }).find((d) => d.role != null && Math.hypot(d.q.x - me.x, d.q.y - me.y) <= 15);
+  const duoKey = duo ? `${duo.q.name}:${duo.role}` : null;
+  if (here && duoKey && duoKey !== corner.duoSaid)
+    decide(duo!.role === 'padrino'
+      ? `Dúo con ${duo!.q.name} (nuevo): lo subo en party, yo planto la esquina.`
+      : `Dúo con ${duo!.q.name}: me subo con su party, me quedo cerca sin pelear.`);
+  if (here) corner.duoSaid = duoKey;
   if (here) {
     if (corner.since == null) {
       // Recién entrado: la exp y el tiempo de afuera no se le anotan a ningún lado.
@@ -82,21 +101,25 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     corner.matesHere = new Set(matesIn.map((q) => q.name!));
     // Party en el dúo según los datos (knowledge.ts: party sí/no, con experimentos). El DK invita al
     // compañero que está en la esquina (cada 60 s), o disuelve la party si los datos dicen que no.
-    const party = partyWanted(now);
-    if (!isMage() && PARTY_MATES && party.use !== corner.partyUse) {
+    // Con el dúo de crianza invita el padrino al protegido (la cuenta de duo.ts decide); el protegido
+    // nunca invita ni disuelve. Si no, como siempre: el DK.
+    const ward = duo?.role === 'padrino' ? duo : undefined;
+    const lead = duo?.role !== 'protegido' && (ward != null || !isMage());
+    const party = partyWanted(now, ward?.tm ? { name: ward.q.name!, gain: partyGain(world.level, ward.tm.level) } : undefined);
+    if (lead && PARTY_MATES && party.use !== corner.partyUse) {
       corner.partyUse = party.use;
       decide(`Party en el dúo: ${party.use ? 'sí' : 'no'} (${party.why}).`);
     }
-    if (!isMage() && bot.inParty && !party.use && now - corner.inviteAt > 60_000) {
+    if (lead && bot.inParty && !party.use && now - corner.inviteAt > 60_000) {
       corner.inviteAt = now;
       sendToGS(new DataView(buildPartyKick(0).buffer));
     }
-    const invitee = !isMage() && !bot.inParty && party.use && PARTY_MATES && now - corner.inviteAt > 60_000
-      ? [...world.players].find(([, q]) => q.name != null && isMate(q.name) && inCorner(q)) : undefined;
+    const invitee = lead && !bot.inParty && party.use && PARTY_MATES && now - corner.inviteAt > 60_000
+      ? (ward ? [ward.id, ward.q] as const : [...world.players].find(([, q]) => q.name != null && isMate(q.name) && inCorner(q))) : undefined;
     if (invitee) {
       corner.inviteAt = now;
       sendToGS(new DataView(buildPartyInvite(invitee[0]).buffer));
-      decide(`Invito a ${invitee[1].name} a party (dúo en la esquina).`);
+      decide(`Invito a ${invitee[1].name} a party (${ward ? 'dúo de crianza' : 'dúo en la esquina'}).`);
     }
     if (cornerFull({ rivals, inCornerSince: corner.since, now, rate1m: rate, altRate, level: world.level,
       // Mesa de agentes (2026-10-11): afuera (Arena 4 ~50-177M/min) rinde 5-8x menos que la esquina disputada.
@@ -113,6 +136,22 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       return;
     }
   } else corner.since = null;
+  // Protegido con el padrino en la esquina: no pelea (un Gaint Drakan le pega 580-640 y no lo mata);
+  // se para en el bolsillo de abajo, a la vista del padrino, y cobra su parte de cada kill de la party.
+  if (here && duo?.role === 'protegido' && inCorner(duo.q)) {
+    const spot = wardSpot(duo.q, mons);
+    bot.goalPoint = [spot.x, spot.y];
+    if (Math.hypot(spot.x - me.x, spot.y - me.y) > 0.8) {
+      ctx.phase = 'walk';
+      bot.doing = `dúo: me paro cerca de ${duo.q.name} (${spot.x},${spot.y}), sin pelear`;
+      await walkTowards(ctx, spot.x, spot.y);
+      return;
+    }
+    ctx.phase = 'wait';
+    bot.doing = `dúo: ${bot.inParty ? 'en party con' : 'espero la party de'} ${duo.q.name}, cobro sin pelear`;
+    await sleep(500);
+    return;
+  }
   // Monstruos que me pegaron en los últimos 5 s y están a <= 15 (los que pegan de lejos en las Arenas).
   for (const [id, t] of ctx.aggro) if (now - t > 5000 || !ctx.npcs.has(id)) ctx.aggro.delete(id);
   const aggro = [...ctx.aggro.keys()].map((id) => ctx.npcs.get(id)!).filter((m) => Math.hypot(m.x - me.x, m.y - me.y) <= 15)
@@ -194,13 +233,13 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
     if (skill && useSkill(st.id, skill)) {
       ctx.lastCastAt = Date.now();
       ctx.skillsUsed++;
-      await sleep(SKILL_PACE_MS);
+      await sleep(humanPace(SKILL_PACE_MS));
       return;
     }
     // Sin skill o sin maná: golpe normal al que esté pegado.
     if (chebyshev(world.x, world.y, st.x, st.y) <= 1) {
       sendHit(st.id, directionTowards(world.x, world.y, st.x, st.y));
-      await sleep(ATTACK_PACE_MS);
+      await sleep(humanPace(ATTACK_PACE_MS));
       return;
     }
   }
@@ -211,7 +250,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       corner.buffAt = now;
       ctx.lastCastAt = now;
       sendTargetedSkill(buff.index, bot.playerId);
-      await sleep(SKILL_PACE_MS);
+      await sleep(humanPace(SKILL_PACE_MS));
       return;
     }
     // En party, el mago le pone Soul Barrier (16) al compañero a <= 6 cada ~55 s (Swell Life del DK ya
@@ -224,7 +263,7 @@ export async function cornerStep(ctx: LoopCtx, corner: CornerState) {
       ctx.lastCastAt = now;
       sendTargetedSkill(barrier.index, mateNear[0]);
       bot.doing = `esquina de Arena 2: Soul Barrier a ${mateNear[1].name}`;
-      await sleep(SKILL_PACE_MS);
+      await sleep(humanPace(SKILL_PACE_MS));
       return;
     }
     // Sin nada a tiro: levantar cajas cerca, o caminar al grupo, o esperar en la esquina.

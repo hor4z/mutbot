@@ -41,6 +41,18 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   const m2 = new CampManager();
   m2.onArrival(84, 50, 50, 0, 250);
   ok('Arena: va a la zona de abajo (default aprendido)', m2.camp?.x === DOWN_ZONE_DEFAULT[84].x && m2.camp?.y === DOWN_ZONE_DEFAULT[84].y, m2.camp);
+  const local = new CampManager();
+  local.onArrival(83, 61, 114, 0, 307, true);
+  ok('personaje limitado: en Arena busca campamento cercano sin cruzar a zona lejana', local.camp === null);
+  const measured = new CampManager();
+  measured.onArrival(85, 78, 118, 0, 360, false, { x: 84, y: 48 });
+  ok('Arena 4 frágil: sale hacia la zona medida antes que la esquina peligrosa', measured.camp?.x === 84 && measured.camp.y === 48, measured.camp);
+  const measuredLocal = new CampManager();
+  measuredLocal.onArrival(85, 78, 118, 0, 360, true, { x: 84, y: 48 });
+  ok('Arena 4 limitada: no cruza el mapa por una zona medida', measuredLocal.camp === null, measuredLocal.camp);
+  const learnedArena = new CampManager(CAMP, new CampMemory(CAMP, [{ map: 85, x: 80, y: 55, rate: 180e6, n: 3, level: 360 }]));
+  learnedArena.onArrival(85, 78, 118, 0, 360, false, { x: 84, y: 48 });
+  ok('Arena 4: el campamento propio aprendido gana al predeterminado', learnedArena.camp?.x === 80 && learnedArena.camp.y === 55, learnedArena.camp);
   m2.camp = null;
   const far = mon(60, 50), near = mon(54, 50);
   ok('durante la llegada: solo pelea a <= 6, sin campamento', m2.pick(input(m2, { map: 84, now: 1 * S, me: { x: 50, y: 50 }, monsters: [far, near] }))?.id === near.id && m2.camp === null);
@@ -89,10 +101,26 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   mc.camp = { map: 3, x: 100, y: 100, since: 0, arrivedAt: null, lastSeen: 0, walkSince: 0, crowdSince: null, counted: false, why: '' };
   mc.pick(input(mc, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [mon(52, 50), mon(55, 52), mon(48, 47)] }));
   ok('3 monstruos juntos en el camino: me quedo ahí', mc.camp?.x === 50 && mc.camp.y === 50, mc.camp);
-  // Curiosidad: un tipo con < 3 kills a <= 8 va primero.
+  const planned = new CampManager();
+  planned.camp = { map: 3, x: 100, y: 100, since: 0, arrivedAt: null, lastSeen: 0, walkSince: 0, crowdSince: null, counted: false, why: '', planned: true };
+  planned.pick(input(planned, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [mon(52, 50), mon(55, 52), mon(48, 47)] }));
+  ok('campamento medido: 3 juntos en el camino no lo cambian', planned.camp?.x === 100, planned.camp);
+  const seeded = new CampMemory(CAMP, [{ map: 85, x: 70, y: 114, rate: 240e6, n: 2, level: 340 }]);
+  seeded.seed([{ map: 85, x: 71, y: 113, rate: 260e6, n: 30, level: 375 }, { map: 85, x: 82, y: 76, rate: 614e6, n: 9, level: 375 }]);
+  ok('semilla de la base: pisa el cercano y el mejor queda primero', seeded.bestForArrival(85, 380, () => true)?.x === 82 && seeded.list(85).length === 2, seeded.list(85));
+  const travel = new CampManager();
+  travel.camp = { map: 3, x: 100, y: 100, since: 0, arrivedAt: null, lastSeen: 0, walkSince: 0, crowdSince: null, counted: false, why: '' };
+  ok('tras 10 s de viaje sigue hacia el nuevo spot girando en camino', travel.pick(input(travel, { map: 3, now: 11 * S, me: { x: 50, y: 50 }, monsters: [mon(52, 50), mon(55, 52), mon(48, 47)] })) === null && travel.camp?.x === 100, travel.camp);
+  // Curiosidad solo si el tipo nuevo tiene un ROI comparable.
   const mq = new CampManager();
   const known = mon(51, 50, 1), novel = mon(56, 50, 2);
-  ok('curiosidad: tipo con < 3 kills primero', mq.pick(input(mq, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [known, novel], typeKills: { 1: 9, 2: 1 } }))?.id === novel.id);
+  ok('curiosidad: no persigue un tipo aislado con peor ROI', mq.pick(input(mq, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [known, novel], typeKills: { 1: 9, 2: 1 } }))?.id === known.id);
+  const closeNovel = mon(52, 50, 2);
+  ok('curiosidad: sí prueba un tipo nuevo cuando rinde parecido', new CampManager().pick(input(mq, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [known, closeNovel], typeKills: { 1: 9, 2: 1 } }))?.id === closeNovel.id);
+  const varied = new CampManager(CAMP, undefined, () => 0.99);
+  const peerA = mon(51, 50), peerB = mon(50, 51);
+  ok('objetivos de igual ROI varían sin perder EXP/s', varied.freePick(input(varied, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [peerA, peerB] }), { x: 50, y: 50 }, 8)?.id === peerB.id);
+  ok('campamentos de igual ROI también varían', varied.findCamp(input(varied, { map: 3, now: 5 * S, me: { x: 50, y: 50 }, monsters: [mon(40, 50), mon(60, 50)] }))?.x === 60);
 }
 
 // --- Mudanzas ---------------------------------------------------------------------------------
@@ -125,6 +153,17 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   ok('tras 90 s rindiendo < 50% de la vara: se muda', mp.camp === null, mp.events);
   ok('la vara es promedio móvil (0.7/0.3), no máximo', Math.abs(mp.best[3] - (10e6 * 0.7 + exp.rateSince(1 * S, 92 * S) * 0.3)) < 1, mp.best[3]);
   ok('al irse lo guarda en la memoria con la exp/min real', mp.memory.list(3)[0]?.x === 50 && mp.memory.list(3)[0].n === 1, mp.memory.dump());
+
+  const fading = mk();
+  const taper = new ExpLog(0);
+  fading.pick(input(fading, { map: 3, now: 1 * S, me: { x: 50, y: 50 }, monsters, exp: taper }));
+  for (let t = 2; t <= 60; t++) taper.add(200_000, t * S);
+  for (let t = 61; t <= 110; t++) taper.add(20_000, t * S);
+  fading.pick(input(fading, { map: 3, now: 110 * S, me: { x: 50, y: 50 }, monsters, exp: taper }));
+  ok('EXP reciente en caída obliga a buscar otro campamento', fading.camp === null && fading.events.some((e) => e.includes('exp reciente')), fading.events);
+  const other = mon(70, 50);
+  fading.pick(input(fading, { map: 3, now: 111 * S, me: { x: 50, y: 50 }, monsters: [mon(51, 50), other], exp: taper }));
+  ok('no reelige enseguida el campamento que acaba de abandonar', fading.camp?.x === 70, fading.camp);
 
   // Competencia: >= 3 jugadores 20 s Y exp < 70% de la vara.
   const players = [{ x: 52, y: 50 }, { x: 48, y: 50 }, { x: 50, y: 55 }];
@@ -192,6 +231,34 @@ const input = (m: CampManager, o: Partial<PickInput<Candidate>> & { now: number;
   ok('cualquier monstruo a <= 3 (el más cercano)', castCandidate(me, [a, b, c], null) === b);
   ok('el objetivo si está a <= 3', castCandidate(me, [a, b, c], a) === a);
   ok('nada a <= 3: no gira en el aire', castCandidate(me, [c], c) === null);
+}
+
+// --- Personaje estricto (elige por lo medido): potencia y exploración --------------------
+{
+  const P = 8900;
+  const mem = new CampMemory(CAMP, [{ map: 85, x: 80, y: 77, rate: 600e6, n: 10, level: 340 }]);
+  const m = new CampManager(CAMP, mem);
+  m.setPower(P, true);
+  m.seedDensity([{ map: 85, x: 80, y: 77, d: 6 }, { map: 85, x: 87, y: 114, d: 9 }, { map: 85, x: 59, y: 79, d: 1.7 }]);
+  m.onArrival(85, 61, 114, 0, 340, true);
+  ok('estricto: ignora lo medido sin potencia y explora el grupo más denso', m.camp?.x === 87 && m.camp?.y === 114 && !!m.camp?.planned, m.camp);
+  const campOf = (c: CampManager) => c.camp;
+  m.camp = null;
+  m.onArrival(85, 61, 114, 1000, 340, true);
+  ok('estricto: después explora el siguiente grupo, lejos de la llegada', campOf(m)?.x === 80 && campOf(m)?.y === 77, campOf(m));
+  m.camp = null;
+  m.onArrival(85, 61, 114, 2000, 340, true);
+  ok('estricto: no explora celdas con pocos monstruos', campOf(m)?.x !== 59, campOf(m));
+  mem.record(85, 87, 114, 200e6, 340, P);
+  const fresh = new CampManager(CAMP, mem);
+  fresh.setPower(P, true);
+  fresh.onArrival(85, 61, 114, 0, 340, true);
+  ok('estricto: va a lo medido con sus stats', fresh.camp?.x === 87, fresh.camp);
+  const strong = new CampManager(CAMP, new CampMemory(CAMP, [{ map: 85, x: 80, y: 77, rate: 600e6, n: 10, level: 340 }]));
+  strong.onArrival(85, 61, 114, 0, 340, false);
+  ok('fuerte: sigue usando lo aprendido sin potencia', strong.camp?.x === 80, strong.camp);
+  mem.record(85, 87, 114, 50e6, 340, 30000);
+  ok('medido con otros stats reemplaza al viejo', mem.list(85).find((k) => k.x === 87)?.power === 30000 && mem.list(85).find((k) => k.x === 87)?.n === 1);
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE CAMPAMENTOS PASARON' : `\n${fails} TEST(S) DE CAMPAMENTOS FALLARON`);

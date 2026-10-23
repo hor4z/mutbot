@@ -35,11 +35,11 @@ bun run agent       # el agente del navegador archivado (browser/serve-agent.ts,
 
 Flags del bot: ver la cabecera de `headless-bot.ts` (conexión, `--auto-seconds 0` = sin límite con
 reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, `--skills`, `--spots`,
-`--ws-port`, `--decision-log`, `--exit-if-in-use`). **Un flag desconocido corta al arrancar con
+`--ws-port`, `--decision-log`, `--exit-if-in-use`, `--list-chars`). **Un flag desconocido corta al arrancar con
 código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
 
 `--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
-sale con código 3 en vez de reintentar. Después de un corte sí reintenta (el server tarda en soltar
+sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal), y el personaje nuevo que el server no deja crear con código 6; la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
 la sesión vieja del propio bot). Lo pasa la estación.
 
 ## Estructura
@@ -66,14 +66,17 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
 | `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
-| `early.ts` | El arranque hasta el 100: salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
+| `duo.ts` | Dúo de crianza: reparto de exp de OpenMU (`baseExp`, `partyGain`), padrino/protegido por stats y dónde se para el protegido (lógica pura). Tests en `duo-tests.ts`. |
+| `power.ts` | ¿Puede el personaje con este monstruo? Daño y defensa con sus stats reales y la clase contra vida/daño/defensa de `monsters.json`: lo mata en <= 6 s perdiendo <= 35 % de la vida. Decide qué ataca y a qué campo va un personaje nuevo, y si va por un dorado. Tests en `early-tests.ts`. |
+| `equip.ts` | Equiparse con lo que levanta (personaje nuevo). Tests en `equip-tests.ts`. |
+| `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
 | `explore.ts` | Exploración (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
 | `farming.ts` | Exp por segundo (lógica pura): valor y elección de objetivo, exp/segundos por tipo, loot, ciclos, autoevaluación. |
 | `learning.ts` | Ruta fija por tramo (`chooseFixedRoute`), spots secos y lo que se guarda en `~/.mubot/learning.json`. |
-| `protocol097.ts` | Bytes del 0.97d sin estado: ítems de 5 bytes, daño 0x15, chat (leer y armar; susurro 0x02, party `~`, guild `@`, ServerMessage 0x0D), aggro (0x18/0x19), party, ItemDropRemoved, backoff. |
+| `protocol097.ts` | Bytes del 0.97d sin estado: ítems de 5 o 6 bytes, daño 0x15, chat (leer y armar; susurro 0x02, party `~`, guild `@`, ServerMessage 0x0D), aggro (0x18/0x19), party, ItemDropRemoved, backoff. |
 | `terrain.ts` | Terreno del `.att` del cliente: caminable, zona segura. |
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
 | `ui/` | La interfaz (React + Vite, radar Three.js). **`panel.html` y `estacion.html` se generan** con `bun run ui:build`: editar `ui/src`, no los HTML. Ver `ui/README.md`. |
@@ -258,11 +261,16 @@ en vivo" al final de la sección.
     reparte de a 200 puntos (`--stat-batch`). `--build` sigue como override.
 11. **Party**: `PartyRequest` (C1 05 40, id BE en el byte 3) se rechaza siempre
     con `C1 06 41 00 <id BE>` tras 0.6-1.5 s.
-12. **Loot valioso** (`isValuableDrop`): cajas 14/11, joyas 14/13,14,16,22,31 y
-    12/15, excelentes (6 bits bajos del byte 3 del ItemData) y guantes 10/1. El
-    zen y el equipo común ya **no** se levantan. Camina hasta el drop (≤ 12
-    tiles, 8 s de plazo) y lo levanta a ≤ 1. `ItemDropRemoved` (C2 21) saca del
-    registro lo que levantó otro o expiró.
+12. **Loot valioso** (`isValuableDrop`): siempre cajas 14/11 (primero, aunque otra cosa esté hasta 8
+    tiles más cerca), **Cristales 14/31** (la moneda del Mercado del server y del Alquimista) y
+    talismanes 14/7, 14/12 y 14/20; con 12 casillas libres o más, los excelentes (6 bits bajos del byte
+    3 del ItemData; se cristalizan). Las joyas no (no valen nada para comerciar). Con poco lugar avisa
+    "Bolsa casi llena" cada 10 min.
+    El zen, las pociones y el equipo común no (salvo personaje nuevo). Las cajas no se abren: lo hace
+    el usuario. Camina hasta el drop (≤ 12 tiles) y a ≤ 1 pide el pickup cada 0,6 s mientras siga en el
+    piso (8 s; 20 s una caja): el server no deja levantar cajas, excelentes ni cristales los primeros 2 s
+    ("The item is still falling") y los sortea. `ItemDropRemoved` (C2 21) o el ítem agregado lo sacan
+    del registro.
 13. **Registro de tramos por ciclo** (`CycleLog`, en `learning.json` →
     `cycles`, con el ciclo en curso para retomarlo): minuto al llegar a
     20/50/100/200/300/350/400. El informe muestra los últimos ciclos y la
@@ -459,6 +467,35 @@ Leer un `ItemData` de 12 bytes de ahí tiraba el proceso entero. Se arregló
 distinguiendo por tamaño de buffer en `parseDropsPacket()` (5+16·N para
 ítems, 14 fijo para dinero) antes de elegir qué clase usar.
 
+### Ítems de 6 bytes (desde 2026-10-23)
+
+Con la Jewel of Harmony el server pasó de ítems de 5 a **6 bytes** en todos lados: drop de una caja de 15 bytes
+(5 + 4 + 6), inventario de 6 + N·7, ítem agregado de 10 y mover ítem `C3 0D 24`. Los bytes 0-3 no cambian;
+`e[4] & 0x10` es el bit 5 del número, `e[4] & 0x20` la opción 380 y `e[5]` la armonía (función `x` del
+adaptador 0.97d del cliente). Con los parsers de 5 bytes el bot descartaba drops e inventario ("layout
+inesperado") y dejó de levantar cajas sin otro aviso. `protocol097.ts` acepta 5, 6 y 12.
+
+### Levantar drops y zen
+
+- Levantar: **`C3 05 22 <id BE>`** (`sendPickup`, PickupItemRequest cifrado), como el cliente web. El
+  bot mandaba `PickupItemRequest075` (C1 22) y el server lo ignoraba: nunca levantó nada.
+- Respuesta: `C3 22 <casilla> <ítem 5 bytes>` (ítem al inventario), **`C3 08 22 FE <zen total u32 BE>`**
+  (zen levantado: no llega InventoryMoneyUpdate) o `C3 04 22 FF` (no se pudo). El zen del suelo llega
+  como ítem 14/15 en `ItemsDropped`.
+
+### Mover ítems (equiparse)
+
+`C3 0C 24 <depósito> <casilla> <ítem 5 bytes> <depósito> <casilla>` (adaptador del cliente web para el
+0x24 de 19 bytes de season6; depósito 0 = inventario, equipo 0-11, bolsa 12-75). Respuesta `ItemMoved`
+(C3 24): byte 3 = casilla nueva o 0xFF (no se pudo: requisitos, clase o lugar). `equip.ts` lo usa con
+los 5 bytes crudos que ahora guarda el inventario (`raw`). **Probado en vivo** (Hume, 2026-10-12).
+
+### Reaparición tras morir
+
+`RespawnAfterDeath075` (C1 F3 04, 22 bytes en este server): X @4, Y @5, mapa @6. **No se manejaba**:
+después de morir el bot seguía en la posición de la muerte, caminaba desde ahí y el panel quedaba
+congelado (Hume, 2026-10-12). Ahora actualiza posición/mapa y cuenta como llegada (`onMapArrival`).
+
 ### Layouts que el parser generado rompe
 
 - **CharacterList**: el XML define el "Extended" (34 bytes/char), pero 0.97d
@@ -523,8 +560,23 @@ quedan fijas en el C#.
 
 Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 
+- **Personaje débil por stats** (`isFreshChar`: < 3000 puntos en total, aunque tenga resets):
+  - Reparte los puntos apenas los tiene, según la clase (`planFreshStats`: DK fuerza 55 %, agilidad 25 %, vitalidad 20 %).
+  - Farmeo inicial en Lorencia hasta el 20 por campos (este: arañas/Budge; norte: Bull Fighter; oeste:
+    Hound; sur: Lich), eligiendo campo y monstruos con `power.ts` (sus stats, no el nivel). Campamento
+    estable: empate → el más cercano; se muda solo por un grupo de 3+.
+  - No ataca dorados con los que no puede ni sale a cazar en las invasiones.
+  - Levanta zen, pociones (14/0-3), joyas y, con lugar en la bolsa, equipo; se equipa solo lo mejor
+    (`equip.ts`: lo intenta y si el server lo rechaza no lo vuelve a probar).
+  - No se va de Lorencia (la ruta no lo mueve) hasta nivel 20 + 5.000 zen (warp a Devias 4: 2.500) +
+    poder con el Lich (`readyToLeave`). Hume en el 27 con 0 zen intentaba el warp y volvía al Lich.
+- **Selector de mapa por exp medida** (`farm-middleware.ts`): manda desde el nivel 100 para el personaje que no hace la esquina (el modelo de `power.ts` no le aprueba Drakan); el que la hace sigue con la ruta fija y la esquina. Opciones: Arena 4, 3, 2, 1 y las entradas de Devias que su nivel habilita. Cada spot guarda su exp/min neta (desde el warp, con la caminata, prueba de 150 s y una muestra por minuto en promedio móvil) junto con el nivel y la **potencia** (suma de stats); solo se compara lo medido a ±80 niveles y ±20 % de potencia (tras un grand reset la exp de antes no cuenta: Hume con 2 resets descartaba Arena 3 a 100M porque con 63 resets Arena 2 daba 261M, y terminaba en Arena 1 a 0,9M/min). Primero prueba las Arenas sin medir de arriba hacia abajo; Arena 1 y Devias solo si las Arenas medidas rinden < 40M. Después va a la que más rinde y se queda salvo que otra rinda 15 % más; una muerte saca el mapa 10 min y un mapa con el monstruo común imposible (modelo, Twisting Slash ~3×) no se prueba. `seedRouteFromDb` (`route.ts`) siembra los puntajes con los ticks de ClickHouse del mismo personaje (resets ±3, nivel ±80, 3 días), así no repite la gira en cada conexión. El plan B de Arena 1 de la ruta fija mira el nivel real, no el de la ruta. En `camp.ts` ese mismo personaje (`setPower(..., strict)`) solo usa campamentos medidos con su potencia y **explora** los grupos densos de monstruos (celdas de 12 con >= 4, densidad vista en vivo y de la base de todos los personajes, una vez cada 20 min) en vez de quedarse junto a la llegada; lo que mide queda en la memoria con su potencia. Además, una caída de la EXP reciente respecto al promedio del campamento obliga a buscar otro grupo visible; un campamento **planeado** (memoria, exploración, zona medida o zona de abajo) no se cambia en camino por 3 monstruos juntos. `seedCampsFromDb` carga los campamentos de Arena 3/4 medidos en ClickHouse (celda 8×8, tramo de 50 niveles, >= 2 min). Un warp fijado desde el panel sigue mandando.
+- **Variación humana sin perder ROI**: entre objetivos o centros de campamento a ≥ 95 % del mejor valor estimado, `camp.ts` sortea uno; mantiene el objetivo hasta que muere para no zigzaguear. La estación inyecta `Math.random`; los tests usan un generador fijo. `humanPace()` agrega hasta 12 % de variación a pasos, golpes y skills sin bajar nunca `WALK_PACE_MS`, `ATTACK_PACE_MS` ni `SKILL_PACE_MS`.
+- **Arena 4 con poca vida (dato del 2026-10-18)**: Hume murió tres veces cerca de (85,14–22), mientras la zona (84,48) sostuvo ~127M/min desde nivel 360 y >200M/min desde 380. Cuando un personaje con <5000 HP ya tiene potencia para salir de la entrada, va primero a (84,48). Un campamento propio aprendido manda antes; uno sin potencia suficiente sigue buscando cerca de la llegada.
+- **Presencia de otros jugadores sin lista de nombres** (`observer.ts`): registra a cualquiera que permanezca quieto a ≤16 tiles durante 30 s o acompañe al bot durante 45 s. No concluye que sea un guardia ni usa el ranking como prueba. A lo sumo cada 2 min prueba otra entrada de Devias o cambia de campamento; en Arena 2 suspende la esquina 3 min. **Solo para personajes limitados**: con stats completos lo cubre el hambre (en el MU casi siempre hay alguien quieto cerca; sacaba a Hume de la esquina 8-19 veces por hora). En Lorencia, para un personaje débil (`isFreshChar`; con stats completos va al Lich igual), si un jugador está a ≤ 10 del Lich de destino (no en el camino ni en la puerta: es de pasada), el arranque usa otro campo hasta poder warpear a Devias; ese campo se elige una vez por llegada (antes iba y venía entre Hound y Bull Fighter cada 4 s). Esto evita repetir el mismo paso por la puerta ocupada sin reaccionar a cada encuentro breve.
 - **Arranque** (`early.ts` + `early-step.ts`), debajo del 100 en Lorencia y Devias:
-  - Lorencia: directo al Lich (134,202 ±3) con una salida variada en cada reset.
+  - **Farmeo inicial** (personaje nuevo, nivel 1 a 9 en Lorencia, `INITIAL` en `early.ts`): solo monstruos de hasta 3 niveles más que él (nivel de `data/monsters.json`; sin dato, no). Acampa en el grupo más grande de esos a ≤ 20 tiles y, sin ninguno a la vista, se aleja del pueblo (135,128) hacia el Lich en proporción al nivel. En el 10 pasa al farmeo avanzado: el plan del Lich.
+  - Lorencia (10-19): el server elige el mismo punto de aparición tras `/reset`; el bot escoge entre siete rutas caminables al Lich (134,202 ±5), excluye las dos últimas y las guarda en `learning.json` (`lorenciaRoutes`). Cinco salen por la puerta sur (paso (133,166)) y se abren después; dos salen por la puerta oeste o la este y rodean por afuera (~22 s más).
   - Devias 4: campamento en el grupo más denso junto a la llegada (o el spot 69,181, solo si está a ≤ 25 de la llegada: desde Devias 3 Horaz cruzaba el mapa a pie); objetivos a ≤ 8 del campamento.
   - **Sin hambre**: solo cambia de spot si Devias está llena (3+ jugadores en el campamento por 20 s) o si pasan 60 s en el mapa sin exp. Con jugadores cerca cuenta como llena; sin nadie, como mapa vacío. En los dos casos va primero a otra entrada de Devias y solo a Arena 1 (rinde ~0,4M/min) si todas están llenas.
 - **Esquina de Arena 2** (`corner.ts` + `corner-step.ts`), del 100 al reset:
@@ -540,6 +592,10 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   - **Mago solo** (sin rivales, sin compañero, spot abierto): se centra en el grupo más grande (`mageCenter`) para que Evil Spirit agarre la mayor cantidad; se mueve si allá agarra 2+ más. El skill de área que confirma el server se loguea ("Tiro Decay (38)", `ownAreaSkill`, 0x1E de 9 bytes).
   - **Party**: el DK invita al compañero que está en la esquina (`buildPartyInvite`, C1 05 40) cada 60 s si no están en party y los datos no dicen lo contrario (`knowledge.ts`); para disolverla manda PartyPlayerKick índice 0 (sin verificar en vivo).
   - **Party solo entre compañeros**: con la estación (MUBOT_MATES) o `--party-mates` se acepta la invitación de un compañero; el resto se rechaza. Con party la exp se reparte (en el navegador los ciclos de Horaz pasaron de ~9 a ~13,6 min): se está midiendo en el dúo de la esquina. En party, el mago le pone Soul Barrier (16) al compañero a <= 6 en los huecos del giro; Swell Life (48) del DK ya alcanza a la party.
+- **Dúo de crianza** (`duo.ts`; usuario: "que Hume los ayude a crecer"): un compañero a <= 15 con stats de otra liga (`isFreshChar`, que la estación pasa como `fresh` en `/api/team`) arma el dúo; el fuerte es **padrino** y el nuevo **protegido**, sin importar la clase.
+  - Reparto de exp de OpenMU (Party.cs): la base sale del **nivel promedio** de la party (`baseExp`), el pozo es base × miembros × 1,05^(n−1) y a cada uno le toca según su nivel. Con un compañero bajo el castigo por nivel alto se achica: Hume 300 con Zamu 100 contra Gaint Drakan saca ~2,1× por kill que solo (`partyGain`), y Zamu ~1/3 de eso.
+  - El padrino invita al protegido cada 60 s cuando `partyGain` >= 1,1 (`partyWanted` con `ward`: manda la cuenta, sin experimentos ni la regla de carrera). El protegido nunca invita ni disuelve.
+  - El protegido con el padrino en la esquina no pelea (un Gaint Drakan pega 580-640): se para en el bolsillo de abajo ((7,16), (8,15), (6,15) o (3,12), el de menos monstruos a <= 4 y a <= 9 del padrino, `wardSpot`) y cobra. Debajo del 100 (el warp a Arena 2) farmea solo con el arranque: ahí la party no rinde (la parte va por nivel y los monstruos son bajos). Sin probar en vivo todavía: el alcance del reparto (los que ven al que mata) y si el bolsillo es seguro.
 - **Equipo** (`team.ts`; la estación hace de canal: `GET/POST /api/team`, `MUBOT_TEAM_URL`):
   - Cada bot consulta cada 5 s dónde están los compañeros y los pedidos de ayuda vigentes (2 min).
   - **Pide ayuda en la esquina** con 2+ rivales, sin compañero y rindiendo < 150M/min (como mucho una vez cada 3 min).
@@ -556,7 +612,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Carrera de resets del prioritario** (`isPriorityChar`, `MUBOT_PRIORITY`, por defecto Horaz; meta: top 10 en 1-2 días): no sale a cazar ni contesta pedidos de dorados (van para Melu), el reset no se frena por invasiones, y sin party salvo que los datos digan que le suma.
 - **Mesa de agentes (PR #39)**: el prioritario vuelve siempre a la esquina (sin `noReturnLevel`) y `cornerFull` nunca saca al prioritario ni al mago del dúo; el apoyo en el 400 espera (≤ 20 min) a que el prioritario resetee si él está en 100-399; en Devias el prioritario no cae a Arena 1 y una entrada llena vale 90 s debajo del 100; la huida por PK del prioritario evita el mapa 1 min; vigía `long_cycle` si un ciclo pasa de 15 min.
 - **Rival del top cerca** (`rivals.ts`: top 20 del ranking de la base, refresco cada 10 min): a ≤ 10 tiles se anuncia en Decisiones (cada 5 min); el mago le disputa con Decay el grupo a **cualquier rival** a ≤ 10 de Horaz (o de ella si no lo ve) (`contestTarget`, sin atacarlo; **nunca** apunta a monstruos a ≤ 4 + radio del giro de Horaz, para no sacarle kills a él; usuario: "que Melu moleste donde pegue él o cualquiera que esté cerca de Horaz") y el prioritario, sin nada a tiro, ocupa el lugar que ese rival dejó en la esquina (15 s a 3 min después de irse, ej. reseteando). Nunca se ataca ni se persigue al rival.
-- **Cazador automático** (`autoHuntChoice`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y más de 25 vivos en un mapa al alcance (Lorencia, Noria, Devias), sale a cazar solo, una vez por invasión. Corta con 20 o menos vivos, con la invasión terminada o a los 15 min. Entre :47 y :51 no resetea.
+- **Cazador automático** (`autoHuntChoice` / `pickHuntMap`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y nivel 380 o más, sale a cazar solo al mejor mapa: vivos (tope 30) × valor de sus cajas (Noria 1, Lorencia y Devias 2, Atlans 3,5, Tarkan 4), más un bonus para el mapa del Golden Dragon, que el server avisa a las :50 con `[Devias] Golden invasion!` (`dragonMapFromServerMessage`, `bot.dragonMap`). Sigue en el mapa hasta que quede en **0** (usuario: "hasta que no quede ninguno, prioridad máxima"); se va antes solo si pasan 2 min sin ver un dorado y otro mapa tiene más vivos (`huntDryOut`). También corta con la invasión terminada o a los 15 min. Cada corte queda en la base (`hunt_end`: mapa, dorados vistos, minutos), y **encadena** el siguiente mapa que no haya hecho (el 2026-10-23 Devias se vació en 3 min con Noria en 38). Un mapa sin zonas conocidas (`mapsWithZones`, `zones.ts`: celdas donde se vio cualquier dorado, de `golden_seen`) vale ×0,25, salvo el del dragón: sin zonas recorre a ciegas y da vueltas (Atlans). Cazando va primero a las zonas de dragones y después a las de cualquier dorado; si el dragón al que le pega sale de la vista, va 6 s a donde estaba en vez de repartir el daño con otro dorado. Una caja de otro ("doesn't belong to you") se suelta ya y se reintenta a los 10 s. Entre :30 y :05 no resetea (llegar a la invasión en nivel 400). Contra los dorados, correa (`stickyGolden`, `golden.ts`): no suelta al que le pega salvo por un dragón; y el skill más fuerte a un objetivo (`goldenSkill`, `combat.ts`: Death Stab 43, si no Rageful Blow 42, respetando el nivel mínimo 160/170 del Blade Knight). El caballero mantiene Swell Life (48) cada ~55 s. Los avisos del server van al log (`Server: …`) y a la base (`server_msg`); "The item is still falling" y "This item doesn't belong to you" son los 2 s de espera y la caja de otro (la del que más daño hizo).
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
 
 ## Datos y aprendizaje (ClickHouse local)
@@ -578,7 +634,7 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
   resultado de cada decisión (exp/min 5 min antes contra 5 después), la base para aprender qué conviene.
 - Pelea por los spots: cada tick guarda kills en scope de los últimos 5 s (nuestras, del compañero, de
   rivales y el rival que más mató) y dónde está el compañero (`mate_spot`); `v_spot_fight` muestra qué
-  parte del sector es nuestra, solos/juntos/separados. Versión (commit) y política (perillas) en cada fila.
+  parte del sector es nuestra, solos/juntos/separados. Versión (commit, con `+<hash del diff>` si el árbol tiene cambios sin commitear) y política (perillas) en cada fila.
   La estación guarda el ranking cada hora (`ranking`, `v_rival_pace`: ritmo de resets de los rivales).
 - `bun run aprender` (la estación lo corre cada 30 min) muestra las vistas (`v_party`, `v_exp_spot`,
   `v_skill`, `v_killers`, `v_rivals`, `v_cycles`, `v_golden`) y escribe `~/.mubot/knowledge.json`.
@@ -593,19 +649,50 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 navegador, les pone una rutina y muestra adentro el panel de cada bot (iframe a su `--ws-port`) o
 su consola.
 
-- **Personajes:** cada `.env` / `.env.<nombre>` de la raíz con `MUBOT_USER`, `MUBOT_PASS` y
-  `MUBOT_CHAR` (`.env.example` no cuenta). La estación no lee ni pasa la contraseña: lanza
-  `bun --env-file=<archivo> run headless-bot.ts --allow-remote --proxy … --auto-seconds 0
-  --ws-port 879x --exit-if-in-use` sin heredar ningún `MUBOT_*` propio. Servidor por defecto el
-  de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` / `MUBOT_CS_PORT` lo cambian.
+- **Personajes:** salen de la base SQLite `~/.mubot/mubot.db` (`estacion-db.ts`, ver "Base de cuentas"
+  en README.md): `servers`, `accounts` (con `status` active/blocked) y `characters`. Los `.env` /
+  `.env.<nombre>` de la raíz se importan solos al arrancar (idempotente; `.env.example` no cuenta) y
+  después manda la base. La estación lanza `bun --env-file=/dev/null run headless-bot.ts --user <u> --char
+  <C> --allow-remote --proxy … --auto-seconds 0 --ws-port 879x --exit-if-in-use` con `MUBOT_PASS` (y
+  `MUBOT_CREATE_CLASS` si tiene clase) por entorno, sin heredar ningún `MUBOT_*` propio; `/dev/null`
+  evita que Bun cargue el `.env` de la raíz (otro personaje). Una cuenta juega con un solo personaje a
+  la vez (`connect` lo rechaza). Código 4 (AccountBlocked) marca la cuenta `blocked`; entrar al mundo,
+  `active`. Servidor por defecto el de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` /
+  `MUBOT_CS_PORT` lo cambian.
+- **Flujo de la interfaz:** sin nada elegido al abrir; primero la cuenta (con su estado), después el
+  personaje (o uno nuevo), después el panel. Arriba, una miga de pan vuelve a cada paso.
+- **Personaje nuevo** (botón "Nuevo personaje" en Personajes; `POST /api/do {action:'create', user, pass, char, cls, existing}`):
+  - Registra la cuenta con el mismo endpoint que "Crear cuenta" del cliente web: `POST https://<host del
+    proxy>/api/register {username, password}` (`MUBOT_REGISTER_URL` lo cambia). Errores `taken` / `throttled`.
+    Con "ya tengo la cuenta" (`existing`) no registra.
+  - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles. Nombre de 4
+    a 10 letras o números.
+  - **Buscar mis personajes** (`{action:'probe', user, pass?}`, sin `pass` usa la de la base): lanza
+    el bot con `--list-chars`, que entra, imprime `MUBOT_CHARS <json>` (nombre y nivel) y sale sin elegir
+    personaje ni entrar al mundo (3/4/5 si el login se rechaza; 4 marca la cuenta `blocked`). Uno por vez,
+    30 s de plazo. **Probado en vivo** (2026-10-12).
+  - **Personaje que ya existe** (cuenta existente + "El personaje ya existe"): `cls: null`, no se crea
+    nada; si el nombre no está en la cuenta el bot sale con código 6 en vez de entrar con otro
+    (`CHAR_EXPLICIT`: con `--char`/`MUBOT_CHAR` ya no cae al primero de la lista).
+  - Guarda cuenta y personaje en la base (clase dk, dw, elf, mg) y lo conecta en pausa. La clave no se
+    loguea ni vuelve al navegador. `{action:'add', user, char, cls}` suma un personaje a una cuenta ya
+    guardada (la clave la pone la estación).
+  - El bot (`world.ts:createCharacter`), si `MUBOT_CHAR` no está en la cuenta y hay `MUBOT_CREATE_CLASS`,
+    manda `C1 0F F3 01 <nombre 10 bytes> <clase << 2>` (número de red: DW 0, DK 4, Elf 8, MG 12; el
+    adaptador del 0.97d no lo toca) y espera F3/01: byte 4 = 1 creado. Éxito y error comparten código y
+    llegan como `CharacterCreationSuccessful`. Si falla sale con **código 6** y no reintenta. MG pide
+    desbloqueo (`UnlockFlags` del CharacterList). **Sin verificar en vivo.**
+  - `GET /api/names`: 8 nombres sugeridos (`names.ts`: raíces + finales de fantasía, siempre de 4 a 10
+    letras, sin repetir los personajes de la estación).
 - **Puertos:** estación 8787 (`ESTACION_PORT`), agente del navegador 8788, bots 8791, 8792…
-  (por orden alfabético del archivo de env).
+  (por orden alfabético del personaje).
 - **Rutinas** (`estacion-logic.ts:routineCommands`): se traducen a órdenes del panel y se mandan por
   el WebSocket del bot cuando entra al mundo (`mode` ≠ `connecting` y nivel > 0). Farmear = `farm`;
   spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); pausa = `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en
   el panel del bot.
 - **Los bots sobreviven a la estación:** corren con `setsid` y escriben en
-  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas). Al arrancar
+  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas; al lanzarlo, un log de más
+  de 50 MB se rota a `.log.1`). Al arrancar
   (y cada 2 s) la estación busca en `/proc` los `headless-bot.ts` de cada cuenta (`--user`,
   `--env-file`, `MUBOT_USER` o, sin nada, el `.env`) y los adopta con su `--ws-port`; uno sin
   `--ws-port` solo se puede desconectar. Desconectar = `SIGTERM`.
@@ -650,6 +737,10 @@ página abierta en el navegador podía mandarle órdenes al bot). Clientes sin
 cacería), `command-result` y `decision` (el diario).
 
 `panel-state` sale de lo que el bot ya trackea:
+- `equipment` (slots 0-11) e `inventory` (12-75, grilla de 8×8): grupo, número, nivel, excelente, nombre
+  y tamaño (`itemInfo`, de `data/items.json`). El panel los dibuja en "Personaje" con los íconos de
+  `assets/items/item_<grupo>_<número>_<nivel>[_e].png` (servidos en `/radar-assets/items/...`; no van al
+  repo). Hay íconos por escalón de nivel (0, 3, 5…15): se prueba el nivel exacto, el escalón y el 0.
 - `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
   (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
   primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).

@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, ownAreaSkill, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, ownAreaSkill, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, decodeItemDetail, ownTargetedSkill, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -239,6 +239,19 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   ok('drop de zen en 12 bytes: 14/15', zen?.length === 1 && zen[0].group === 14 && zen[0].num === 15 && zen[0].id === 0xd0, zen);
   ok('drop: largo inesperado → null', parseItemsDropped(hex('c2000a20010001')) === null);
   ok('caja 14/11: e[0] = 0xcb con el bit alto en e[3]', JSON.stringify(decodeItem5(Uint8Array.from([0xcb, 0x00, 0x01, 0x80, 0]))) === JSON.stringify({ group: 14, num: 11, level: 0, excellent: false }));
+  // Desde la armonía (2026-10-23) el server manda los ítems en 6 bytes: drop de 15 e inventario de 6 + n * 7.
+  const box6 = parseItemsDropped(hex('c2000f2001' + '8123' + '6496' + 'cb2801800000'));
+  ok('drop de 6 bytes: caja +5', box6?.length === 1 && box6[0].id === 0x0123 && box6[0].x === 100 && box6[0].y === 150 && box6[0].group === 14 && box6[0].num === 11 && box6[0].level === 5);
+  const inv6 = parseInventory(hex('c4000df3100114cb28018000' + '00'));
+  ok('inventario de 6 bytes', inv6?.length === 1 && inv6[0].slot === 20 && inv6[0].num === 11 && inv6[0].raw?.length === 6);
+  ok('6 bytes: e[4] & 0x10 es el bit 5 del número', decodeItem5(Uint8Array.from([0x01, 0, 0, 0, 0x10, 0])).num === 33);
+  // Dragon Helm (7/1) +9, skill, luck, opción +12 (3), 2 excelentes, ancient 5, 380, armonía 3/7.
+  const det = decodeItemDetail(Uint8Array.from([0xe1, 0x80 | (9 << 3) | 0x04 | 0x03, 0x30, 0x03, 0x25, 0x37]));
+  ok('detalle: nivel, skill, luck, opción, excelentes, ancient, 380, armonía', det.group === 7 && det.num === 1 && det.level === 9 && det.skill && det.luck && det.option === 3 && det.excCount === 2 && det.ancient === 5 && det.opt380 && det.harmony?.option === 3 && det.harmony?.level === 7, det);
+  ok('detalle: opción +16 con el bit 0x40 de e[3]', decodeItemDetail(Uint8Array.from([0xe1, 0x48, 0x30, 0x40, 0, 0])).option === 4);
+  ok('skill a un objetivo mío (Death Stab 43)', ownTargetedSkill(Uint8Array.from([0xc3, 8, 0x19, 43, 0x00, 0x2a, 0x01, 0x23]), 0x2a) === 43);
+  ok('skill a un objetivo de otro → null', ownTargetedSkill(Uint8Array.from([0xc3, 8, 0x19, 43, 0x00, 0x2b, 0x01, 0x23]), 0x2a) === null);
+  ok('ítem agregado de 6 bytes', parseItemAdded(Uint8Array.from([0xc3, 10, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0, 0x21]))?.raw?.length === 6);
   ok('ítem agregado de 5 bytes', parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.slot === 20 && parseItemAdded(Uint8Array.from([0xc3, 9, 0x22, 20, 0xcb, 0x08, 1, 0x80, 0]))?.num === 11);
 }
 

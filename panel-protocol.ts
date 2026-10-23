@@ -60,7 +60,8 @@ export type PanelState = {
     stats: { str: number; agi: number; vit: number; ene: number; cmd?: number };
     points: number; zen: number | null;
   };
-  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null };
+  /** pinned: spot fijo elegido desde el panel (la ruta no lo cambia hasta "farm") */
+  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null; pinned?: boolean };
   exp: { perMin1: number; perMin5: number };
   cycle: CycleRecord | null;
   cycles: CycleRecord[];
@@ -73,6 +74,8 @@ export type PanelState = {
   nearby: { monsters: number; players: number };
   /** slots de equipo 0-11 ocupados (del inventario que trackea el bot) */
   equipment?: EquippedItem[];
+  /** inventario (slots 12-75) */
+  inventory?: EquippedItem[];
   /** últimas ~60 posiciones (una cada 2 s), solo del mapa actual */
   trail?: [number, number][];
   /** campamento / punto al que va el bot ahora, si tiene uno */
@@ -90,7 +93,8 @@ export type PanelState = {
   session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
 };
 
-export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean };
+/** Ítem del personaje. `slot`: 0-11 equipo, 12-75 inventario (grilla de 8×8 desde el 12). `w`×`h`: casillas que ocupa. */
+export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean; name?: string; w?: number; h?: number };
 
 /** Órdenes que acepta el bot. Cualquier otra se rechaza. */
 export type PanelCommand =
@@ -105,9 +109,11 @@ export type PanelCommand =
    */
   | { cmd: 'say'; text: string; to?: string; channel?: 'normal' | 'party' | 'guild' }
   /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
-  | { cmd: 'warp'; warp: number };
+  | { cmd: 'warp'; warp: number }
+  /** leer el baúl (Baz, Lorencia) con el equipo y la bolsa: solo lee, no mueve nada */
+  | { cmd: 'vault' };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -123,7 +129,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {

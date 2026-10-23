@@ -10,15 +10,16 @@ Corre **solo contra infraestructura propia o con permiso**.
 
 ```bash
 bun install
-
-# Credenciales: un archivo de env por personaje en la raíz (están en .gitignore, nunca en el código)
-#   .env        → MUBOT_USER=...  MUBOT_PASS=...  MUBOT_CHAR=Horaz
-#   .env.melu   → MUBOT_USER=...  MUBOT_PASS=...  MUBOT_CHAR=Melu
-
 bun run estacion          # http://127.0.0.1:8787/panel
 ```
 
-En la estación, elegí la rutina del personaje y tocá **Conectar**. Las rutinas son:
+En la estación, el flujo es **cuenta → personaje → panel**:
+
+1. **Elegí una cuenta** (cada una muestra su estado: *Activa* o *Bloqueada*) o creá una con
+   **Nueva cuenta**: la registra en el server, con el mismo formulario que "Crear cuenta" del juego.
+2. **Elegí un personaje** de esa cuenta o creá uno con **Nuevo personaje** (clase y nombre; el dado
+   sugiere nombres de fantasía). El bot lo crea en el server al conectarlo y lo deja en pausa.
+3. Elegí la rutina y tocá **Conectar**. Las rutinas son:
 
 - farmear por la ruta;
 - farmear fijo en un spot;
@@ -34,6 +35,26 @@ A la derecha se ve el panel del bot (mapa, nivel, exp, log) o su consola. **Desc
   computadora, la base vuelve sola (Docker) pero la estación no: volvé a correrla y conectá a los
   personajes.
 - Cuando quieras jugar vos en el navegador, desconectá el personaje desde la estación.
+
+## Base de cuentas (SQLite)
+
+Cuentas y personajes viven en una base SQLite local, **`~/.mubot/mubot.db`** (fuera del repo, permisos
+600 porque tiene las claves; `MUBOT_DB_FILE` la cambia). La crea sola la estación con `bun:sqlite` (viene
+con Bun, sin dependencias) y la actualiza con migraciones versionadas (`estacion-db.ts`).
+
+| Tabla | Qué guarda |
+|---|---|
+| `servers` | Servidor del juego (proxy, connect server). Todo cuelga de uno, para sumar otros sin mezclar cuentas. |
+| `accounts` | Cuenta (`username`, `password`) por server y su `status`: `active` o `blocked` (el server contestó AccountBlocked; vuelve a `active` al entrar). |
+| `characters` | Personaje (nombre único, sin importar mayúsculas), cuenta, `class` (dk/dw/elf/mg, para crearlo), última rutina y de qué `.env` se importó. Hasta 5 por cuenta, uno jugando a la vez. |
+
+- Los `.env` / `.env.<algo>` de la raíz (MUBOT_USER/PASS/CHAR) **se importan solos** al arrancar la
+  estación; después manda la base. `bun run bot` (un bot suelto) sigue leyendo `.env`.
+- La clave nunca va en la línea de comandos: la estación se la pasa al bot por variable de entorno.
+- Mirarla: `sqlite3 ~/.mubot/mubot.db 'SELECT username, status FROM accounts'` (hay que instalar
+  `sqlite3`) o cualquier visor de SQLite. Para cambiar el esquema, sumá una migración al final de
+  `MIGRATIONS` (nunca edites una vieja).
+- Los datos de juego (exp, muertes, rivales) van a ClickHouse: ver "Datos y aprendizaje".
 
 ## Cómo farmea
 
@@ -89,7 +110,9 @@ bun run proxy       # proxy WebSocket → TCP para un server local
 
 | Archivo | Qué es |
 |---|---|
-| `estacion.ts`, `estacion.html`, `estacion-logic.ts` | La estación: personajes, conectar/desconectar, rutinas, dorados vistos. |
+| `estacion.ts`, `estacion.html`, `estacion-logic.ts` | La estación: cuentas, personajes, conectar/desconectar, rutinas, dorados vistos. |
+| `estacion-db.ts` | La base de cuentas y personajes (SQLite, ver "Base de cuentas"). |
+| `names.ts` | Generador de nombres de fantasía para personajes nuevos. |
 | `headless-bot.ts` y sus módulos | El bot: entrada (`headless-bot.ts`), conexión, mundo, combate, ruta, reset, panel y el loop de farmeo (`farm-loop.ts`). Ver la tabla de `AGENTS.md`. |
 | `corner.ts` | La esquina de Arena 2. |
 | `camp.ts`, `explore.ts`, `farming.ts`, `learning.ts` | Campamentos, exploración, exp por segundo, ruta fija y lo que aprende (`~/.mubot/learning.json`). |

@@ -18,7 +18,11 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_NAME, PASSWORD, USERNAME } from './config';
+import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
+import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
+import { journal } from './journal';
+import { classFamily, isFreshChar } from './farming';
+import { farmMiddleware, statPower } from './farm-middleware';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
 import { scheduleEventPolls } from './events';
 import { isMonsterType, isTownNpcType } from './explore';
@@ -183,7 +187,16 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number;
 // campamento (camp.ts).
 export function onMapArrival() {
   bot.lastArrivalAt = Date.now();
-  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level);
+  const f = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
+  const prof = farmMiddleware.profile(f, world.level, world.skills.has(41), bot.lastArrivalAt);
+  const localOnly = world.map >= 83 && world.map <= 85 && !prof.corner;
+  learned.camps.setPower(statPower(f), prof.spot != null);
+  // Telemetría de Hume: en Arena 4 el corredor (84,48) rindió bien y las
+  // muertes de personajes frágiles se concentraron cerca de (85,14–22).
+  // El campamento aprendido del propio personaje siempre tiene prioridad.
+  const preferred = world.map === 85 && world.maxHp > 0 && world.maxHp < 5_000 && !localOnly
+    ? { x: 84, y: 48 } : undefined;
+  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level, localOnly, preferred);
   const lz = learned.camps.leashFor(world.map);
   log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
   for (const e of learned.camps.events) log(`Campamento: ${e}.`);
@@ -240,7 +253,14 @@ export function trackWorld() {
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {
-    const it = parseItemAdded(toBytes(raw));
+    const b = toBytes(raw);
+    // Zen levantado: C3 08 22 FE <zen total u32 BE> (no llega InventoryMoneyUpdate). FF = no se pudo.
+    if (b[3] === 0xfe && b.length >= 8) {
+      bot.lastMoney = ((b[4] << 24) >>> 0) + (b[5] << 16) + (b[6] << 8) + b[7];
+      return;
+    }
+    if (b[3] === 0xff) return;
+    const it = parseItemAdded(b);
     if (it) world.inventory.set(it.slot, it);
   });
 
@@ -411,6 +431,27 @@ export function trackWorld() {
     onMapArrival();
   });
 
+  // Reaparición tras morir (C1 F3 04, formato 075: X @4, Y @5, mapa @6). Sin esto el bot seguía
+  // creyendo que estaba donde murió: caminaba desde ahí, el server le rechazaba los pasos y en el
+  // panel quedaba congelado (Hume, 2026-10-12: murió en el Lich y el panel lo mostraba ahí, ya en el pueblo).
+  EventBus.on('RespawnAfterDeath075', (raw: any) => {
+    const b = toBytes(raw);
+    if (b.length < 7) return;
+    const [x, y, map] = [b[4], b[5], b[6]];
+    const changed = map !== world.map;
+    world.map = map;
+    world.x = x;
+    world.y = y;
+    log(`Reaparezco en map=${map} pos=(${x},${y}).`);
+    if (changed) {
+      world.npcs.clear();
+      world.townNpcs.clear();
+      world.players.clear();
+      drops.clear();
+    }
+    onMapArrival();
+  });
+
   // Invitaciones a party: se rechazan (con party la exp se reparte: en el navegador los ciclos de
   // Horaz pasaron de ~9 a ~13,6 min; con spots complementarios cada uno se queda con lo suyo). Con
   // --party-mates se acepta solo de un compañero (MUBOT_MATES, por nombre). Con un respiro humano.
@@ -418,7 +459,9 @@ export function trackWorld() {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
     const from = world.players.get(id)?.name;
-    const mate = PARTY_MATES && from != null && isMate(from);
+    // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
+    // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
+    const mate = (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
@@ -440,6 +483,16 @@ export function watchMoney() {
 // ---------------------------------------------------------------------------
 // Entrada al mundo: login -> lista de personajes -> elegir -> CharacterInformation.
 // ---------------------------------------------------------------------------
+/** Personajes de la cuenta, sin elegir ninguno (--list-chars). */
+export async function listCharacters() {
+  login(USERNAME, PASSWORD);
+  const loginResp = new LoginResponsePacket(await waitFor('LoginResponse'));
+  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
+  const listWaiter = waitFor('CharacterList');
+  requestCharacterList();
+  return parseCharacterList097(await listWaiter).map((c) => ({ name: c.Name, level: c.Level }));
+}
+
 export async function loginAndSelectCharacter() {
   login(USERNAME, PASSWORD);
   const loginBytes = await waitFor('LoginResponse');
@@ -452,13 +505,43 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
+/** El personaje pedido no está en la cuenta, o el server no dejó crearlo (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
+export class CreateCharacterError extends Error {}
+
+/**
+ * Crea el personaje en la cuenta: `C1 0F F3 01 <nombre 10 bytes> <clase << 2>`, igual que el
+ * cliente web (el adaptador del 0.97d no lo reescribe). Contesta F3/01 con el resultado en el
+ * byte 4 (1 = creado); éxito y error comparten código, así que llegan los dos como
+ * `CharacterCreationSuccessful` (el primero de la tabla). Máximo 5 personajes por cuenta.
+ */
+async function createCharacter(name: string, cls: CharClassKey, count: number) {
+  if (count >= 5) throw new CreateCharacterError(`La cuenta ya tiene 5 personajes: no puedo crear a ${name}.`);
+  const p = new Uint8Array(15);
+  p.set([0xc1, 15, 0xf3, 0x01]);
+  for (let i = 0; i < name.length; i++) p[4 + i] = name.charCodeAt(i);
+  p[14] = CHAR_CLASSES[cls].id << 2;
+  log(`${name} no está en la cuenta: lo creo (${CHAR_CLASSES[cls].label}).`);
+  const reply = waitFor(['CharacterCreationSuccessful', 'CharacterCreationFailed']);
+  sendToGS(new DataView(p.buffer));
+  const bytes = toBytes(await reply);
+  if (bytes[4] !== 1) throw new CreateCharacterError(`El server no dejó crear a ${name} (respuesta ${bytes[4]}): nombre tomado o clase bloqueada.`);
+  log(`Personaje ${name} creado.`);
+  journal('decide', `Personaje nuevo: ${name} (${CHAR_CLASSES[cls].label})`);
+  return { SlotIndex: bytes[15] ?? count, Name: name, Level: 1, ClassId: CHAR_CLASSES[cls].id };
+}
+
 export async function selectCharacter(charListBytes: any) {
   const characters = parseCharacterList097(charListBytes);
   log(
     `Personajes: ${characters.map((c: any) => `${c.Name}(lv.${c.Level})`).join(', ')}`,
   );
 
-  const target = characters.find((c: any) => c.Name === CHAR_NAME) ?? characters[0];
+  let target = characters.find((c: any) => c.Name === CHAR_NAME);
+  if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
+  if (!target && CHAR_EXPLICIT && characters.length) {
+    throw new CreateCharacterError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}) y no tengo clase para crearlo.`);
+  }
+  target ??= characters[0];
   if (!target) throw new Error('La cuenta no tiene personajes');
 
   const selP = SelectCharacterPacket.createPacket();

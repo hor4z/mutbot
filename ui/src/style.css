@@ -1552,7 +1552,11 @@ time {
   white-space: nowrap;
   text-shadow: 0 1px 1px #000;
 }
-.radar-tag-self { color: #f4d28e; font-weight: 600; }
+.radar-tag-self { color: #ffffff; font-weight: 600; }
+.radar-tag-dragon { color: #ff8c1a; font-weight: 700; }
+.golden-dragon { color: #ff8c1a; font-weight: 700; }
+.red-dragon { color: #ff3b3b; font-weight: 700; }
+.radar-tag-red { color: #ff3b3b; font-weight: 700; }
 .radar-tag-player { color: #9fd8f7; }
 .radar-tag-gold { color: #ffd361; font-weight: 600; }
 .radar-tag-drop { color: #d6bdff; }
@@ -1571,4 +1575,271 @@ time {
   font-size: 12px;
   text-align: center;
   pointer-events: none;
+}
+
+/* Personaje nuevo (estación) */
+.new-char-open {
+  width: 100%;
+  justify-content: center;
+}
+.new-char h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--gold);
+}
+.new-char .field {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.field-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #373b41;
+  border-radius: 7px;
+  background: #1e2125;
+  color: inherit;
+  font-size: 13px;
+}
+.field-input:focus {
+  outline: 1px solid var(--gold);
+}
+.new-char .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 12px;
+  font-size: 12px;
+}
+.name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.name-chips .chip {
+  padding: 4px 9px;
+  border: 1px solid #373b41;
+  border-radius: 999px;
+  background: #1e2125;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.name-chips .chip.active,
+.name-chips .chip:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.new-char code {
+  font-size: 11px;
+}
+
+/* Flujo de la estación: cuenta → personaje */
+.badge.active {
+  color: #a2dfbe;
+  background: #24372e;
+}
+.badge.blocked {
+  color: #efa5b0;
+  background: #3a292f;
+}
+.picker {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 40px 16px;
+  overflow: auto;
+  height: 100%;
+}
+.picker h1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  letter-spacing: -1px;
+  font-weight: 500;
+  margin: 10px 0 20px;
+}
+.picker-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.picker-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid #30343a;
+  border-radius: 10px;
+  background: #1d2024;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.picker-card:hover {
+  border-color: #78684c;
+}
+.picker-main {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.picker-main small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.picker-back:hover,
+.breadcrumb button:hover {
+  color: var(--gold);
+}
+.breadcrumb button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.breadcrumb strong {
+  color: #e9e9e7;
+}
+.account-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+.welcome .manage-character {
+  max-width: 360px;
+}
+
+.new-char .probe {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.new-char .probe p {
+  margin: 0;
+  font-size: 11px;
+}
+
+/* Equipo e inventario (panel, pestaña Personaje) */
+.equipment {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.equip-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid #2b2e32;
+  border-radius: 8px;
+  background: #1a1c1f;
+  min-width: 0;
+}
+.equip-slot.filled {
+  border-color: #3a3f46;
+}
+.equip-slot.exc,
+.inv-item.exc {
+  border-color: var(--green);
+}
+.equip-icon {
+  flex: 0 0 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #121416;
+}
+.equip-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.equip-text small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.equip-text strong {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item-icon {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.item-name {
+  font-size: 9px;
+  text-align: center;
+  line-height: 1.1;
+  color: var(--muted);
+  padding: 2px;
+}
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  aspect-ratio: 1;
+  max-width: 340px;
+  gap: 2px;
+}
+.inv-cell {
+  border-radius: 3px;
+  background: #1a1c1f;
+  border: 1px solid #24272b;
+}
+.inv-item {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  border: 1px solid #3a3f46;
+  background: #22262b;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.inv-item .item-icon {
+  width: 100%;
+  height: 100%;
+}
+
+.action-now {
+  margin: 0 0 10px;
+  font-size: 12px;
 }

@@ -12,6 +12,7 @@ import {
   loadLearning, saveLearningChar, parseLearning,
   type Spot,
 } from './learning';
+import { farmRouteLevel } from './power';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -68,11 +69,15 @@ const MIN = 60_000;
       camps: [{ map: 2, x: 90, y: 40, rate: 3e6, n: 4, level: 70 }, { map: 2, x: 'mal', y: 1, rate: 1, n: 1, level: 1 } as any],
       cycles: { cur: { start: 1000, marks: { 20: 1.5, 50: 3 } }, done: [{ start: 0, end: 900000, min: 15, marks: { 400: 14.8 } }] },
       tierRef: { t20: 4e6, t300: 'x' as any },
+      routeRoi: { 25: { rate: 23e6, level: 310, n: 2 }, 26: { rate: -1, level: 310, n: 1 } },
+      lorenciaRoutes: [1, 2, 3, 999] as any,
     });
     const camps = (await loadLearning(path)).data.chars.Camps;
     ok('save/load: memoria de campamentos (descarta mal formados)', camps.camps?.length === 1 && camps.camps[0].rate === 3e6 && camps.camps[0].level === 70, camps.camps);
     ok('save/load: ciclos (en curso y cerrados) y referencia por tramo',
        camps.cycles?.cur?.start === 1000 && camps.cycles.cur.marks[50] === 3 && camps.cycles.done[0].min === 15 && camps.tierRef?.t20 === 4e6 && camps.tierRef.t300 === undefined, camps);
+    ok('save/load: ROI por warp válido, descarta tasa inválida', camps.routeRoi?.[25]?.rate === 23e6 && camps.routeRoi?.[26] === undefined, camps.routeRoi);
+    ok('save/load: recuerda solo dos rutas válidas de Lorencia', JSON.stringify(camps.lorenciaRoutes) === '[2,3]', camps.lorenciaRoutes);
 
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -144,6 +149,11 @@ const MIN = 60_000;
   ok('cruza el 200: Arena 3', c.spot?.index === 25 && c.warp, c);
   c = go({ level: 300, current: sp(25) });
   ok('cruza el 300: Arena 4', c.spot?.index === 26 && c.warp, c);
+  const hume = { family: 'knight' as const, stats: { str: 4045, agi: 1698, vit: 706, ene: 2044 }, maxHp: 2763 };
+  c = go({ level: farmRouteLevel(hume, 305, true), current: sp(6) });
+  ok('Hume 305 con Twisting Slash prueba Arena 3', c.reason === 'new-tier' && c.spot?.index === 25 && c.warp, c);
+  c = go({ level: farmRouteLevel(hume, 305, true), current: sp(26) });
+  ok('Hume 305 en Arena 4 vuelve a Arena 3', c.reason === 'new-tier' && c.spot?.index === 25 && c.warp, c);
   c = go({ level: 320, current: null, currentMap: 85 });
   ok('reconecta en Arena 4: adopta', c.reason === 'adopt' && c.spot?.index === 26, c);
   c = go({ level: 60, current: sp(6), allowed: new Set([6, 5]), crowded: true });

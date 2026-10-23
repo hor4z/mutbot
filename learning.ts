@@ -10,6 +10,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { KnownCamp } from './camp';
 import type { CycleRecord } from './farming';
+import type { FarmScores } from './farm-middleware';
 
 // map: número de mapa al que deja el warp (si se conoce). Sirve para retomar
 // sin warpear cuando el bot arranca (o reconecta) ya parado en el mapa del tramo.
@@ -21,7 +22,8 @@ export type TypeData = { expByType: Record<number, number>; killSecByType: Recor
 export type CyclesData = { cur: CycleRecord | null; done: CycleRecord[] };
 export type CharLearning = {
   resets: number; hot?: HotCellData[]; types?: TypeData;
-  camps?: KnownCamp[]; cycles?: CyclesData; tierRef?: Record<string, number>;
+  camps?: KnownCamp[]; cycles?: CyclesData; tierRef?: Record<string, number>; routeRoi?: FarmScores;
+  lorenciaRoutes?: number[];
 };
 export type LearningFile = { version: 1; chars: Record<string, CharLearning> };
 
@@ -77,6 +79,7 @@ export function routeTier(level: number, route: readonly RouteTier[] = FIXED_ROU
 }
 
 export type FixedRouteInput = {
+  realLevel?: number;            // nivel del personaje (level puede ser el de la ruta, más bajo)
   noFallback?: boolean;          // el prioritario no va a Arena 1 (0,4M/min): compite en la entrada menos llena
   spots: Spot[];                 // incluye el plan B (Arena 1)
   level: number;
@@ -98,7 +101,10 @@ export function chooseFixedRoute(inp: FixedRouteInput, route: readonly RouteTier
   const byIndex = (i: number) => inp.spots.find((s) => s.index === i);
   const ok = (s: Spot | undefined): s is Spot => !!s && (!inp.allowed || inp.allowed.has(s.index));
   const tierSpots = tier.warps.map(byIndex).filter(ok);
-  const fb = ok(byIndex(CROWD_FALLBACK.warp)) && inp.level >= CROWD_FALLBACK.minLevel && inp.level <= CROWD_FALLBACK.maxLevel ? byIndex(CROWD_FALLBACK.warp)! : null;
+  // Plan B por el nivel real: con la ruta bajada a Devias (nivel de ruta 99) Hume, nivel 300, pasaba horas
+  // en Arena 1 a 0,9M/min.
+  const realLevel = inp.realLevel ?? inp.level;
+  const fb = ok(byIndex(CROWD_FALLBACK.warp)) && realLevel >= CROWD_FALLBACK.minLevel && realLevel <= CROWD_FALLBACK.maxLevel ? byIndex(CROWD_FALLBACK.warp)! : null;
   const cur = inp.current;
   const base = { tier: tier.minLevel };
   const stay = (what: string): FixedRouteChoice => ({ ...base, spot: cur, reason: cur ? 'stay' : 'none', what, warp: false });
@@ -180,7 +186,7 @@ export function parseLearning(text: string): LearningFile {
     if (Array.isArray(c.camps)) {
       entry.camps = c.camps
         .filter((k: any) => k && [k.map, k.x, k.y, k.rate, k.n, k.level].every(isNum))
-        .map((k: any) => ({ map: k.map, x: k.x, y: k.y, rate: k.rate, n: k.n, level: k.level }));
+        .map((k: any) => ({ map: k.map, x: k.x, y: k.y, rate: k.rate, n: k.n, level: k.level, ...(isNum(k.power) ? { power: k.power } : {}) }));
     }
     if (c.cycles && typeof c.cycles === 'object') {
       const cyc = (r: any): CycleRecord | null =>
@@ -196,6 +202,14 @@ export function parseLearning(text: string): LearningFile {
       entry.tierRef = {};
       for (const [k, v] of Object.entries(c.tierRef)) if (isNum(v) && v >= 0) entry.tierRef[k] = v;
     }
+    if (c.routeRoi && typeof c.routeRoi === 'object') {
+      entry.routeRoi = {};
+      for (const [k, v] of Object.entries<any>(c.routeRoi))
+        if (isNum(Number(k)) && v && isNum(v.rate) && v.rate >= 0 && isNum(v.level) && isNum(v.n) && v.n > 0)
+          entry.routeRoi[Number(k)] = { rate: v.rate, level: v.level, n: v.n };
+    }
+    if (Array.isArray(c.lorenciaRoutes)) entry.lorenciaRoutes = c.lorenciaRoutes
+      .filter((v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) < 5).slice(-2);
     out.chars[name] = entry;
   }
   return out;

@@ -11,7 +11,7 @@ import { CAMP, castCandidate } from './camp';
 import { AREA_SKILLS, SKILL_MIN_MANA, pickAttackSkill } from './combat';
 import type { TimeKind } from './farming';
 import { world, type ScopedNpc } from './state';
-import { directionTowards, sleep } from './util';
+import { directionTowards, humanPace, sleep } from './util';
 
 export type LoopCtx = {
   // Monstruos atacables: los de world.npcs que NO están en zona segura (se recalcula cada tick).
@@ -49,7 +49,7 @@ export async function walkTowards(ctx: LoopCtx, x: number, y: number) {
   const bx = world.x;
   const by = world.y;
   step(dir);
-  await sleep(WALK_PACE_MS);
+  await sleep(humanPace(WALK_PACE_MS));
   ctx.walkStuck = world.x === bx && world.y === by ? (ctx.walkStuck % 6) + 1 : 0;
   ctx.lastX = world.x;
   ctx.lastY = world.y;

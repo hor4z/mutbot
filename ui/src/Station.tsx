@@ -12,13 +12,21 @@ import {
   Settings2,
   Sparkles,
   Trophy,
+  UserPlus,
+  Dices,
+  ChevronLeft,
+  KeyRound,
 } from "lucide-react";
-import type { Routine, StationRequest } from "../../estacion-logic";
+import type { CharClassKey, Routine, StationRequest } from "../../estacion-logic";
 import { Action, Badge, Choice, compact, fmt } from "./components";
 import knight from "../../assets/ui/knight-alpha.webp";
 export type Character = {
   key: string;
   char: string;
+  user: string;
+  /** estado de la cuenta en la base: active / blocked */
+  account: string;
+  cls: string | null;
   status: string;
   msg: string;
   pid: number | null;
@@ -195,6 +203,290 @@ function Ranking({ mine }: { mine: string[] }) {
     </div>
   );
 }
+const classes: { value: CharClassKey; label: string }[] = [
+  { value: "dk", label: "Dark Knight" },
+  { value: "dw", label: "Dark Wizard" },
+  { value: "elf", label: "Fairy Elf" },
+  { value: "mg", label: "Magic Gladiator (pide un personaje alto)" },
+];
+// Personaje nuevo: cuenta (se registra en el server), clase y nombre, con sugerencias de nombres.
+function NewCharacter({
+  act,
+  account,
+}: {
+  act: (r: StationRequest) => Promise<boolean>;
+  /** cuenta ya guardada: solo se piden clase y nombre */
+  account?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [user, setUser] = useState(account ?? "");
+  const [pass, setPass] = useState("");
+  const [existing, setExisting] = useState(false);
+  // El personaje ya está creado en el server: no hace falta clase y el bot no crea nada.
+  const [charExists, setCharExists] = useState(false);
+  const known = (!!account || existing) && charExists;
+  // Personajes que ya tiene la cuenta en el server (la estación entra, lista y sale).
+  const [found, setFound] = useState<{ name: string; level: number }[] | null>(null);
+  const [probeMsg, setProbeMsg] = useState("");
+  const [probing, setProbing] = useState(false);
+  async function probe() {
+    setProbing(true);
+    setProbeMsg("Entrando a la cuenta para ver tus personajes…");
+    setFound(null);
+    try {
+      const r = await fetch("/api/do", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(account ? { action: "probe", user: account } : { action: "probe", user, pass }),
+      });
+      const j = await r.json();
+      setProbeMsg(j.msg ?? "");
+      if (j.ok) setFound(j.chars ?? []);
+    } catch {
+      setProbeMsg("La estación no contesta.");
+    }
+    setProbing(false);
+  }
+  const [cls, setCls] = useState<CharClassKey>("dk");
+  const [char, setChar] = useState("");
+  const [names, setNames] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  async function roll() {
+    try {
+      const r = await fetch("/api/names", { cache: "no-store" });
+      const j = (await r.json()) as { names: string[] };
+      setNames(j.names);
+      setChar((old) => old || j.names[0] || "");
+    } catch {}
+  }
+  useEffect(() => {
+    if (open && !names.length) void roll();
+  }, [open]);
+  const problem = !account && !/^[A-Za-z0-9]{4,10}$/.test(user)
+    ? "Cuenta: 4 a 10 letras o números."
+    : !account && !/^[!-~]{4,10}$/.test(pass)
+      ? "Clave: 4 a 10 caracteres visibles, sin espacios."
+      : !/^[A-Za-z0-9]{4,10}$/.test(char)
+        ? "Nombre: 4 a 10 letras o números."
+        : "";
+  async function create() {
+    setBusy(true);
+    const c = known ? null : cls;
+    const ok = await act(
+      account
+        ? { action: "add", user: account, char, cls: c }
+        : { action: "create", user, pass, char, cls: c, existing },
+    );
+    setBusy(false);
+    if (ok) {
+      setOpen(false);
+      if (!account) setUser("");
+      setPass("");
+      setChar("");
+      setNames([]);
+    }
+  }
+  if (!open)
+    return (
+      <Action className="quiet new-char-open" onClick={() => setOpen(true)}>
+        <UserPlus size={15} />
+        {account ? "Nuevo personaje" : "Nueva cuenta"}
+      </Action>
+    );
+  return (
+    <div className="manage-character new-char">
+      <h3>
+        <UserPlus size={16} />
+        {account ? `Nuevo personaje en ${account}` : "Nueva cuenta"}
+      </h3>
+      {!account && (
+        <>
+      <label className="field">
+        <span>Cuenta</span>
+        <input className="field-input" value={user} maxLength={10} autoComplete="off" onChange={(e) => setUser(e.target.value.trim())} />
+      </label>
+      <label className="field">
+        <span>Clave</span>
+        <input className="field-input" type="password" value={pass} maxLength={10} autoComplete="new-password" onChange={(e) => setPass(e.target.value)} />
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+        Ya tengo la cuenta (no registrarla)
+      </label>
+        </>
+      )}
+      {(account || existing) && (
+        <div className="probe">
+          <Action
+            className="quiet"
+            disabled={probing || (!account && (!/^[A-Za-z0-9]{4,10}$/.test(user) || !/^[!-~]{4,10}$/.test(pass)))}
+            onClick={() => void probe()}
+          >
+            <Users size={15} />
+            {probing ? "Buscando…" : "Buscar mis personajes"}
+          </Action>
+          {probeMsg && <p className="muted">{probeMsg}</p>}
+          {found && found.length > 0 && (
+            <div className="name-chips">
+              {found.map((f) => (
+                <button
+                  key={f.name}
+                  className={`chip ${known && char === f.name ? "active" : ""}`}
+                  onClick={() => {
+                    setCharExists(true);
+                    setChar(f.name);
+                  }}
+                >
+                  {f.name} · Nv. {f.level}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {(account || existing) && (
+        <label className="check">
+          <input type="checkbox" checked={charExists} onChange={(e) => {
+            setCharExists(e.target.checked);
+            if (e.target.checked && names.includes(char)) setChar("");
+          }} />
+          El personaje ya existe (entrar con él, no crearlo)
+        </label>
+      )}
+      {!known && (
+        <div className="field">
+          <span>Clase</span>
+          <Choice label="Clase" value={cls} onChange={(v) => setCls(v as CharClassKey)} items={classes} />
+        </div>
+      )}
+      <label className="field">
+        <span>{known ? "Nombre exacto del personaje" : "Nombre"}</span>
+        <span className="input-action">
+          <input className="field-input" value={char} maxLength={10} onChange={(e) => setChar(e.target.value.trim())} />
+          {!known && (
+            <Action className="quiet" aria-label="Otros nombres" onClick={() => void roll()}>
+              <Dices size={15} />
+            </Action>
+          )}
+        </span>
+      </label>
+      {!known && <div className="name-chips">
+        {names.map((n) => (
+          <button key={n} className={`chip ${n === char ? "active" : ""}`} onClick={() => setChar(n)}>
+            {n}
+          </button>
+        ))}
+      </div>}
+      {problem && (user || pass || char) && <p className="warning">{problem}</p>}
+      <p className="muted">
+        {account ? "" : "La cuenta y la clave quedan en la base local (~/.mubot/mubot.db, solo en esta máquina). "}
+        {known
+          ? "Al conectar entra con ese personaje y queda en pausa. Si el nombre no está en la cuenta, no entra con otro: avisa."
+          : "El personaje se crea al conectar y queda en pausa en Lorencia."}
+      </p>
+      <div className="manage-actions">
+        <Action className="primary" disabled={busy || !!problem} onClick={() => void create()}>
+          {busy ? "Guardando…" : known ? "Agregar personaje" : account || existing ? "Crear personaje" : "Crear cuenta y personaje"}
+        </Action>
+        <Action className="quiet" disabled={busy} onClick={() => setOpen(false)}>
+          Cancelar
+        </Action>
+      </div>
+    </div>
+  );
+}
+type Account = { user: string; status: string; chars: Character[] };
+const groupAccounts = (chars: Character[]): Account[] => {
+  const m = new Map<string, Account>();
+  for (const c of chars) {
+    const k = c.user.toLowerCase();
+    const a = m.get(k) ?? { user: c.user, status: c.account, chars: [] };
+    a.chars.push(c);
+    m.set(k, a);
+  }
+  return [...m.values()].sort((a, b) => a.user.localeCompare(b.user));
+};
+const classNames: Record<string, string> = { dk: "Dark Knight", dw: "Dark Wizard", elf: "Fairy Elf", mg: "Magic Gladiator" };
+// Paso 1: elegir (o crear) una cuenta.
+function AccountPicker({
+  accounts,
+  onPick,
+  act,
+}: {
+  accounts: Account[];
+  onPick: (user: string) => void;
+  act: (r: StationRequest) => Promise<boolean>;
+}) {
+  return (
+    <div className="picker">
+      <span className="eyebrow">PASO 1 DE 2</span>
+      <h1>Elegí una cuenta</h1>
+      <div className="picker-list">
+        {accounts.map((a) => (
+          <button key={a.user} className="picker-card" onClick={() => onPick(a.user)}>
+            <span className="avatar">
+              <KeyRound size={15} />
+            </span>
+            <span className="picker-main">
+              <strong>{a.user}</strong>
+              <small>
+                {a.chars.length} personaje{a.chars.length === 1 ? "" : "s"}: {a.chars.map((c) => c.char).join(", ")}
+              </small>
+            </span>
+            <Badge state={a.status} />
+            <ChevronRight size={15} />
+          </button>
+        ))}
+        {!accounts.length && <p className="muted">Todavía no hay cuentas. Creá la primera.</p>}
+      </div>
+      <NewCharacter act={act} />
+    </div>
+  );
+}
+// Paso 2: elegir (o crear) un personaje de la cuenta.
+function CharacterPicker({
+  account,
+  onBack,
+  onPick,
+  act,
+}: {
+  account: Account;
+  onBack: () => void;
+  onPick: (key: string) => void;
+  act: (r: StationRequest) => Promise<boolean>;
+}) {
+  return (
+    <div className="picker">
+      <button className="picker-back" onClick={onBack}>
+        <ChevronLeft size={15} />
+        Cuentas
+      </button>
+      <span className="eyebrow">PASO 2 DE 2</span>
+      <h1>
+        {account.user} <Badge state={account.status} />
+      </h1>
+      {account.status === "blocked" && (
+        <p className="warning">El server bloqueó esta cuenta (AccountBlocked): no va a poder entrar hasta que la desbloqueen.</p>
+      )}
+      <div className="picker-list">
+        {account.chars.map((c) => (
+          <button key={c.key} className="picker-card" onClick={() => onPick(c.key)}>
+            <span className="avatar">{c.char.slice(0, 1)}</span>
+            <span className="picker-main">
+              <strong>{c.char}</strong>
+              <small>
+                {[c.cls && classNames[c.cls], c.game ? `${c.game.map} · Nivel ${fmt(c.game.level)}` : null].filter(Boolean).join(" · ") || "Elegilo para ver su panel"}
+              </small>
+            </span>
+            <Badge state={c.status} />
+            <ChevronRight size={15} />
+          </button>
+        ))}
+      </div>
+      <NewCharacter act={act} account={account.user} />
+    </div>
+  );
+}
 function ManageCharacter({
   c,
   selected,
@@ -204,7 +496,7 @@ function ManageCharacter({
   c: Character;
   selected: boolean;
   onSelect: () => void;
-  act: (r: StationRequest) => Promise<void>;
+  act: (r: StationRequest) => Promise<boolean>;
 }) {
   const [routine, setRoutine] = useState(fromRoutine(c.routine ?? c.pending));
   const [settings, setSettings] = useState(false);
@@ -310,7 +602,9 @@ function ManageCharacter({
 export function Station() {
   const [chars, setChars] = useState<Character[]>([]);
   const [golds, setGolds] = useState<Gold[]>([]);
-  const [selected, setSelected] = useState(() => read("estacion:sel", ""));
+  // Sin nada elegido al abrir: primero la cuenta, después el personaje.
+  const [account, setAccount] = useState("");
+  const [selected, setSelected] = useState("");
   const [tab, setTab] = useState(() => read("estacion:tab", "panel"));
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
@@ -333,9 +627,7 @@ export function Station() {
           setGolds(s.golds ?? []);
           setError("");
           setSelected((old) =>
-            s.chars.some((c: Character) => c.key === old)
-              ? old
-              : (s.chars[0]?.key ?? ""),
+            s.chars.some((c: Character) => c.key === old) ? old : "",
           );
         }
       } catch {
@@ -356,12 +648,12 @@ export function Station() {
   }, []);
   useEffect(() => {
     try {
-      localStorage.setItem("estacion:sel", selected);
       localStorage.setItem("estacion:tab", tab);
     } catch {}
-  }, [selected, tab]);
+  }, [tab]);
   async function act(body: StationRequest) {
     let msg = "La estación no contesta.";
+    let ok = false;
     try {
       const r = await fetch("/api/do", {
         method: "POST",
@@ -370,14 +662,23 @@ export function Station() {
       });
       const j = await r.json();
       msg = j.msg ?? msg;
+      ok = r.ok && j.ok !== false;
     } catch {}
-    if (!live.current) return;
+    if (!live.current) return ok;
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 4500);
+    toastTimer.current = setTimeout(() => setToast(""), 6000);
+    return ok;
   }
   const c = chars.find((c) => c.key === selected);
   const running = chars.filter((c) => c.pid != null);
+  const accounts = groupAccounts(chars);
+  const acc = accounts.find((a) => a.user.toLowerCase() === (c?.user ?? account).toLowerCase());
+  const pick = (key: string) => {
+    const x = chars.find((y) => y.key === key);
+    if (x) setAccount(x.user);
+    setSelected(key);
+  };
   return (
     <div className="station-shell">
       <header className="station-bar">
@@ -395,7 +696,7 @@ export function Station() {
             <button
               className={`character-pill ${x.key === selected ? "active" : ""}`}
               key={x.key}
-              onClick={() => setSelected(x.key)}
+              onClick={() => pick(x.key)}
               aria-pressed={x.key === selected}
             >
               <span
@@ -429,21 +730,30 @@ export function Station() {
                 </Dialog.Close>
               </div>
               <div className="drawer-content">
-                {chars.map((x) => (
-                  <ManageCharacter
-                    key={x.key}
-                    c={x}
-                    selected={selected === x.key}
-                    onSelect={() => {
-                      setSelected(x.key);
-                      setOpen(false);
-                    }}
-                    act={act}
-                  />
+                {accounts.map((a) => (
+                  <section key={a.user} className="account-group">
+                    <h3>
+                      <KeyRound size={14} />
+                      {a.user}
+                      <Badge state={a.status} />
+                    </h3>
+                    {a.chars.map((x) => (
+                      <ManageCharacter
+                        key={x.key}
+                        c={x}
+                        selected={selected === x.key}
+                        onSelect={() => {
+                          pick(x.key);
+                          setOpen(false);
+                        }}
+                        act={act}
+                      />
+                    ))}
+                  </section>
                 ))}
                 {!chars.length && (
                   <p className="muted">
-                    No hay personajes configurados todavía.
+                    No hay cuentas todavía: creá una desde el inicio.
                   </p>
                 )}
                 <p className="connection-note">
@@ -486,14 +796,27 @@ export function Station() {
           {error}
         </div>
       )}
+      {!c ? (
+        <div className="station-content">
+          {acc ? (
+            <CharacterPicker account={acc} onBack={() => setAccount("")} onPick={pick} act={act} />
+          ) : (
+            <AccountPicker accounts={accounts} onPick={setAccount} act={act} />
+          )}
+        </div>
+      ) : (
       <Tabs.Root
         className="station-content"
         value={tab}
         onValueChange={(v) => setTab(String(v))}
       >
         <div className="station-toolbar">
-          <span className="muted">
-            {c?.char ?? "Tu estación"}
+          <span className="muted breadcrumb">
+            <button onClick={() => { setSelected(""); setAccount(""); }}>Cuentas</button>
+            {" › "}
+            <button onClick={() => setSelected("")}>{c.user}</button>
+            {" › "}
+            <strong>{c.char}</strong>
             {running.length > 1 && (
               <span className="other-count">
                 {" "}
@@ -539,12 +862,16 @@ export function Station() {
                 <p>
                   {c?.pid != null
                     ? `Esperando el panel de ${c.char}.`
-                    : "Conectá un personaje para seguir su progreso en tiempo real."}
+                    : `Conectá a ${c.char} para seguir su progreso en tiempo real.`}
                 </p>
-                <Action className="primary" onClick={() => setOpen(true)}>
-                  <Users size={16} />
-                  Ver personajes
-                </Action>
+                {c.pid == null ? (
+                  <ManageCharacter c={c} selected onSelect={() => {}} act={act} />
+                ) : (
+                  <Action className="primary" onClick={() => setOpen(true)}>
+                    <Users size={16} />
+                    Ver personajes
+                  </Action>
+                )}
               </div>
             </div>
           )}
@@ -562,6 +889,7 @@ export function Station() {
           )}
         </Tabs.Panel>
       </Tabs.Root>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}

@@ -4,9 +4,13 @@
  * procesos: se testea en estacion-tests.ts.
  */
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
+import { validCharName } from './names';
 
-/** Un personaje = un archivo de env (`.env`, `.env.melu`, ...) con MUBOT_USER/PASS/CHAR. */
-export type CharConfig = { key: string; envFile: string; user: string; char: string };
+/**
+ * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
+ * de la base (`estacion-db.ts`; `envFile` = de qué `.env` se importó; `cls` si hay que crearlo al entrar).
+ */
+export type CharConfig = { key: string; envFile: string | null; user: string; char: string; cls?: CharClassKey };
 
 /**
  * Lee un archivo de env (formato de Bun: KEY=valor, comentarios con #, comillas opcionales).
@@ -43,14 +47,17 @@ export type GameServer = { proxy: string; csHost: string; csPort: number };
 export const DEFAULT_SERVER: GameServer = { proxy: 'wss://mu.mormon.garden/ws', csHost: 'mu.mormon.garden', csPort: 44405 };
 
 /**
- * Argumentos de `bun` para lanzar el bot de un personaje. Las credenciales van por --env-file
- * (nunca en la línea de comandos, que se ve en `ps`). `--exit-if-in-use`: si la cuenta ya está
+ * Argumentos de `bun` para lanzar el bot de un personaje. La clave nunca va en la línea de comandos
+ * (se ve en `ps`): la estación la pasa por MUBOT_PASS. `--exit-if-in-use`: si la cuenta ya está
  * conectada (la pestaña del navegador), el bot sale con código 3 en vez de insistir. Sin él (recién
  * desconectado desde la estación) espera y reintenta: el server tarda en soltar la sesión vieja.
  */
 export function botArgs(c: CharConfig, wsPort: number, server: GameServer, botFile: string, exitIfInUse = true): string[] {
+  // Cuenta y personaje de la base (estacion-db.ts) en la línea de comandos (no son secretos); la clave
+  // va por MUBOT_PASS. `--env-file=/dev/null` para que Bun no cargue el `.env` de la raíz (otro personaje).
+  const who = ['--env-file=/dev/null', 'run', botFile, '--user', c.user, '--char', c.char];
   return [
-    `--env-file=${c.envFile}`, 'run', botFile,
+    ...who,
     '--allow-remote', '--proxy', server.proxy, '--cs-host', server.csHost, '--cs-port', String(server.csPort),
     '--auto-seconds', '0', '--ws-port', String(wsPort), ...(exitIfInUse ? ['--exit-if-in-use'] : []),
   ];
@@ -94,7 +101,10 @@ export type CharStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fa
 
 /** Cómo se lee la salida del bot. */
 export function exitStatus(code: number | null): { status: CharStatus; msg: string } {
+  if (code === 6) return { status: 'failed', msg: 'el personaje no está en la cuenta (¿nombre mal escrito?) o el server no dejó crearlo (¿nombre tomado o clase bloqueada?). Mirá la consola.' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
+  if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
+  if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá el .env del personaje.' };
   if (code === 0 || code === null) return { status: 'off', msg: 'desconectado' };
   if (code === 2) return { status: 'failed', msg: 'el bot no arrancó: flag desconocido o servidor no local sin --allow-remote (mirá la consola)' };
   return { status: 'failed', msg: `el bot terminó con error (código ${code}); mirá la consola` };
@@ -107,11 +117,65 @@ export function exitStatus(code: number | null): { status: CharStatus; msg: stri
 export type StationRequest =
   | { action: 'connect'; char: string; routine: Routine }
   | { action: 'disconnect'; char: string }
-  | { action: 'routine'; char: string; routine: Routine };
+  | { action: 'routine'; char: string; routine: Routine }
+  | NewCharRequest
+  | { action: 'add'; user: string; char: string; cls: CharClassKey | null }
+  // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
+  | { action: 'probe'; user: string; pass?: string };
+
+/**
+ * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
+ * clase. Va al almacén de cuentas (`accounts.ts`) y el bot crea el personaje al entrar.
+ */
+export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey | null; existing: boolean };
+
+/**
+ * Clases que se pueden crear en este server (0.97d) y su número de red (`CharacterClassNumber` del
+ * cliente; el packet lo lleva corrido 2 bits). MG pide un personaje de nivel alto en la cuenta.
+ */
+export const CHAR_CLASSES = {
+  dk: { id: 4, label: 'Dark Knight' },
+  dw: { id: 0, label: 'Dark Wizard' },
+  elf: { id: 8, label: 'Fairy Elf' },
+  mg: { id: 12, label: 'Magic Gladiator' },
+} as const;
+export type CharClassKey = keyof typeof CHAR_CLASSES;
+export const isCharClass = (v: unknown): v is CharClassKey => typeof v === 'string' && Object.hasOwn(CHAR_CLASSES, v);
+
+/** Cuenta y clave como las valida el registro del cliente web. Devuelve el motivo o null. */
+export function accountProblem(user: string, pass: string): string | null {
+  if (!/^[A-Za-z0-9]{4,10}$/.test(user)) return 'la cuenta tiene que tener de 4 a 10 letras o números';
+  if (pass.length < 4 || pass.length > 10) return 'la clave tiene que tener de 4 a 10 caracteres';
+  if (!/^[!-~]+$/.test(pass)) return 'la clave solo puede tener caracteres visibles, sin espacios ni acentos';
+  return null;
+}
+
 
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
+  if (r.action === 'create') {
+    const keys = Object.keys(r).sort().join();
+    if (keys !== 'action,char,cls,existing,pass,user') return null;
+    if (typeof r.user !== 'string' || typeof r.pass !== 'string' || typeof r.char !== 'string' || typeof r.existing !== 'boolean') return null;
+    // Clase null = el personaje ya existe en el server (solo con una cuenta que ya existe).
+    if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !(isCharClass(r.cls) || (r.cls === null && r.existing))) return null;
+    return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
+  }
+  if (r.action === 'probe') {
+    const keys = Object.keys(r).sort().join();
+    if (keys !== 'action,user' && keys !== 'action,pass,user') return null;
+    if (typeof r.user !== 'string') return null;
+    if (keys === 'action,user') return /^[A-Za-z0-9]{4,10}$/.test(r.user) ? { action: 'probe', user: r.user } : null;
+    if (typeof r.pass !== 'string' || accountProblem(r.user, r.pass)) return null;
+    return { action: 'probe', user: r.user, pass: r.pass };
+  }
+  // Otro personaje en una cuenta que ya está en la base: la clave la pone la estación.
+  if (r.action === 'add') {
+    if (Object.keys(r).sort().join() !== 'action,char,cls,user') return null;
+    if (typeof r.user !== 'string' || !/^[A-Za-z0-9]{4,10}$/.test(r.user) || typeof r.char !== 'string' || !validCharName(r.char) || !(isCharClass(r.cls) || r.cls === null)) return null;
+    return { action: 'add', user: r.user, char: r.char, cls: r.cls };
+  }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
@@ -134,7 +198,10 @@ export const BOT_PORT_BASE = 8791;
 export function processRunsAccount(cmdline: string[], environ: string[], c: CharConfig): boolean {
   if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) return false;
   const u = cmdline.indexOf('--user');
-  if (u >= 0) return cmdline[u + 1] === c.user;
+  if (u >= 0) {
+    const ch = cmdline.indexOf('--char');
+    return cmdline[u + 1] === c.user && (ch < 0 || cmdline[ch + 1] === c.char);
+  }
   const ef = cmdline.findIndex((a) => a === '--env-file' || a.startsWith('--env-file='));
   if (ef >= 0) {
     const file = cmdline[ef].includes('=') ? cmdline[ef].slice('--env-file='.length) : cmdline[ef + 1] ?? '';

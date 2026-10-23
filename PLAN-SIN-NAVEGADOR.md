@@ -99,6 +99,37 @@ por día** (y debajo: exp/min farmeando, % del tiempo farmeando, tramos del cicl
 
 Próximo paso: el 2026-10-12, con un día de datos, correr `bun run aprender` y empezar por F0 + F1.
 
+## Personaje desde cero: Hume (2026-10-12, en curso)
+
+Cuenta `hume` (DK), creada a mano y agregada desde la estación. Horaz y Melu están **bloqueadas por
+el server** (AccountBlocked): revisar el motivo antes de seguir usándolas o de crear más cuentas.
+
+Hecho (rama `personaje-nuevo`, sin PR todavía):
+- Estación: cuentas y personajes en SQLite (`~/.mubot/mubot.db`), flujo cuenta → personaje → panel,
+  estado de la cuenta, crear cuenta/personaje, "Buscar mis personajes" (`--list-chars`), generador de nombres.
+- Panel: equipo e inventario con íconos; acciones según el estado.
+- Bot, personaje nuevo (`isFreshChar`): reparto por clase apenas hay puntos; qué ataca y a qué campo va
+  según sus stats (`power.ts`), campos de Lorencia este → norte → oeste → Lich; no dorados ni cacería;
+  levanta zen/pociones/joyas/equipo; se equipa solo (`equip.ts`); no disputa monstruos ni drops de otros
+  jugadores; pide party o cambia de campo si no rinde; acepta party.
+- Protocolo arreglado (también afecta a Horaz/Melu): levantar drops (C3 22, el 075 se ignoraba),
+  zen levantado (C3 22 FE), reaparición tras morir (F3 04).
+
+Estado al cortar: Hume nivel 56, ~29M de zen, sin pociones. Murió contra un Elite Yeti en Devias 3:
+**desconectado** (en pausa en Devias no se defiende).
+
+Sigue (en este orden):
+1. **Comprar pociones**: `shop.ts` está escrito (hablar `C3 05 30 <id BE>`, catálogo `StoreItemList`,
+   comprar `C3 04 32 <casilla>`, cerrar `C1 03 31`; Amy, NPC 253, ~(127,86) en Lorencia) pero **sin
+   enganchar ni probar**. Falta: agregar al inventario lo de `ItemBought` (C1 32 <casilla> <ítem 5>), y en
+   `farm-loop.ts` el viaje (menos de 3 pociones y zen → warp a Lorencia, caminar a Amy, comprar 10).
+2. **Devias con el modelo de stats**: el arranque de Devias (`early-step.ts`) no usa `power.ts`; un personaje
+   nuevo tiene que atacar solo lo que aguanta y elegir el spot de su nivel, no los de jugadores avanzados.
+3. **Perfiles de estrategia** según el personaje (pedido del usuario): nuevo / en desarrollo / con resets,
+   elegidos solos por resets, stats y zen (ver la tabla propuesta en la sesión).
+4. Seguir al compañero de party a todas partes; vender lo que no sirve; comprar armadura/arma.
+5. Que el usuario juegue con Hume en el navegador mientras se registra el tráfico (aprender compras y party).
+
 ## Pendiente, en orden
 
 1. **Igualar al agente del navegador regla por regla** (usuario: "habíamos pulido todas estas

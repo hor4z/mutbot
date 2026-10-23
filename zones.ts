@@ -31,6 +31,40 @@ export function dragonZones(map: number, now = Date.now()): Zone[] {
   return cache.byMap.get(map) ?? [];
 }
 
+// Zonas de todos los dorados (no solo dragones): celdas de 15 tiles donde se vio alguno (golden_seen).
+// Sin zonas, la cacería recorre el mapa a ciegas y da vueltas (Atlans, 2026-10-23: lo vio el usuario).
+let goldCache: { at: number; byMap: Map<number, Zone[]> } = { at: 0, byMap: new Map() };
+let goldLoading = false;
+const GOLD_ZONES_SQL = `SELECT map, round(avg(JSONExtractInt(data, 'gx'))) AS x, round(avg(JSONExtractInt(data, 'gy'))) AS y, count() AS n
+FROM events WHERE kind = 'golden_seen' AND JSONExtractInt(data, 'gx') > 0
+GROUP BY map, intDiv(JSONExtractInt(data, 'gx'), 15), intDiv(JSONExtractInt(data, 'gy'), 15) FORMAT JSONEachRow`;
+
+/** Zonas donde se vio cualquier dorado en el mapa (se recargan cada 5 min). */
+export function goldenZones(map: number, now = Date.now()): Zone[] {
+  if (now - goldCache.at > REFRESH_MS && !goldLoading) {
+    goldLoading = true;
+    void queryDb<{ map: number; x: number; y: number; n: string }>(GOLD_ZONES_SQL)
+      .then((rows) => {
+        const byMap = new Map<number, Zone[]>();
+        for (const r of rows) {
+          const list = byMap.get(+r.map) ?? [];
+          list.push({ x: +r.x, y: +r.y, n: +r.n });
+          byMap.set(+r.map, list);
+        }
+        if (rows.length || !goldCache.at) goldCache = { at: Date.now(), byMap };
+        else goldCache.at = Date.now();
+      })
+      .finally(() => { goldLoading = false; });
+  }
+  return goldCache.byMap.get(map) ?? [];
+}
+
+/** Mapas con zonas conocidas (al menos `min`): ahí la cacería sabe a dónde ir. */
+export const KNOWN_ZONES_MIN = 3;
+export function mapsWithZones(maps: readonly number[], now = Date.now()): Set<number> {
+  return new Set(maps.filter((m) => goldenZones(m, now).length + dragonZones(m, now).length >= KNOWN_ZONES_MIN));
+}
+
 /** La zona más cercana a `me` que todavía no se visitó (visitada = pasó a <= 6 tiles). */
 export function nextZone(zones: readonly Zone[], me: { x: number; y: number }, visited: ReadonlySet<string>): Zone | null {
   let best: Zone | null = null;
