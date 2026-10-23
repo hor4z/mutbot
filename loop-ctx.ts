@@ -3,7 +3,7 @@
  * corner-step.ts, y las dos acciones que lo usan: caminar rodeando obstáculos y tirar un skill de
  * área en el camino.
  */
-import { findPath } from './path';
+import { findPath, smoothPath } from './path';
 import { learnedFreeFor, walkableFor } from './terrain';
 import { SKILL_PACE_MS, WALK_PACE_MS } from './config';
 import { sendAreaSkill, step } from './actions';
@@ -36,13 +36,14 @@ export function newLoopCtx(): LoopCtx {
 
 // Un paso hacia (x, y); si no avanza, rodea el obstáculo abriendo de a 45°
 // (alternando lados) y vuelve a la recta.
-export async function walkTowards(ctx: LoopCtx, x: number, y: number) {
+export async function walkTowards(ctx: LoopCtx, x: number, y: number, smooth = false) {
   // Camino con el terreno del server y los tiles rechazados (path.ts); si el terreno no da salida
   // (puede diferir del server), solo con lo aprendido; si nada, en línea recta rodeando a tientas.
   const me = { x: world.x, y: world.y };
   const far = Math.max(Math.abs(x - me.x), Math.abs(y - me.y)) > 1;
   const path = far ? findPath(walkableFor(world.map), me, { x, y }, 6000) ?? findPath(learnedFreeFor(world.map), me, { x, y }, 3000) : null;
-  const toward = path && path.length > 1 ? path[1] : { x, y };
+  // `smooth` (cacería): recta con línea de vista sobre el camino (path.ts, smoothPath), menos zigzag.
+  const toward = path && path.length > 1 ? (smooth ? smoothPath(walkableFor(world.map), path)[1] ?? path[1] : path[1]) : { x, y };
   const straight = directionTowards(world.x, world.y, toward.x, toward.y);
   const k = Math.ceil(ctx.walkStuck / 2);
   const dir = ctx.walkStuck === 0 ? straight : (straight + (ctx.walkStuck % 2 ? k : 8 - k) + 8) % 8;

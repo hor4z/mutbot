@@ -85,3 +85,38 @@ export function findPath(walkable: (x: number, y: number) => boolean, from: Pos,
   }
   return null;
 }
+
+/** Tramo recto Bresenham entre dos casillas (con las dos incluidas) si cada paso es válido (sin cortar esquinas); si no, null. */
+export function straightLine(walkable: (x: number, y: number) => boolean, a: Pos, b: Pos): Pos[] | null {
+  const n = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  const out: Pos[] = [a];
+  let px = a.x, py = a.y;
+  for (let k = 1; k <= n; k++) {
+    const x = a.x + Math.round(((b.x - a.x) * k) / n);
+    const y = a.y + Math.round(((b.y - a.y) * k) / n);
+    if (x < 0 || y < 0 || x > 255 || y > 255 || !walkable(x, y)) return null;
+    if (x !== px && y !== py && (!walkable(px + (x - px), py) || !walkable(px, py + (y - py)))) return null;
+    out.push({ x, y });
+    px = x; py = y;
+  }
+  return out;
+}
+
+/**
+ * Suaviza un camino de findPath con línea de vista (estilo Theta*): cada tramo se cambia por la recta más
+ * larga transitable (ventana de 40 casillas). Nunca queda más largo que el original ni cambia los extremos.
+ */
+export function smoothPath(walkable: (x: number, y: number) => boolean, path: readonly Pos[]): Pos[] {
+  if (path.length < 3) return [...path];
+  const out: Pos[] = [path[0]];
+  let i = 0;
+  while (i < path.length - 1) {
+    let took = false;
+    for (let j = Math.min(path.length - 1, i + 40); j > i + 1; j--) {
+      const seg = straightLine(walkable, path[i], path[j]);
+      if (seg && seg.length - 1 <= j - i) { out.push(...seg.slice(1)); i = j; took = true; break; }
+    }
+    if (!took) { out.push(path[i + 1]); i++; }
+  }
+  return out;
+}

@@ -118,6 +118,11 @@ export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextW
   spots?: Map<number, { x: number; y: number; type: number; at: number }>;
   // Zonas de dragones ya recorridas en esta cacería ("x,y"; zones.ts).
   zonesVisited?: Set<string>;
+  // Rastrillaje por visión (sweep.ts): se arma al llegar al mapa de la cacería si se conoce el terreno.
+  sweep?: import('./sweep').SweepPlanner;
+  sweepMap?: number;
+  // Distancia máxima (Chebyshev) a la que se vio un objeto en scope: de ahí sale el radio de visión.
+  scopeMax?: number;
   // Mapas ya cazados en esta invasión (el encadenado no vuelve a ellos).
   done?: Set<number>;
   // Cacería del Dragón Rojo: corta por tiempo (RED_HUNT_MS), no por el 0xFD de la invasión dorada.

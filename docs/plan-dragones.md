@@ -33,3 +33,22 @@ En la rama de pelea, el acercamiento al objetivo era **en línea recta** (`step(
 - (d) Pre-posicionarse antes de las :50: **no** se implementa. El mapa solo se sabe con el aviso (hoy Noria, luego Devias), la historia de los últimos días muestra los tres mapas y no hay una regla medida. Con el aviso a las :50:00, llegar tomó ~27 s al primer dorado; el costo grande fue el tiempo hasta ver al dragón (110 s), lo que `dragonRush` ataca. Revisar cuando haya `dragon_fight` de varias invasiones.
 - Rastrillaje (docs/rastrillaje.md, en el checkout principal): orden de celdas de `HuntExplorer` por probabilidad ÷ costo con baja bayesiana por celda recorrida sin dorados, y suavizado de camino con línea de vista. **Pendiente**, no entró antes de las 16:50 ART. Prioridad: previo blando de `v_dragon_zones` mezclado con uniforme (pocos datos), sin tocar ritmos.
 - No verificado: que el layout del 0x15 de 10 bytes sea exactamente id@3/daño@5 (solo hay el test con bytes inventados); nada corrió contra el server.
+
+## Rastrillaje por visión (sweep.ts, `bun run sweep-tests.ts`)
+
+Pedido del usuario viendo a Hume en Lorencia: se detiene, va por los bordes, no ve que no hace falta llegar a las puntas. `SweepPlanner` reemplaza a las celdas de 25 tiles cuando se conoce el terreno (cae a `useTerrain` si no):
+
+- Cobertura por visión: casilla caminable, alcanzable y fuera de zona segura a <= R (Chebyshev) del bot. R = mayor distancia vista a un objeto en scope (`scopeMax`), acotada a 8-12; sin datos, 9. Sin línea de vista: el scope del server es por distancia (supuesto, no medido).
+- Objetivos en el interior (>= 2 casillas de paredes) sobre una retícula de 1,5 × R; elige el de más casillas nuevas × previo / (distancia + 8), con 15 % de bonus por seguir el rumbo (sale una serpentina). El objetivo se da por hecho cuando desde donde está ya no se ve casi nada nuevo (no va a las puntas). El siguiente se elige antes de llegar (`after`): sin paradas.
+- Previo: zonas de la base (`zonePrior`, mezcla 30 % con uniforme), baja ×0,2 al recorrer un objetivo sin ver (detección 0,8) y sube ×2 con un dorado visto; celdas donde murieron personajes (insights) valen ×0,2. Una vuelta termina con >= 95 % visto.
+- `smoothPath` (path.ts): suaviza el camino con rectas de línea de vista; `walkTowards(..., smooth)` solo en la cacería.
+
+Medido en simulación con el terreno real (380 ms por paso, R = 9, tope 6000 pasos); "vista" = % del área caminable alcanzable vista:
+
+| Mapa | Celdas viejas (sin terreno) | Celdas + useTerrain | Rastrillaje por visión |
+|---|---|---|---|
+| Lorencia | 72,0 % (1071 pasos parado) | 82,7 % (119 parado) | 95 % en 3260 pasos, 0 parado |
+| Devias | 70,4 % (3450 parado) | 87,3 % (356 parado) | 95 % en 3016 pasos, 0 parado |
+| Noria | 68,6 % | 72,9 % (233 parado) | 95 % en 3488 pasos, 0 parado |
+
+Los métodos viejos no llegan a 90 % en 6000 pasos. 95 % visto son ~20 min de recorrido a 380 ms por paso: los mapas son grandes; por eso el previo de zonas importa más que el barrido. No se probó con el server ni se midió R real (el 0x15/scope no se mide aún más que con `scopeMax`).
