@@ -46,7 +46,8 @@ export class Follower {
   private wasFar = false;
   private trail: Pos[] = [];
 
-  constructor(private rand: () => number = Math.random) {}
+  /** `far`: correa máxima (tiles); la campaña de crianza usa una corta (squad.ts FOLLOW_MISSION.LEASH_FAR). */
+  constructor(private rand: () => number = Math.random, private far: number = FOLLOW.FAR) {}
 
   /** Hacia dónde mira el líder: por dónde vino (últimas posiciones distintas). */
   private facing(leader: Pos): number {
@@ -68,7 +69,7 @@ export class Follower {
     const crowded = others.some((o) => dist(o, me) < FOLLOW.APART);
     const tooClose = d < FOLLOW.NEAR;
     if (this.angle == null || now >= this.rerollAt) this.reroll(now, leader, slot, slots);
-    if (d <= FOLLOW.FAR && !crowded && !tooClose) { this.wasFar = false; return null; }
+    if (d <= this.far && !crowded && !tooClose) { this.wasFar = false; return null; }
     // Reacción humana: no arranca en el mismo tick en que el líder se alejó.
     if (!this.wasFar && !crowded) {
       this.wasFar = true;
@@ -84,7 +85,7 @@ export class Follower {
     const spread = Math.PI * 0.9;
     const base = slots > 1 ? (slot / (slots - 1) - 0.5) * spread : 0;
     this.angle = behind + base + (this.rand() - 0.5) * 0.7;
-    this.radius = FOLLOW.NEAR + 1 + this.rand() * Math.max(1, FOLLOW.FAR - FOLLOW.NEAR - 4);
+    this.radius = FOLLOW.NEAR + 1 + this.rand() * Math.max(1, this.far - FOLLOW.NEAR - 4);
     this.rerollAt = now + between(this.rand, FOLLOW.REROLL_MS);
   }
 

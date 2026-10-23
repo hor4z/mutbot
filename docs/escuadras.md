@@ -80,7 +80,7 @@ En cualquier fase: `retreat` (30 s hacia el punto de reunión) → `aborted`.
 |---|---|---|
 | **explore** | sweep → converge → done | uno al frente (explorador = el tanque de más nivel); celdas de 25×25 con terreno real, cada uno una celda libre cerca de sí y del explorador; los hallazgos (`/api/gold` y los de la estación) llevan a todos a puntos distintos alrededor |
 | **golden** | search → engage → loot → search … | tanque (BK/MG) a 2 tiles del dorado, daño a 4, apoyo a 6; todos con el mismo `focus`; al salir de vista 15 s de cajas (la caja es del que más daño hizo y su party, 10 s) |
-| **nurture** | farm → done | padrino = el de más nivel (o el elegido): su rutina de siempre; protegidos `hold` (se paran a salvo con `wardTile`, no pelean, cobran el reparto). Fin: todos los protegidos en el nivel meta, o el tiempo |
+| **nurture** (campaña: `follow`, abajo) | farm → done | padrino = el de más nivel (o el elegido): su rutina de siempre; protegidos `hold` (se paran a salvo con `wardTile`, no pelean, cobran el reparto). Fin: todos los protegidos en el nivel meta, o el tiempo |
 
 Roles por clase (`CLASS_KIT`): BK tanque (Death Stab/Rageful/Twisting, Swell Life a la party desde el 120); MG daño
 (Twisting Slash); DW daño de área (Evil Spirit/Decay) + Soul Barrier al tanque; Elf apoyo (Greater Damage, Greater
@@ -90,6 +90,37 @@ Abortos: ≥ 1 muerte en 10 min (explorar) o ≥ 2 (cazar, criar); ≥ 1/3 de la
 hostil a ≤ 15 tiles (el parámetro `hostiles` existe y está testeado, **pero la estación todavía no lo alimenta**: no
 hay fuente de PK confiable; hoy cortan las muertes y la vida baja); padrino fuera de línea; quedan < 2 activos;
 tiempo máximo (explorar 25 min, cazar 20, criar 90). Abortar a mano desde la tarjeta: retirada y release.
+
+### Crianza en campaña (`nurture` con `follow: true`)
+
+Idea del usuario: el FUERTE resetea, vuelve a nivel 1 con todos sus stats y su equipo, y desde ahí sube con el débil en
+su party; con niveles parecidos el reparto de `partyShares` es parejo y el pozo crece rápido (el fuerte sube ~50 niveles/min).
+Suben juntos por toda la ruta hasta el 400, el fuerte resetea otra vez y se repite, hasta que el débil aguanta solo.
+
+- **Solicitud**: `squad-mission` `{kind:'nurture', follow:true, padrino:'<char>', confirm:true, untilResets?:1-20, targetLevel?:1-400, maxMin?:1-720}`.
+  `follow` solo vale `true`, exige `padrino` y `confirm`, y no admite `warp`. Sin `follow` todo queda como antes (hold, un mapa).
+- **Estados** (`Mission.phase`): `armed` (esperando reset) → `follow` (siguiendo) → `done` | `retreat` → `aborted`.
+- **Valor** (`followDecision`): se evalúa con el NIVEL REAL del padrino al pedirla y de nuevo en cada reset. Rinde si
+  `nivel padrino <= max(20, nivel del protegido más flojo / 0,5)`. Si no, queda `armed` y dice "esperá al próximo reset del
+  padrino (nivel < X)": durante `armed` todos siguen con su rutina y no se invita a nadie. Arranca sola SOLO si el usuario la
+  armó (misma solicitud confirmada) y el padrino resetea: sube su `resets` o su nivel cae >= 60 de golpe, y queda en nivel <= 20
+  (ventana de 3 min por si el nivel tarda en actualizarse). Una armada vence a las 24 h; abortar una armada la desarma.
+- **El padrino NUNCA espera**: su orden es siempre `farm`, también en retirada y mientras el protegido viaja o espera.
+- **Protegido**: en el mismo mapa, orden `follow` con `tight` (correa de `FOLLOW_MISSION.LEASH_FAR` = 6 tiles, bolsillo detrás
+  del padrino con `Follower`), con la posición del padrino por si no lo ve; no pelea salvo que le peguen. Si el padrino cambia
+  de mapa y el protegido llega al nivel del warp (`SQUAD_MAPS`), viaja con el warp de siempre con espera de 2-22 s (nueva en cada
+  viaje). Si no llega (o el mapa no tiene warp) espera en zona segura —si está en otro mapa, vuelve al último mapa compartido— y
+  la estación lo anota ("no entra a Arena 2 (nivel 100)").
+- **Party**: invita solo el padrino (`Assignment.leader` = padrino, el protegido nunca invita). Si se cae, `InviteScheduler`
+  reinvita con 90 s de espera y tope de 4 intentos por vez.
+- **Fin**: el protegido alcanza al padrino (solo después de que el padrino lo pasó, para no cortar al arrancar), todos los
+  protegidos en `targetLevel`, el padrino reseteó `untilResets` veces, o tiempo máximo (8 h por defecto). **Abortos**: el
+  protegido murió 2 veces en 10 min (las del padrino no cuentan), hostil a <= 15 tiles de un protegido, padrino fuera de línea,
+  no queda ningún protegido. La retirada manda a los protegidos a Lorencia (o los deja quietos); la vida topada en 65.535
+  (`hpPct` 0) se ignora. No hay corte por vida baja en esta misión.
+- **Sin verificar en vivo**: que el padrino conserve la party al resetear, la lectura de `resets` en la estación como señal, el
+  seguimiento tight entre mapas, y que el reset vuelva al padrino a Lorencia (se asume que el protegido lo alcanza con el warp o
+  caminando). Las misiones armadas se pierden si se reinicia la estación. Hume (código viejo cargado) no obedece hasta reiniciarlo.
 
 ### Seguir y formación (`formation.ts`)
 

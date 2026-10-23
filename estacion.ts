@@ -633,7 +633,7 @@ function squadSnapshot(now: number): Snapshot {
     members.set(s.cfg.key, {
       char: s.cfg.key, cls: st ? classKey(st.char.classId) : (s.cfg.cls ?? null), level: st?.char.level ?? 0, map: st?.where.map ?? 0, x: st?.where.x ?? 0, y: st?.where.y ?? 0,
       // Con el tope de 16 bits (65.535) la lectura no es la vida real: 0 = desconocida (el chequeo la ignora).
-      hpPct: st && st.char.hp[1] > 0 && st.char.hp[1] < 65535 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, obeys: s.pid != null && obeyPids.has(s.pid),
+      hpPct: st && st.char.hp[1] > 0 && st.char.hp[1] < 65535 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, resets: st?.char.resets ?? undefined, obeys: s.pid != null && obeyPids.has(s.pid),
     });
   }
   // Lo que la escuadra ve: los dorados que ya compartimos (/api/gold). Peligro y hostiles: sin fuente todavía (docs/escuadras.md).
@@ -661,7 +661,7 @@ function squadAction(r: SquadRequest): { ok: boolean; msg: string; [k: string]: 
       return res.squad ? { ok: true, msg: res.msg, id: res.squad.id } : res;
     }
     case 'squad-mission': {
-      const res = squads.startMission(r.squad, { kind: r.kind, warp: r.warp, targetLevel: r.targetLevel, maxMin: r.maxMin, padrino: r.padrino }, squadSnapshot(now));
+      const res = squads.startMission(r.squad, { kind: r.kind, warp: r.warp, targetLevel: r.targetLevel, maxMin: r.maxMin, padrino: r.padrino, follow: r.follow, untilResets: r.untilResets }, squadSnapshot(now));
       if (res.ok) say(`escuadra ${r.squad}: ${res.msg}`);
       return res;
     }

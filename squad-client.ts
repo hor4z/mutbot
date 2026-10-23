@@ -24,7 +24,7 @@ import { dist } from './corner';
 import { Follower, wardTile } from './formation';
 import { InviteScheduler, decideInvite, parsePartyList } from './party';
 import { buildPartyInvite, buildPartyKick } from './protocol097';
-import { verifyAssignment, type Assignment } from './squad';
+import { FOLLOW_MISSION, verifyAssignment, type Assignment } from './squad';
 import { humanPace, log, sleep } from './util';
 
 const KEY = process.env.MUBOT_SQUAD_KEY ?? '';
@@ -41,6 +41,8 @@ let savedPin: typeof bot.pinnedSpot | undefined;
 let released = '';
 const invites = new InviteScheduler();
 const follower = new Follower();
+/** Campaña de crianza: correa corta (2-6 tiles) detrás del padrino. */
+const tightFollower = new Follower(Math.random, FOLLOW_MISSION.LEASH_FAR);
 let warpSeenAt = 0;
 let warpKey = '';
 const buffAt = new Map<number, number>();
@@ -141,7 +143,7 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       return true;
     case 'warp': {
       if (world.map === o.map) return false;
-      const k = `${a.missionId}:${o.warp}`;
+      const k = `${a.missionId}:${o.warp}:${o.delayMs}`; // cada viaje con su espera nueva
       if (warpKey !== k) { warpKey = k; warpSeenAt = Date.now(); }
       if (Date.now() - warpSeenAt < o.delayMs) { bot.doing = 'escuadra: espero para viajar'; await sleep(humanPace(500)); return true; }
       const sp = WARP_SPOTS.find((s) => s.index === o.warp);
@@ -179,20 +181,30 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
     case 'follow':
     case 'hold': {
       const L = byName(o.leader);
-      if (!L) return false; // no lo veo: sigo con lo mío hasta que aparezca
+      if (!L) {
+        if (o.kind === 'follow' && o.tight) {
+          // Campaña de crianza: no lo veo, voy hacia donde la estación dice que está (sin pelear salvo defensa propia).
+          if (recentlyHit(ctx)) return false;
+          if (o.at && dist(world, o.at) > 4) { bot.doing = 'escuadra: voy con el padrino'; await walkTowards(ctx, o.at.x, o.at.y); return true; }
+          bot.doing = 'escuadra: espero al padrino';
+          await sleep(humanPace(900));
+          return true;
+        }
+        return false; // no lo veo: sigo con lo mío hasta que aparezca
+      }
       const lp = { x: L[1].x, y: L[1].y };
       const others = [...vis].filter(([n]) => a.members.some((m) => m.toLowerCase() === n)).map(([, id]) => world.players.get(id)!).filter((p) => p !== L[1]).map((p) => ({ x: p.x, y: p.y }));
       const me = { x: world.x, y: world.y };
       const slots = Math.max(1, a.members.length - 1);
       const slot = Math.max(0, a.members.findIndex((m) => m.toLowerCase() === bot.charName.toLowerCase()) - 1);
       const walkable = walkableFor(world.map);
-      let t = follower.next(Date.now(), me, lp, walkable, others, slot, slots);
+      let t = (o.kind === 'follow' && o.tight ? tightFollower : follower).next(Date.now(), me, lp, walkable, others, slot, slots);
       if (t && o.kind === 'hold') t = wardTile(lp, [...world.npcs.values()].map((n) => ({ x: n.x, y: n.y })), walkable, others) ?? t;
       if (t) { bot.doing = o.kind === 'hold' ? 'escuadra: cobro cerca del padrino' : 'escuadra: sigo al líder'; await walkTowards(ctx, t.x, t.y); return true; }
-      if (o.kind === 'hold') {
+      if (o.kind === 'hold' || (o.kind === 'follow' && o.tight)) {
         // Protegido en su lugar: no pelea (cobra el reparto de exp de la party) salvo que le peguen.
         if (recentlyHit(ctx)) return false;
-        bot.doing = 'escuadra: cobro exp';
+        bot.doing = o.kind === 'hold' ? 'escuadra: cobro exp' : 'escuadra: acompaño al padrino';
         await sleep(humanPace(900));
         return true;
       }

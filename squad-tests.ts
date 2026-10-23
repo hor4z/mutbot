@@ -6,12 +6,13 @@
  *   bun run squad-tests.ts
  */
 import {
-  ASSIGNMENT_TTL_MS, CLASS_KIT, MISSION, NURTURE_MODEL, SQUAD_MAPS, SquadBook, assignGroupRoles, cellsFromWalkable, isTerminal,
-  levelSpreadOk, nurtureOptions, parseSquadRequest, type Cell, type Finding, type MemberSnap, type Order, type Snapshot, type SquadClass,
+  ASSIGNMENT_TTL_MS, CLASS_KIT, FOLLOW_MISSION, MISSION, NURTURE_MODEL, SQUAD_MAPS, SquadBook, assignGroupRoles, cellsFromWalkable, isTerminal,
+  followDecision, levelSpreadOk, nurtureOptions, parseSquadRequest, type Cell, type Finding, type MemberSnap, type Order, type Snapshot, type SquadClass,
 } from './squad';
 import { FENRIR, WING_TIER_SCORE, gearNotes, wingScore, wingsFor } from './squad-gear';
 import { ACCOUNT_PACING, AccountRunner, COMPLEMENTARY, planSquadAccounts } from './squad-accounts';
 import { dist } from './corner';
+import { InviteScheduler } from './party';
 import { parseStationRequest } from './estacion-logic';
 import { WARP_SPOTS } from './route';
 
@@ -53,6 +54,7 @@ function tick(s: Sim, ms = 2000) {
       m.y = Math.round(m.y + (t.y - m.y) * k);
     };
     if (o.kind === 'goto' || o.kind === 'retreat' || o.kind === 'hunt') go(o);
+    if (o.kind === 'follow') { const L = s.mem.get(o.leader); if (L && L.map === m.map) go(L); }
   }
 }
 const warpTimers = new Map<string, number>();
@@ -316,6 +318,130 @@ function team5(): Sim {
   for (let i = 0; i < 40; i++) tick(v);
   ok('al terminar no se encadena otra (misión liberada, solo release)', v.book.squads.get('sq1')!.mission === null || isTerminal(v.book.squads.get('sq1')!.mission!.phase));
   ok('las asignaciones vencen a los 20 s (si la estación se cae, el bot vuelve a su rutina)', ASSIGNMENT_TTL_MS === 20_000 && s.book.assignmentFor('hume')!.expiresAt - s.book.assignmentFor('hume')!.issuedAt === ASSIGNMENT_TTL_MS);
+}
+
+// --- Crianza en campaña: el protegido sigue al padrino por toda su ruta (follow) ---------------------------------------
+{
+  const mk = (padLevel: number, wardLevel: number, over: Partial<MemberSnap> = {}) => {
+    const s = sim([member('hume', 'dk', padLevel, { map: 83, resets: 10, ...over }), member('zamu', 'dw', wardLevel, { map: 83 })]);
+    s.book.create('Cria', ['hume', 'zamu'], 'hume', KNOWN, s.now);
+    return s;
+  };
+  const req = { kind: 'nurture' as const, padrino: 'hume', follow: true };
+  const hume = (s: Sim) => s.mem.get('hume')!;
+  const zamu = (s: Sim) => s.mem.get('zamu')!;
+  const log = (s: Sim) => s.book.squads.get('sq1')!.log.join('\n');
+  const doReset = (s: Sim) => { hume(s).resets = (hume(s).resets ?? 0) + 1; hume(s).level = 1; hume(s).map = 0; hume(s).x = 130; hume(s).y = 130; };
+
+  // Contrato
+  const P = (o: object) => parseSquadRequest({ action: 'squad-mission', squad: 'sq1', kind: 'nurture', confirm: true, ...o });
+  ok('follow exige padrino y confirm', P({ follow: true, padrino: 'hume' })?.action === 'squad-mission' && P({ follow: true }) === null && parseSquadRequest({ action: 'squad-mission', squad: 'sq1', kind: 'nurture', padrino: 'hume', follow: true }) === null);
+  ok('follow: solo true, sin warp, solo en nurture', P({ follow: false, padrino: 'hume' }) === null && P({ follow: true, padrino: 'hume', warp: 24 }) === null && parseSquadRequest({ action: 'squad-mission', squad: 'sq1', kind: 'golden', warp: 24, follow: true, confirm: true }) === null);
+  ok('untilResets solo con follow y de 1 a 20; maxMin hasta 12 h', P({ follow: true, padrino: 'hume', untilResets: 3, maxMin: 600 })?.action === 'squad-mission' && P({ padrino: 'hume', untilResets: 3 }) === null && P({ follow: true, padrino: 'hume', untilResets: 21 }) === null && P({ padrino: 'hume', maxMin: 600 }) === null);
+
+  // Valor con el nivel REAL del padrino
+  ok('padrino 400 con protegido 100: no rinde y dice cuándo', !followDecision(400, [100]).ok && followDecision(400, [100]).msg.includes('esperá al próximo reset del padrino (nivel < 200'), followDecision(400, [100]));
+  ok('padrino recién reseteado (nivel 1): parejo', followDecision(1, [100]).ok && followDecision(150, [100]).ok);
+
+  // Armada: no arranca, todos en su rutina, sin invitar
+  const a = mk(400, 100);
+  const r0 = a.book.startMission('sq1', req, snapOf(a));
+  ok('padrino en 400: queda armada y avisa', r0.ok && r0.msg.includes('esperá al próximo reset del padrino') && phaseOf(a) === 'armed', r0);
+  for (let i = 0; i < 10; i++) tick(a);
+  ok('armada: todos en su rutina (farm), sin invitar a nadie, sin buffs', orderOf(a, 'hume')?.kind === 'farm' && orderOf(a, 'zamu')?.kind === 'farm' && a.book.assignmentFor('hume')!.invite.length === 0 && a.book.assignmentFor('zamu')!.buffs.length === 0);
+  // Reset: el padrino vuelve a 1 -> arranca sola
+  doReset(a);
+  tick(a);
+  ok('reset del padrino (resets+1, nivel 1): arranca sola', phaseOf(a) === 'follow', phaseOf(a));
+  ok('el padrino conserva su rutina; solo el padrino invita (líder = padrino)', orderOf(a, 'hume')?.kind === 'farm' && a.book.assignmentFor('zamu')!.leader === 'hume' && a.book.assignmentFor('hume')!.invite.join() === 'zamu' && a.book.assignmentFor('zamu')!.invite.length === 0);
+  const o1 = orderOf(a, 'zamu') as Extract<Order, { kind: 'warp' }>;
+  ok('el protegido viaja con el warp de siempre al mapa del padrino, con espera humana de 2-22 s', o1.kind === 'warp' && o1.warp === 2 && o1.delayMs >= 2000 && o1.delayMs <= 22000, o1);
+  runUntil(a, () => orderOf(a, 'zamu')?.kind === 'follow', 40);
+  const f = orderOf(a, 'zamu') as Extract<Order, { kind: 'follow' }>;
+  ok('en el mapa: correa corta al padrino (tight) con su posición', f.kind === 'follow' && f.tight === true && f.leader === 'hume' && !!f.at, f);
+
+  // Cambio de mapa del padrino (Lorencia -> Devias 3): viaja escalonado y se vuelve a pegar
+  hume(a).map = 2; hume(a).x = 120; hume(a).y = 120; hume(a).level = 30;
+  tick(a);
+  const o2 = orderOf(a, 'zamu') as Extract<Order, { kind: 'warp' }>;
+  ok('padrino cambia de mapa: el protegido (nivel suficiente) viaja al mismo mapa', o2.kind === 'warp' && o2.map === 2 && o2.warp === 6, o2);
+  ok('...y el padrino no se frena (farm)', orderOf(a, 'hume')?.kind === 'farm');
+  warpTimers.clear();
+  runUntil(a, () => orderOf(a, 'zamu')?.kind === 'follow', 40);
+  ok('llegó: vuelve a seguirlo', orderOf(a, 'zamu')?.kind === 'follow' && zamu(a).map === 2, orderOf(a, 'zamu'));
+  // Padrino va a Arena 2 pero el protegido (nivel 60) no entra
+  zamu(a).level = 60; hume(a).level = 120; hume(a).map = 83;
+  tick(a);
+  const o3 = orderOf(a, 'zamu') as Extract<Order, { kind: 'idle' }>;
+  ok('protegido sin nivel para entrar: espera y avisa (no viaja)', o3.kind === 'idle' && o3.why.includes('Arena 2') && log(a).includes('zamu: no entra a Arena 2'), [o3, log(a)]);
+  ok('...el padrino sigue su ciclo sin esperar', orderOf(a, 'hume')?.kind === 'farm');
+  hume(a).map = 2; tick(a);
+  ok('cuando el padrino vuelve a un mapa compartido, lo sigue otra vez', orderOf(a, 'zamu')?.kind === 'follow');
+
+  // Caída de la party: el padrino (único que invita) reinvita con esperas largas y tope de intentos
+  {
+    const sch = new InviteScheduler();
+    const vis = new Map([['zamu', 7]]);
+    let t = 0, sent = 0;
+    for (let i = 0; i < 600; i++) { t += 5_000; if (sch.next(t, 'hume', 'hume', ['hume', 'zamu'], ['hume'], vis, () => 0.5)) sent++; }
+    ok('party caída: reinvita espaciado y con tope de intentos', sent === 4 && sch.gaveUp().includes('zamu'), sent);
+    ok('...y si vuelve a entrar, el conteo arranca de cero', (sch.next(t + 1e6, 'hume', 'hume', ['hume', 'zamu'], ['hume', 'zamu'], vis, () => 0.5), sch.gaveUp().length === 0));
+  }
+
+  // Muertes del protegido: 2 en 10 min -> retirada; el padrino NO se frena
+  const d = mk(1, 100);
+  d.book.startMission('sq1', req, snapOf(d));
+  ok('padrino bajo: arranca de una', phaseOf(d) === 'follow', phaseOf(d));
+  runUntil(d, () => orderOf(d, 'zamu')?.kind === 'follow', 40);
+  for (let i = 0; i < 2; i++) { zamu(d).mode = 'dead'; tick(d); zamu(d).mode = 'farm'; tick(d); }
+  ok('protegido muere 2 veces en 10 min: retirada', phaseOf(d) === 'retreat', phaseOf(d));
+  ok('...el padrino sigue en su rutina durante la retirada', orderOf(d, 'hume')?.kind === 'farm');
+  runUntil(d, () => phaseOf(d) === 'aborted', 40);
+  ok('...y termina abortada con salida de la party', phaseOf(d) === 'aborted' && (orderOf(d, 'zamu') as { leaveParty?: boolean }).leaveParty === true);
+  // Muertes del padrino: no cuentan
+  const d2 = mk(1, 100);
+  d2.book.startMission('sq1', req, snapOf(d2));
+  for (let i = 0; i < 3; i++) { hume(d2).mode = 'dead'; tick(d2); hume(d2).mode = 'farm'; tick(d2); }
+  ok('las muertes del padrino no abortan al protegido', phaseOf(d2) === 'follow', phaseOf(d2));
+  zamu(d2).hpPct = 0; tick(d2);
+  ok('hpPct 0 (desconocida) se ignora', phaseOf(d2) === 'follow');
+  d2.hostiles.push({ map: zamu(d2).map, x: zamu(d2).x + 3, y: zamu(d2).y, at: d2.now });
+  tick(d2);
+  ok('hostil cerca: retirada', phaseOf(d2) === 'retreat', phaseOf(d2));
+  // Padrino fuera de línea
+  const e = mk(1, 100);
+  e.book.startMission('sq1', req, snapOf(e));
+  hume(e).online = false; tick(e);
+  ok('padrino fuera de línea: retirada', phaseOf(e) === 'retreat');
+  const e2 = mk(400, 100);
+  e2.book.startMission('sq1', req, snapOf(e2));
+  hume(e2).online = false;
+  for (let i = 0; i < 30; i++) tick(e2);
+  ok('armada y el padrino se desconecta: sigue armada (no aborta)', phaseOf(e2) === 'armed');
+  ok('abortar una armada la desarma', e2.book.abort('sq1', e2.now).ok && phaseOf(e2) === 'aborted' && e2.book.squads.get('sq1')!.last?.kind === 'nurture');
+
+  // Fin por nivel: el padrino pasa al protegido y el protegido lo alcanza
+  const g = mk(1, 100);
+  g.book.startMission('sq1', req, snapOf(g));
+  runUntil(g, () => orderOf(g, 'zamu')?.kind === 'follow', 40);
+  tick(g);
+  ok('al arrancar (padrino 1, protegido 100) NO termina por "alcanzó"', phaseOf(g) === 'follow');
+  hume(g).level = 120; tick(g);
+  zamu(g).level = 121; tick(g);
+  ok('el protegido alcanza al padrino: done', phaseOf(g) === 'done', [phaseOf(g), g.book.squads.get('sq1')!.mission?.result]);
+  // Fin por N resets del padrino
+  const h = mk(1, 100);
+  h.book.startMission('sq1', { ...req, untilResets: 2 }, snapOf(h));
+  hume(h).level = 399; tick(h); doReset(h); tick(h);
+  ok('1er reset del padrino: sigue', phaseOf(h) === 'follow' && h.book.squads.get('sq1')!.mission!.resetsDone === 1);
+  hume(h).level = 399; tick(h); doReset(h); tick(h);
+  ok('2do reset del padrino: done', phaseOf(h) === 'done', phaseOf(h));
+  // Tiempo máximo (8 h por defecto)
+  const i8 = mk(1, 100);
+  i8.book.startMission('sq1', req, snapOf(i8));
+  ok('el tope por defecto es de 8 h', i8.book.squads.get('sq1')!.mission!.maxMs === 8 * 3_600_000 && FOLLOW_MISSION.DEFAULT_MAX_MS === 8 * 3_600_000);
+  i8.now += 8 * 3_600_000 + 1000; tick(i8);
+  ok('pasadas 8 h: done por tiempo', phaseOf(i8) === 'done');
 }
 
 // --- Alas y montura -------------------------------------------------------------------------------------------------
