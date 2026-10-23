@@ -22,7 +22,7 @@ import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   CHAR_CLASSES, parseEnvFile, type NewCharRequest, isSquadRequest,
   type Alert, type ScoutReport, type RoleAssign, newAlertMemory, diffAlerts, pushAlert, bagUsage, parseBotAlert,
   parseScoutReport, parseBotInsight, type InsightSummary, applyScout, freshScouts, roleFromRoutine, roleRoutine, roleLabel,
@@ -33,7 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { classFamily } from './farming';
 import { isSafeZone, walkableFor } from './terrain';
-import { ASSIGNMENT_TTL_MS, SquadBook, cellsFromWalkable, signAssignment, type Finding, type MemberSnap, type Snapshot, type SquadClass, type SquadRequest } from './squad';
+import { ASSIGNMENT_TTL_MS, SquadBook, cellsFromWalkable, signAssignment, type Assignment, type Finding, type MemberSnap, type Snapshot, type SquadClass, type SquadRequest } from './squad';
 import { AccountRunner, planSquadAccounts } from './squad-accounts';
 import { mapName } from './panel-logic';
 import type { EventTimer, PanelServerMessage, PanelState } from './panel-protocol';
@@ -651,6 +651,33 @@ async function squadAccountsTick() {
   r.report(step, { ok: res.ok, msg: res.msg, code }, Date.now(), [...slots.values()].map((x) => x.cfg.user));
   say(`escuadra, cuentas: ${r.log.at(-1)}`);
 }
+// Seguir al humano (idea del usuario, 2026-10-23): los bots elegidos se pegan a un personaje que juega el usuario a mano.
+// La estación les sirve una orden `follow` firmada con ese nombre de líder; aceptan su party y lo siguen mientras lo ven.
+const humanFollow = { human: '', followers: new Set<string>() };
+function humanAssignment(who: string): Assignment | null {
+  const k = who.toLowerCase();
+  if (!humanFollow.human || !humanFollow.followers.has(k)) return null;
+  const now = Date.now();
+  return {
+    v: 1, char: k, squadId: 'human', missionId: 'follow-human', role: null, order: { kind: 'follow', leader: humanFollow.human, tight: true },
+    leader: humanFollow.human, members: [humanFollow.human, ...humanFollow.followers], invite: [], buffs: [], seq: now, issuedAt: now, expiresAt: now + ASSIGNMENT_TTL_MS,
+  };
+}
+function humanFollowAction(r: Extract<StationRequest, { action: 'human-follow' | 'human-follow-stop' }>): { ok: boolean; msg: string } {
+  refreshSlots();
+  if (r.action === 'human-follow-stop') {
+    humanFollow.human = '';
+    humanFollow.followers.clear();
+    return { ok: true, msg: 'los bots dejan de seguir al humano y vuelven a su rutina en unos segundos' };
+  }
+  const unknown = r.chars.filter((c) => !slots.has(c));
+  if (unknown.length) return { ok: false, msg: `no conozco a ${unknown.join(', ')}` };
+  if ([...slots.keys()].includes(r.human.toLowerCase())) return { ok: false, msg: `${r.human} es un personaje con bot de la estación: ese lo maneja la estación, no se juega a mano (desconectá su bot primero)` };
+  humanFollow.human = r.human.toLowerCase();
+  humanFollow.followers = new Set(r.chars);
+  say(`seguir al humano: ${r.chars.join(', ')} siguen a ${r.human}`);
+  return { ok: true, msg: `${r.chars.join(', ')} te siguen como ${r.human}: aceptan tu party y se pegan a vos cuando te ven` };
+}
 function squadAction(r: SquadRequest): { ok: boolean; msg: string; [k: string]: unknown } {
   refreshSlots();
   const now = Date.now();
@@ -718,7 +745,7 @@ Bun.serve({
       if (url.pathname === '/api/squad') {
         if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
         const who = url.searchParams.get('char') ?? '';
-        const a = /^[A-Za-z0-9_]{1,10}$/.test(who) ? squads.assignmentFor(who) : null;
+        const a = /^[A-Za-z0-9_]{1,10}$/.test(who) ? (squads.assignmentFor(who) ?? humanAssignment(who)) : null;
         return json(a && Date.now() <= a.expiresAt ? signAssignment(SQUAD_KEY, a) : { none: true });
       }
       // Nombres sugeridos para un personaje nuevo (sin repetir los que ya hay en la estación).
@@ -808,6 +835,7 @@ Bun.serve({
         const res = await createChar(r.action === 'add' ? { action: 'create', user: r.user, pass: pass!, char: r.char, cls: r.cls, existing: true } : r);
         return json(res, res.ok ? 200 : 409);
       }
+      if (r.action === 'human-follow' || r.action === 'human-follow-stop') return json(humanFollowAction(r));
       if (isSquadRequest(r)) {
         const res = squadAction(r);
         return json(res, res.ok ? 200 : 409);

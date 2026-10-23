@@ -139,7 +139,10 @@ export type StationRequest =
   // Órdenes puntuales al bot (solo las de BOT_ORDERS): calcular el plan de equipo, ejecutarlo, limpiar el PK.
   | { action: 'bot'; char: string; command: PanelCommand }
   // Escuadras (squad.ts): crear, misión (solo con confirm: true), abortar, disolver y alta de cuentas.
-  | SquadRequest;
+  | SquadRequest
+  // Seguir al humano: bots que se pegan a un personaje que juega el usuario a mano (sin escuadra ni misión).
+  | { action: 'human-follow'; human: string; chars: string[] }
+  | { action: 'human-follow-stop' };
 
 /** Lo único que la estación le reenvía a un bot por /api/do { action: 'bot' } (la interfaz pide confirmación antes de las que mueven o tocan algo). */
 export function isBotOrder(c: unknown): c is PanelCommand {
@@ -181,6 +184,13 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
   if (typeof r.action === 'string' && r.action.startsWith('squad-')) return parseSquadRequest(v);
+  if (r.action === 'human-follow') {
+    if (Object.keys(r).sort().join() !== 'action,chars,human') return null;
+    if (typeof r.human !== 'string' || !/^[A-Za-z0-9_]{1,10}$/.test(r.human)) return null;
+    if (!Array.isArray(r.chars) || r.chars.length < 1 || r.chars.length > 5 || !r.chars.every((c) => typeof c === 'string' && /^[a-z0-9_]{1,10}$/.test(c))) return null;
+    return { action: 'human-follow', human: r.human, chars: r.chars as string[] };
+  }
+  if (r.action === 'human-follow-stop') return Object.keys(r).length === 1 ? { action: 'human-follow-stop' } : null;
   if (r.action === 'create') {
     const keys = Object.keys(r).sort().join();
     if (keys !== 'action,char,cls,existing,pass,user') return null;
