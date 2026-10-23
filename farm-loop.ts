@@ -34,6 +34,7 @@ import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
 import { lootState, drops, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
+import { squadActive, squadStep } from './squad-client';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
@@ -450,6 +451,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       continue;
     }
+    // Escuadra (squad-client.ts): órdenes firmadas por la estación local. Solo con una escuadra vigente.
+    if (squadActive() && (await squadStep(ctx))) continue;
     // Orden `vault`: leer el baúl (vault.ts). Después, la ruta vuelve sola al spot.
     if (bot.pendingVault && !bot.hunting) {
       bot.pendingVault = false;

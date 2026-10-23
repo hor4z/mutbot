@@ -23,10 +23,16 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
-  CHAR_CLASSES, parseEnvFile, type NewCharRequest,
+  CHAR_CLASSES, parseEnvFile, type NewCharRequest, isSquadRequest,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { classFamily } from './farming';
+import { isSafeZone, walkableFor } from './terrain';
+import { ASSIGNMENT_TTL_MS, SquadBook, cellsFromWalkable, signAssignment, type Finding, type MemberSnap, type Snapshot, type SquadClass, type SquadRequest } from './squad';
+import { AccountRunner, planSquadAccounts } from './squad-accounts';
 import { mapName } from './panel-logic';
 import type { PanelServerMessage, PanelState } from './panel-protocol';
 
@@ -124,6 +130,7 @@ function syncRunning() {
   for (const s of slots.values()) {
     const p = procs.find((r) => processRunsAccount(r.cmdline, r.environ, s.cfg));
     if (p) {
+      if (p.environ.includes(`MUBOT_SQUAD_KEY=${SQUAD_KEY}`)) obeyPids.add(p.pid);
       if (s.pid !== p.pid) {
         s.pid = p.pid;
         if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
@@ -287,6 +294,9 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
   env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
+  // Escuadras: la clave firma las órdenes de la estación; sin ella el bot no obedece ninguna (squad-client.ts).
+  env.MUBOT_SQUAD_KEY = SQUAD_KEY;
+  env.MUBOT_SQUAD_URL = `http://127.0.0.1:${PORT}/api/squad`;
   // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
   env.MUBOT_PASS = pass;
   if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
@@ -298,6 +308,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   closeSync(fd);
   s.pid = proc.pid;
   ownExits.add(proc.pid);
+  obeyPids.add(proc.pid);
   s.status = 'starting';
   s.msg = 'conectando…';
   s.routine = null;
@@ -496,11 +507,116 @@ function team() {
   return { members, requests: [...teamRequests.values()] };
 }
 
+
+// --- Escuadras (squad.ts) ------------------------------------------------------------------------
+// La estación es la única que da órdenes de escuadra: las firma con SQUAD_KEY (la leen solo los bots que
+// ella lanzó, por entorno) y cada bot las consulta por loopback en GET /api/squad (sin Origin). Una
+// misión solo arranca por un pedido explícito de la interfaz (`squad-mission` con confirm). Un bot que
+// ya corría sin la clave (lanzado antes de las escuadras) NO obedece: se ve como "sin clave".
+function loadSquadKey(): string {
+  const f = join(homedir(), '.mubot', 'squad.key');
+  try {
+    if (existsSync(f)) { const k = readFileSync(f, 'utf8').trim(); if (/^[0-9a-f]{64}$/.test(k)) return k; }
+    mkdirSync(join(homedir(), '.mubot'), { recursive: true });
+    const k = randomBytes(32).toString('hex');
+    writeFileSync(f, k, { mode: 0o600 });
+    chmodSync(f, 0o600);
+    return k;
+  } catch {
+    return randomBytes(32).toString('hex'); // sin disco: vale hasta que se reinicie la estación
+  }
+}
+const SQUAD_KEY = loadSquadKey();
+const SQUAD_FILE = join(homedir(), '.mubot', 'squads.json');
+const obeyPids = new Set<number>();
+const squadCells = (map: number) => {
+  const w = walkableFor(map);
+  return cellsFromWalkable((x, y) => w(x, y) && !isSafeZone(map, x, y));
+};
+const squads = (() => {
+  try { return SquadBook.fromJSON(JSON.parse(readFileSync(SQUAD_FILE, 'utf8')), squadCells); } catch { return new SquadBook(squadCells); }
+})();
+let squadSaved = '';
+function saveSquads() {
+  const j = JSON.stringify(squads.toJSON());
+  if (j === squadSaved) return;
+  squadSaved = j;
+  try { mkdirSync(join(homedir(), '.mubot'), { recursive: true }); writeFileSync(SQUAD_FILE, j); } catch {}
+}
+const classKey = (id: number | undefined): SquadClass | null => {
+  if (id == null) return null;
+  if (id >> 2 === 4) return 'dl';
+  return ({ wizard: 'dw', knight: 'dk', elf: 'elf', gladiator: 'mg' } as const)[classFamily(id) ?? 'knight'] ?? null;
+};
+function squadSnapshot(now: number): Snapshot {
+  const members = new Map<string, MemberSnap>();
+  for (const s of slots.values()) {
+    const st = s.state;
+    const online = s.pid != null && !!st && st.mode !== 'connecting';
+    members.set(s.cfg.key, {
+      char: s.cfg.key, cls: st ? classKey(st.char.classId) : (s.cfg.cls ?? null), level: st?.char.level ?? 0, map: st?.where.map ?? 0, x: st?.where.x ?? 0, y: st?.where.y ?? 0,
+      hpPct: st && st.char.hp[1] > 0 ? Math.round((100 * st.char.hp[0]) / st.char.hp[1]) : 0, mode: st?.mode ?? 'off', online, obeys: s.pid != null && obeyPids.has(s.pid),
+    });
+  }
+  // Lo que la escuadra ve: los dorados que ya compartimos (/api/gold). Peligro y hostiles: sin fuente todavía (docs/escuadras.md).
+  const findings: Finding[] = freshGolds(golds, now).map((g) => ({ kind: 'golden', map: g.map, x: g.x, y: g.y, at: g.at, note: `${g.name} visto por ${g.from}` }));
+  return { now, members, findings, hostiles: [] };
+}
+const accountRunner: { r: AccountRunner | null; plan: ReturnType<typeof planSquadAccounts> | null } = { r: null, plan: null };
+async function squadAccountsTick() {
+  const r = accountRunner.r;
+  const step = r?.due(Date.now());
+  if (!r || !step) return;
+  const pass = randomBytes(6).toString('hex').slice(0, 9); // 9 letras/números; solo va a la base
+  const res = await createChar({ action: 'create', user: step.user, pass, char: step.char, cls: step.cls as NewCharRequest['cls'], existing: false });
+  const code = /ya existe/.test(res.msg) ? 'taken' : /frenó/.test(res.msg) ? 'throttled' : undefined;
+  r.report(step, { ok: res.ok, msg: res.msg, code }, Date.now(), [...slots.values()].map((x) => x.cfg.user));
+  say(`escuadra, cuentas: ${r.log.at(-1)}`);
+}
+function squadAction(r: SquadRequest): { ok: boolean; msg: string; [k: string]: unknown } {
+  refreshSlots();
+  const now = Date.now();
+  switch (r.action) {
+    case 'squad-create': {
+      const res = squads.create(r.name, r.chars, r.leader, new Set(slots.keys()), now);
+      saveSquads();
+      return res.squad ? { ok: true, msg: res.msg, id: res.squad.id } : res;
+    }
+    case 'squad-mission': {
+      const res = squads.startMission(r.squad, { kind: r.kind, warp: r.warp, targetLevel: r.targetLevel, maxMin: r.maxMin, padrino: r.padrino }, squadSnapshot(now));
+      if (res.ok) say(`escuadra ${r.squad}: ${res.msg}`);
+      return res;
+    }
+    case 'squad-abort': return squads.abort(r.squad, now);
+    case 'squad-disband': { const res = squads.disband(r.squad); saveSquads(); return res; }
+    case 'squad-accounts': {
+      if (r.mode === 'stop') { accountRunner.r?.stop('detenido por el usuario'); return { ok: true, msg: 'plan de cuentas detenido' }; }
+      const plan = planSquadAccounts({ n: r.n, classes: r.classes, takenUsers: [...slots.values()].map((x) => x.cfg.user), takenChars: slots.keys(), now });
+      if (!plan.ok) return { ok: false, msg: plan.msg };
+      if (r.mode === 'plan') return { ok: true, msg: plan.notes[0], steps: plan.steps.map((st) => ({ at: st.at, user: st.user, char: st.char, cls: st.cls })) };
+      if (accountRunner.r && accountRunner.r.remaining > 0 && !accountRunner.r.stopped) return { ok: false, msg: 'ya hay un plan de cuentas en marcha: detenelo primero' };
+      accountRunner.r = new AccountRunner(plan.steps);
+      accountRunner.plan = plan;
+      say(`escuadra, cuentas: arranca el plan de ${plan.steps.length} (${plan.notes[0]})`);
+      return { ok: true, msg: `${plan.notes[0]}. Empieza en unos minutos; podés detenerlo cuando quieras.`, steps: plan.steps.map((st) => ({ at: st.at, user: st.user, char: st.char, cls: st.cls })) };
+    }
+  }
+}
+function squadState() {
+  const snap = squadSnapshot(Date.now());
+  return {
+    squads: squads.view(snap),
+    // Personajes que se pueden sumar (los que no están en otra escuadra) y si reciben órdenes.
+    chars: [...snap.members.values()].map((m) => ({ char: m.char, cls: m.cls, level: m.level, online: m.online, obeys: m.obeys, squad: [...squads.squads.values()].find((q) => q.members.includes(m.char))?.id ?? null })),
+    accounts: accountRunner.r && { remaining: accountRunner.r.remaining, created: accountRunner.r.created, stopped: accountRunner.r.stopped, log: accountRunner.r.log.slice(-6), next: accountRunner.plan?.ok ? accountRunner.plan.steps.map((st) => ({ at: st.at, char: st.char, cls: st.cls })) : [] },
+  };
+}
+
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 refreshSlots();
 syncRunning();
-setInterval(() => { refreshSlots(); syncRunning(); }, 2000);
+setInterval(() => { refreshSlots(); syncRunning(); squads.tick(squadSnapshot(Date.now())); saveSquads(); void squadAccountsTick(); }, 2000);
 
 Bun.serve({
   hostname: '127.0.0.1',
@@ -519,6 +635,14 @@ Bun.serve({
       if (url.pathname === '/api/ranking') return json(await ranking());
       // Equipo: dónde está cada personaje y los pedidos de ayuda vigentes (los bots lo consultan).
       if (url.pathname === '/api/team') return json(team());
+      // Escuadras: lo que ve la interfaz y, para los bots (sin Origin), su asignación firmada.
+      if (url.pathname === '/api/squads') return json(squadState());
+      if (url.pathname === '/api/squad') {
+        if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
+        const who = url.searchParams.get('char') ?? '';
+        const a = /^[A-Za-z0-9_]{1,10}$/.test(who) ? squads.assignmentFor(who) : null;
+        return json(a && Date.now() <= a.expiresAt ? signAssignment(SQUAD_KEY, a) : { none: true });
+      }
       // Nombres sugeridos para un personaje nuevo (sin repetir los que ya hay en la estación).
       if (url.pathname === '/api/names') return json({ names: coolNames(8, [...slots.values()].map((s) => s.cfg.char)) });
       if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
@@ -570,6 +694,10 @@ Bun.serve({
         const pass = r.action === 'add' ? db.passOfAccount(r.user) : null;
         if (r.action === 'add' && !pass) return json({ ok: false, msg: `no tengo la cuenta ${r.user} en la base` }, 404);
         const res = await createChar(r.action === 'add' ? { action: 'create', user: r.user, pass: pass!, char: r.char, cls: r.cls, existing: true } : r);
+        return json(res, res.ok ? 200 : 409);
+      }
+      if (isSquadRequest(r)) {
+        const res = squadAction(r);
         return json(res, res.ok ? 200 : 409);
       }
       const s = slots.get(r.char);
