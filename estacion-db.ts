@@ -6,7 +6,7 @@
  *
  *   servers    (id, name, proxy, cs_host, cs_port)
  *   accounts   (id, server_id → servers, username, password, status, created_at, updated_at)
- *   characters (id, account_id → accounts, name, class, last_routine, env_file, created_at, updated_at)
+ *   characters (id, account_id → accounts, name, class, last_routine, env_file, role, created_at, updated_at)
  *
  * - Nombres sin importar mayúsculas (COLLATE NOCASE), como el server. Un nombre de personaje es
  *   único en todo el server; una cuenta, por server.
@@ -23,7 +23,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isCharClass, type CharClassKey, type CharConfig, type GameServer, type Routine } from './estacion-logic';
+import { isCharClass, isRoleAssign, type CharClassKey, type CharConfig, type GameServer, type RoleAssign, type Routine } from './estacion-logic';
 import { validCharName } from './names';
 
 /** Personajes por cuenta en el 0.97d. */
@@ -62,9 +62,11 @@ const MIGRATIONS = [
    );
    CREATE UNIQUE INDEX characters_server_name ON characters(name);
    CREATE INDEX characters_account ON characters(account_id);`,
+  // Estrategia del personaje (JSON de RoleAssign, ver estacion-logic.ts).
+  `ALTER TABLE characters ADD COLUMN role TEXT;`,
 ];
 
-export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null };
+export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null; role: RoleAssign | null };
 
 export class EstacionDb {
   readonly db: Database;
@@ -106,15 +108,15 @@ export class EstacionDb {
 
   /** Personajes de este server, como los ve la estación (sin la clave). */
   chars(): DbChar[] {
-    type Row = { name: string; username: string; class: string | null; env_file: string | null; status: 'active' | 'blocked'; last_routine: string | null };
+    type Row = { name: string; username: string; class: string | null; env_file: string | null; status: 'active' | 'blocked'; last_routine: string | null; role: string | null };
     return this.db.query<Row, [number]>(
-      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine
+      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine, c.role
          FROM characters c JOIN accounts a ON a.id = c.account_id
         WHERE a.server_id = ? ORDER BY c.name`,
     ).all(this.serverId).map((r) => ({
       key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name,
       ...(isCharClass(r.class) ? { cls: r.class } : {}),
-      status: r.status, lastRoutine: parseRoutine(r.last_routine),
+      status: r.status, lastRoutine: parseRoutine(r.last_routine), role: parseRole(r.role),
     }));
   }
 
@@ -178,6 +180,10 @@ export class EstacionDb {
     this.db.query("UPDATE characters SET last_routine = ?, updated_at = datetime('now') WHERE name = ?").run(JSON.stringify(r), char);
   }
 
+  setRole(char: string, r: RoleAssign) {
+    this.db.query("UPDATE characters SET role = ?, updated_at = datetime('now') WHERE name = ?").run(JSON.stringify(r), char);
+  }
+
   close() {
     this.db.close();
   }
@@ -188,6 +194,16 @@ function parseRoutine(s: string | null): Routine | null {
   try {
     const r = JSON.parse(s);
     return r && typeof r.kind === 'string' ? (r as Routine) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseRole(s: string | null): RoleAssign | null {
+  if (!s) return null;
+  try {
+    const r = JSON.parse(s);
+    return isRoleAssign(r) ? r : null;
   } catch {
     return null;
   }

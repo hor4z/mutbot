@@ -24,6 +24,8 @@ import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, processRunsAccount,
   CHAR_CLASSES, parseEnvFile, type NewCharRequest,
+  type Alert, type ScoutReport, type RoleAssign, newAlertMemory, diffAlerts, pushAlert, bagUsage, parseBotAlert,
+  parseScoutReport, applyScout, freshScouts, roleFromRoutine, roleRoutine, roleLabel,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
@@ -66,6 +68,12 @@ const slots = new Map<string, Slot>();
 // Cuentas y personajes (SQLite, ~/.mubot/mubot.db): ver estacion-db.ts.
 const db = new EstacionDb(SERVER);
 const say = (...a: unknown[]) => console.log('[estación]', ...a);
+
+// Alertas de la flota (ring buffer, la más nueva primero) y su memoria para detectar cambios.
+const alerts: Alert[] = [];
+const alertMem = newAlertMemory();
+const scouts = new Map<string, ScoutReport>();
+let invasionActive = false;
 
 // --- Personajes -----------------------------------------------------------------------------
 function discover() {
@@ -441,16 +449,24 @@ async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string 
   return { ok: s.routine === r, msg: s.msg };
 }
 
+async function applyRole(s: Slot, role: RoleAssign): Promise<{ ok: boolean; msg: string }> {
+  const res = await routine(s, roleRoutine(role));
+  return { ok: res.ok, msg: res.ok ? `${s.cfg.char}: ${roleLabel(role)}` : res.msg };
+}
+
 // --- HTTP -----------------------------------------------------------------------------------
 function view() {
   return [...slots.values()].map((s) => {
     const st = s.state;
     return {
-      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine, status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
+      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine,
+      role: s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine), roleSaved: !!s.cfg.role, stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
-        map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
+        map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
+        zen: st.char.zen, bag: bagUsage(st.inventory), nearby: st.nearby, resetsPerDay: st.resetsPerDay,
+        session: st.session ? { since: st.session.since, kills: st.session.kills, deaths: st.session.deaths, exp: st.session.exp } : null,
       },
     };
   });
@@ -505,15 +521,44 @@ function team() {
   const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
     char: s.cfg.char, level: s.state!.char.level, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
     fresh: isFreshChar(s.state!.char.resets, s.state!.char.stats),
+    role: (s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine)).role,
   }));
-  return { members, requests: [...teamRequests.values()] };
+  return { members, requests: [...teamRequests.values()], scouts: freshScouts(scouts, now).map((r) => ({ ...r, mapName: mapName(r.map) })) };
+}
+
+const addAlert = (a: Omit<Alert, 'id'>) => pushAlert(alerts, a);
+
+/** Mira a todos los personajes y anota lo que cambió (muertes, bloqueos, bolsa llena, trabados) y las invasiones. */
+function trackAlerts() {
+  const now = Date.now();
+  const snaps = [...slots.values()].map((s) => ({
+    key: s.cfg.key, char: s.cfg.char, status: s.status, account: s.cfg.status,
+    mode: s.state?.mode ?? null, doing: s.state?.doing ?? null, map: s.state?.where.mapName ?? null,
+    x: s.state?.where.x ?? null, y: s.state?.where.y ?? null, level: s.state?.char.level || null,
+    deaths: s.state?.session?.deaths ?? null, bag: bagUsage(s.state?.inventory),
+  }));
+  for (const a of diffAlerts(alertMem, snaps, now)) addAlert(a);
+  const inv = invasion();
+  const active = inv?.status === 'active';
+  if (active && !invasionActive) addAlert({ at: now, kind: 'invasion', tone: 'warn', char: null, text: `Invasión: ${inv.total} monstruos${inv.maps.length ? ` en ${inv.maps.map((m) => m.name).join(', ')}` : ''}` });
+  invasionActive = active;
+}
+
+/** Última invasión que reportó algún bot. */
+function invasion() {
+  let best: NonNullable<PanelState['invasion']> | null = null;
+  for (const s of slots.values()) {
+    const i = s.state?.invasion;
+    if (i && (!best || i.at > best.at)) best = i;
+  }
+  return best;
 }
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 refreshSlots();
 syncRunning();
-setInterval(() => { refreshSlots(); syncRunning(); }, 2000);
+setInterval(() => { refreshSlots(); syncRunning(); trackAlerts(); }, 2000);
 
 Bun.serve({
   hostname: '127.0.0.1',
@@ -534,7 +579,10 @@ Bun.serve({
       if (url.pathname === '/api/team') return json(team());
       // Nombres sugeridos para un personaje nuevo (sin repetir los que ya hay en la estación).
       if (url.pathname === '/api/names') return json({ names: coolNames(8, [...slots.values()].map((s) => s.cfg.char)) });
-      if (url.pathname === '/api/state') return json({ chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })) });
+      if (url.pathname === '/api/state') return json({
+        chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })),
+        alerts, invasion: invasion(), scouts: team().scouts, now: Date.now(),
+      });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       return new Response('No encontrado.', { status: 404 });
@@ -546,10 +594,31 @@ Bun.serve({
       if (body.length > 1024) return json({ ok: false }, 413);
       let raw: unknown;
       try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
+      if ((raw as { kind?: unknown } | null)?.kind === 'scout') {
+        const sc = parseScoutReport(raw, Date.now());
+        if (!sc) return json({ ok: false, msg: 'reporte inválido' }, 400);
+        // Aviso solo cuando hay algo que contar (dorados) o el campo recién se vio.
+        const isNew = !scouts.has(`${sc.from}:${sc.map}`);
+        applyScout(scouts, sc);
+        if (isNew && sc.golds > 0) addAlert({ at: sc.at, kind: 'scout', tone: 'good', char: sc.from, text: `${sc.from} vio ${sc.golds} dorado${sc.golds === 1 ? '' : 's'} en ${mapName(sc.map)}` });
+        return json({ ok: true });
+      }
       const r = parseTeamRequest(raw, Date.now());
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       teamRequests.set(`${r.from}:${r.kind}`, r);
       say(`${r.from} pide ayuda (${r.kind}): ${r.note}`);
+      return json({ ok: true });
+    }
+    if (url.pathname === '/api/alert' && req.method === 'POST') {
+      // Avisos de los bots (PK, bolsa llena...): solo sin Origin, como /api/team.
+      if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
+      const body = await req.text();
+      if (body.length > 1024) return json({ ok: false }, 413);
+      let raw: unknown;
+      try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
+      const a = parseBotAlert(raw, Date.now());
+      if (!a) return json({ ok: false, msg: 'aviso inválido' }, 400);
+      addAlert(a);
       return json({ ok: true });
     }
     if (url.pathname === '/api/gold') {
@@ -561,7 +630,10 @@ Bun.serve({
       if (body.length > 1024) return new Response('grande', { status: 413, headers: GOLD_CORS });
       let raw: unknown;
       try { raw = JSON.parse(body); } catch { return new Response('json', { status: 400, headers: GOLD_CORS }); }
-      return applyGoldSignal(golds, raw, Date.now()) ? new Response('ok', { headers: GOLD_CORS }) : new Response('datos', { status: 400, headers: GOLD_CORS });
+      const before = new Set(golds.keys());
+      const okGold = applyGoldSignal(golds, raw, Date.now());
+      if (okGold) for (const [k, g] of golds) if (!before.has(k)) addAlert({ at: g.at, kind: 'gold', tone: 'good', char: g.from, text: `Dorado${g.name ? ` ${g.name}` : ''} en ${mapName(g.map)} (${g.x}, ${g.y}), visto por ${g.from}` });
+      return okGold ? new Response('ok', { headers: GOLD_CORS }) : new Response('datos', { status: 400, headers: GOLD_CORS });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.
@@ -587,6 +659,17 @@ Bun.serve({
       }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
+      if (r.action === 'role') {
+        db.setRole(s.cfg.char, r.role);
+        refreshSlots();
+        const routine = roleRoutine(r.role);
+        if (s.pid == null || s.status === 'starting') {
+          if (s.pending) s.pending = routine;
+          return json({ ok: true, msg: `${s.cfg.char}: ${roleLabel(r.role)} (se aplica al conectar)` });
+        }
+        const res = await applyRole(s, r.role);
+        return json(res, res.ok ? 200 : 409);
+      }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
       return json(res, res.ok ? 200 : 409);
     }

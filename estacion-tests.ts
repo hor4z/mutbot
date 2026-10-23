@@ -11,6 +11,8 @@ import {
   DEFAULT_SERVER, botArgs, charFromEnv, exitStatus, isCharEnvFile, isRoutine, parseEnvFile, parseStationRequest,
   processRunsAccount, routineCommands, type CharConfig,
   accountProblem, type NewCharRequest,
+  isRoleAssign, roleRoutine, roleFromRoutine, roleLabel, ROLE_KEYS, parseScoutReport, applyScout, freshScouts, scoutHeat, SCOUT_TTL_MS,
+  newAlertMemory, diffAlerts, pushAlert, parseBotAlert, bagUsage, STUCK_MS, type CharSnap, type Alert,
 } from './estacion-logic';
 import { coolName, coolNames, joinParts, validCharName } from './names';
 import { EstacionDb, MAX_CHARS_PER_ACCOUNT } from './estacion-db';
@@ -49,7 +51,7 @@ const horaz: CharConfig = { key: 'horaz', envFile: '.env', user: 'cuenta1', char
   ok('rutina: todas las órdenes pasan isPanelCommand',
     [{ kind: 'farm' }, { kind: 'spot', warp: 7 }, { kind: 'pause' }].every((r) => routineCommands(r as never).every(isPanelCommand)));
   ok('rutina: validación', isRoutine({ kind: 'farm' }) && isRoutine({ kind: 'spot', warp: 24 }) && !isRoutine({ kind: 'spot' })
-    && !isRoutine({ kind: 'spot', warp: 300 }) && !isRoutine({ kind: 'farm', x: 1 }) && !isRoutine({ kind: 'hunt' }) && !isRoutine('farm'));
+    && !isRoutine({ kind: 'spot', warp: 300 }) && !isRoutine({ kind: 'farm', x: 1 }) && isRoutine({ kind: 'hunt' }) && !isRoutine('farm'));
 }
 
 // --- pedidos del navegador -----------------------------------------------------------------
@@ -143,7 +145,7 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
 // --- Base local (SQLite en memoria) -------------------------------------------------------
 {
   const db = new EstacionDb(DEFAULT_SERVER, ':memory:');
-  ok('db: esquema migrado', db.version === 1, db.version);
+  ok('db: esquema migrado', db.version === 2, db.version);
   const imported = db.importEnv([
     { envFile: '.env', user: 'cuenta1', pass: 'x1', char: 'Horaz' },
     { envFile: '.env.melu', user: 'cuenta2', pass: 'x2', char: 'Melu' },
@@ -164,7 +166,72 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   db.setRoutine('Horaz', { kind: 'spot', warp: 24 });
   ok('db: última rutina', JSON.stringify(db.chars().find((c) => c.char === 'Horaz')?.lastRoutine) === '{"kind":"spot","warp":24}');
   ok('db: nombre inválido', db.addChar('cuenta8', 'clave', 'ab', 'dk') !== null);
+  ok('db: sin rol al principio', db.chars().every((c) => c.role === null));
+  db.setRole('Melu', { role: 'explorer' });
+  db.setRole('Horaz', { role: 'spot', warp: 26 });
+  ok('db: rol guardado', db.chars().find((c) => c.char === 'Melu')?.role?.role === 'explorer' && JSON.stringify(db.chars().find((c) => c.char === 'Horaz')?.role) === '{"role":"spot","warp":26}');
   db.close();
+}
+
+// --- Estrategias --------------------------------------------------------------------------
+{
+  ok('rol: los cinco son válidos', ROLE_KEYS.length === 5 && ROLE_KEYS.filter((k) => k !== 'spot').every((k) => isRoleAssign({ role: k })) && isRoleAssign({ role: 'spot', warp: 26 }));
+  ok('rol: spot sin warp, rol raro o campos de más → no', !isRoleAssign({ role: 'spot' }) && !isRoleAssign({ role: 'dios' }) && !isRoleAssign({ role: 'golden', warp: 1 }) && !isRoleAssign(null) && !isRoleAssign({ role: 'spot', warp: 300 }));
+  ok('rol: cada uno arma una rutina con órdenes válidas', ROLE_KEYS.every((k) => routineCommands(roleRoutine(k === 'spot' ? { role: k, warp: 2 } : { role: k })).every(isPanelCommand)));
+  ok('rol: dorados = hunt, spot = warp, el resto = farm', roleRoutine({ role: 'golden' }).kind === 'hunt' && roleRoutine({ role: 'spot', warp: 7 }).kind === 'spot' && roleRoutine({ role: 'explorer' }).kind === 'farm' && roleRoutine({ role: 'support' }).kind === 'farm');
+  ok('rol: desde una rutina vieja', roleFromRoutine(null).role === 'route' && roleFromRoutine({ kind: 'hunt' }).role === 'golden' && roleFromRoutine({ kind: 'spot', warp: 3 }).role === 'spot');
+  ok('rol: etiqueta', roleLabel({ role: 'spot', warp: 26 }).includes('26'));
+  ok('rutina hunt válida', isRoutine({ kind: 'hunt' }) && !isRoutine({ kind: 'hunt', map: 1 }) && routineCommands({ kind: 'hunt' })[0].cmd === 'hunt');
+  const rq = parseStationRequest({ action: 'role', char: 'melu', role: { role: 'explorer' } });
+  ok('pedido: rol', rq?.action === 'role' && rq.role.role === 'explorer', rq);
+  ok('pedido: rol inválido o con campos de más → null', parseStationRequest({ action: 'role', char: 'melu', role: { role: 'x' } }) === null && parseStationRequest({ action: 'role', char: 'melu', role: { role: 'route' }, extra: 1 }) === null && parseStationRequest({ action: 'role', char: 'Melu!', role: { role: 'route' } }) === null);
+}
+
+// --- Exploración --------------------------------------------------------------------------
+{
+  const r = parseScoutReport({ from: 'Melu', kind: 'scout', map: 3, x: 100, y: 50, players: 6, monsters: 40, golds: 1, note: 'campo lleno' }, 1000);
+  ok('scout: reporte válido', r?.from === 'Melu' && r.players === 6 && r.golds === 1 && r.at === 1000, r);
+  ok('scout: los contadores son opcionales', parseScoutReport({ from: 'Melu', kind: 'scout', map: 3, x: 1, y: 1 }, 0)?.players === 0);
+  ok('scout: inválidos → null', parseScoutReport({ from: 'Melu', kind: 'golden', map: 3, x: 1, y: 1 }, 0) === null && parseScoutReport({ from: 'Melu', kind: 'scout', map: 999, x: 1, y: 1 }, 0) === null && parseScoutReport({ from: 'Melu', kind: 'scout', map: 3, x: 1, y: 1, players: -2 }, 0) === null && parseScoutReport({ from: 'Melu', kind: 'scout', map: 3, x: 1, y: 1, golds: 'a' }, 0) === null && parseScoutReport(null, 0) === null);
+  const m = new Map();
+  applyScout(m, r!);
+  applyScout(m, { ...r!, players: 0, at: 2000 });
+  applyScout(m, { ...r!, map: 4, at: 1500 });
+  const f = freshScouts(m, 3000);
+  ok('scout: uno por explorador y mapa, el último gana, más nuevo primero', f.length === 2 && f[0].map === 3 && f[0].players === 0 && f[1].map === 4, f);
+  ok('scout: vencen', freshScouts(m, 2000 + SCOUT_TTL_MS + 1).length === 0);
+  ok('scout: competencia', scoutHeat({ players: 0 }) === 'free' && scoutHeat({ players: 3 }) === 'busy' && scoutHeat({ players: 9 }) === 'crowded');
+}
+
+// --- Alertas ------------------------------------------------------------------------------
+{
+  const snap = (o: Partial<CharSnap> = {}): CharSnap => ({ key: 'horaz', char: 'Horaz', status: 'on', account: 'active', mode: 'farm', doing: 'farmeando', map: 'Arena 4', x: 10, y: 10, level: 300, deaths: 0, bag: 0.2, ...o });
+  const mem = newAlertMemory();
+  ok('alertas: la primera vuelta no inventa nada', diffAlerts(mem, [snap()], 0).length === 0);
+  const kinds = (a: { kind: string }[]) => a.map((x) => x.kind).join();
+  ok('alertas: muerte', kinds(diffAlerts(mem, [snap({ deaths: 1, x: 11 })], 1000)) === 'death');
+  ok('alertas: nivel y bolsa llena', kinds(diffAlerts(mem, [snap({ deaths: 1, level: 301, bag: 0.95, x: 12 })], 2000)) === 'level,bagfull');
+  ok('alertas: la bolsa llena no se repite', diffAlerts(mem, [snap({ deaths: 1, level: 301, bag: 0.97, x: 13 })], 3000).length === 0);
+  ok('alertas: salto grande de nivel (reset) no avisa', diffAlerts(mem, [snap({ deaths: 1, level: 5, bag: 0.5, x: 14 })], 4000).length === 0);
+  ok('alertas: desconexión', kinds(diffAlerts(mem, [snap({ status: 'off', mode: null })], 5000)) === 'status');
+  ok('alertas: cuenta bloqueada', kinds(diffAlerts(mem, [snap({ status: 'failed', account: 'blocked', mode: null })], 6000)) === 'blocked,blocked');
+  // Trabado: quieto STUCK_MS farmeando.
+  const m2 = newAlertMemory();
+  diffAlerts(m2, [snap()], 0);
+  ok('alertas: quieto poco tiempo no es trabado', diffAlerts(m2, [snap()], STUCK_MS - 1).length === 0 && !m2.stuck.has('horaz'));
+  const t = diffAlerts(m2, [snap()], STUCK_MS + 1);
+  ok('alertas: trabado a los 5 min, una sola vez', kinds(t) === 'stuck' && m2.stuck.has('horaz') && diffAlerts(m2, [snap()], STUCK_MS + 2000).length === 0);
+  diffAlerts(m2, [snap({ x: 99 })], STUCK_MS + 3000);
+  ok('alertas: si se mueve deja de estar trabado', !m2.stuck.has('horaz'));
+  const m3 = newAlertMemory();
+  diffAlerts(m3, [snap({ mode: 'paused' })], 0);
+  ok('alertas: en pausa no es trabado', diffAlerts(m3, [snap({ mode: 'paused' })], STUCK_MS * 3).length === 0);
+  const list: Alert[] = [];
+  for (let i = 0; i < 130; i++) pushAlert(list, { at: i, kind: 'gold', tone: 'info', char: null, text: String(i) });
+  ok('alertas: tope y orden (la nueva primero, ids crecientes)', list.length === 120 && list[0].id === 130 && list[0].text === '129' && list[1].id === 129);
+  ok('alertas: aviso de un bot', parseBotAlert({ from: 'Horaz', kind: 'pk', text: 'PK a mi lado' }, 5)?.tone === 'bad' && parseBotAlert({ from: 'Horaz', kind: 'bagfull', text: 'llena' }, 5)?.tone === 'warn');
+  ok('alertas: aviso inválido → null', parseBotAlert({ from: 'Horaz', kind: 'otra', text: 'x' }, 0) === null && parseBotAlert({ from: 'Horaz', kind: 'pk', text: '  ' }, 0) === null && parseBotAlert([], 0) === null);
+  ok('bolsa: uso por casillas', bagUsage(undefined) === null && bagUsage([{ w: 2, h: 4 }, {}]) === 9 / 64 && bagUsage(Array(80).fill({})) === 1);
 }
 
 if (fails) process.exit(1);
