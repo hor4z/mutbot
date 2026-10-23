@@ -271,7 +271,12 @@ export function Squads({ demo = false }: { demo?: boolean }) {
   const mock = useRef(demo ? makeDemo() : null);
   const live = useRef(true);
   const call: Call = async (body) => {
-    if (mock.current) { const r = mock.current.call(body); setState(mock.current.state()); return r; }
+    if (mock.current) {
+      if (body.action === "human-follow" || body.action === "human-follow-stop") return { ok: true, msg: "Demo: no se manda nada a los bots." };
+      const r = mock.current.call(body);
+      setState(mock.current.state());
+      return r;
+    }
     try {
       const r = await fetch("/api/do", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       return (await r.json()) as Reply;
