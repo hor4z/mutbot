@@ -679,6 +679,10 @@ Diseño, hechos con fuente y supuestos: **[docs/escuadras.md](docs/escuadras.md)
   (`MUBOT_SQUAD_KEY`) y les sirve una asignación firmada por personaje en `GET /api/squad?char=` (sin `Origin`, loopback,
   vigencia 20 s). Un bot sin clave (lanzado antes, como Hume hoy) **no obedece**; la tarjeta lo marca. Con escuadra
   vigente, el bot acepta party **solo** de miembros de la lista firmada (`world.ts` → `squadPartyDecision`).
+- **Crianza en campaña (`squad-mission` nurture + `follow:true`, con `padrino`):** el protegido sigue al padrino por toda su
+  ruta (cambios de mapa con warp escalonado si llega al nivel; correa de 6 tiles), y el padrino nunca espera. Si el padrino
+  está en nivel alto queda `armed` y arranca sola en su próximo reset (solo si el usuario la pidió con `confirm`). Detalle y
+  fin/abortos en docs/escuadras.md ("Crianza en campaña"); lógica en `squad.ts` (`stepFollow`, `followDecision`).
 - **Nada arranca solo.** `POST /api/do` (mismo `Origin`/JSON de siempre) con `squad-create`, `squad-mission` (exige
   `confirm: true`), `squad-abort`, `squad-disband` y `squad-accounts` (`plan` / `start` / `stop`); `parseStationRequest`
   los valida estricto. Al terminar una misión los bots reciben `release` y vuelven a su rutina; no se encadenan.

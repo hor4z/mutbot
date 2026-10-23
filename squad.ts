@@ -8,13 +8,16 @@
  *   explore  travel → gather → sweep → converge → done      (repartir celdas, uno al frente, converger)
  *   golden   travel → gather → search → engage → loot → …   (todos sobre el mismo dorado)
  *   nurture  travel → gather → farm → done                  (padrino sube a los protegidos)
+ *   nurture + follow  armed → follow → done                 (campaña: el protegido sigue al padrino por TODA su ruta,
+ *            cambie de mapa o resetee; el padrino nunca espera: su ciclo de resets manda)
  *   en cualquier momento: retreat → aborted  (muertes, vida baja, jugador hostil, miembro perdido, timeout)
  * Una misión NUNCA se arma sola: solo `startMission` desde un pedido explícito del usuario
  * (`confirm: true` en la API). Al terminar, los bots reciben `release` y vuelven a su rutina.
  *
  * Tests en `squad-tests.ts`. Hechos y supuestos: docs/escuadras.md.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+// Namespace import: la interfaz (vite) importa este módulo por el parser y no debe tocar crypto hasta firmar.
+import * as nodeCrypto from 'node:crypto';
 import { baseExp, partyShares } from './duo';
 import { dist, type Pos } from './corner';
 
@@ -141,7 +144,7 @@ export function nurtureOptions(padrinoLevel: number, wardLevels: readonly number
 // --- Contrato ----------------------------------------------------------------------------------
 export type MissionKind = 'explore' | 'golden' | 'nurture';
 export const MISSION_KINDS: readonly MissionKind[] = ['explore', 'golden', 'nurture'];
-export type Phase = 'travel' | 'gather' | 'sweep' | 'converge' | 'search' | 'engage' | 'loot' | 'farm' | 'retreat' | 'done' | 'aborted';
+export type Phase = 'armed' | 'follow' | 'travel' | 'gather' | 'sweep' | 'converge' | 'search' | 'engage' | 'loot' | 'farm' | 'retreat' | 'done' | 'aborted';
 export const isTerminal = (p: Phase) => p === 'done' || p === 'aborted';
 
 /** Lo que se le manda a cada bot. Todas las posiciones son del mapa `map` del mismo orden. */
@@ -151,7 +154,7 @@ export type Order =
   | { kind: 'warp'; warp: number; map: number; delayMs: number }
   | { kind: 'goto'; map: number; x: number; y: number; radius: number }
   /** seguir al líder con correa (formation.ts) */
-  | { kind: 'follow'; leader: string }
+  | { kind: 'follow'; leader: string; /** correa corta (2-6 tiles) y sin pelear salvo defensa propia */ tight?: boolean; /** dónde está el líder según la estación, por si no lo ve */ at?: Pos }
   /** protegido: quedarse cerca del padrino, a salvo (formation.ts wardTile) */
   | { kind: 'hold'; leader: string }
   /** pelear en una zona; `focus` = el objetivo común (dorado) */
@@ -185,7 +188,7 @@ export type Signed = { payload: string; sig: string };
 
 export function signAssignment(key: string, a: Assignment): Signed {
   const payload = JSON.stringify(a);
-  return { payload, sig: createHmac('sha256', key).update(payload).digest('hex') };
+  return { payload, sig: nodeCrypto.createHmac('sha256', key).update(payload).digest('hex') };
 }
 
 /**
@@ -197,9 +200,9 @@ export function verifyAssignment(key: string, body: unknown, me: string, now: nu
   if (!body || typeof body !== 'object') return { err: 'cuerpo inválido' };
   const { payload, sig } = body as Partial<Signed>;
   if (typeof payload !== 'string' || typeof sig !== 'string' || payload.length > 4096 || !/^[0-9a-f]{64}$/.test(sig)) return { err: 'formato inválido' };
-  const want = createHmac('sha256', key).update(payload).digest();
+  const want = nodeCrypto.createHmac('sha256', key).update(payload).digest();
   const got = Buffer.from(sig, 'hex');
-  if (got.length !== want.length || !timingSafeEqual(got, want)) return { err: 'firma inválida' };
+  if (got.length !== want.length || !nodeCrypto.timingSafeEqual(got, want)) return { err: 'firma inválida' };
   let a: Assignment;
   try { a = JSON.parse(payload) as Assignment; } catch { return { err: 'payload inválido' }; }
   if (a.v !== 1 || typeof a.char !== 'string' || a.char.toLowerCase() !== me.toLowerCase()) return { err: 'no es para mí' };
@@ -223,6 +226,8 @@ export type MemberSnap = {
   online: boolean;
   /** ¿lanzado con la clave de escuadra? (si no, no recibe órdenes) */
   obeys: boolean;
+  /** resets del personaje (undefined = no se sabe) */
+  resets?: number;
 };
 export type Finding = { kind: 'golden' | 'camp' | 'danger'; map: number; x: number; y: number; at: number; note?: string };
 export type Snapshot = { now: number; members: Map<string, MemberSnap>; findings: Finding[]; hostiles: { map: number; x: number; y: number; at: number }[] };
@@ -272,6 +277,21 @@ export type Mission = {
   deaths: Record<string, number[]>;
   warpDelays: Record<string, number>;
   result: string | null;
+  /** nurture follow: el protegido sigue al padrino por toda la ruta (ver FOLLOW_MISSION) */
+  follow: boolean;
+  /** follow: terminar tras tantos resets del padrino (0 = sin tope) y los que van */
+  untilResets: number;
+  resetsDone: number;
+  lastPadResets: number | null;
+  lastPadLevel: number;
+  /** follow armado: se vio un reset pero el nivel todavía no bajó (ms, 0 = no) */
+  resetSeenAt: number;
+  /** follow: el padrino ya pasó al protegido en nivel (para cortar cuando lo alcance) */
+  overtaken: boolean;
+  /** último mapa donde protegido y padrino estuvieron juntos */
+  lastShared: { map: number; x: number; y: number } | null;
+  /** aviso vigente por protegido (para no repetir eventos) */
+  notes: Record<string, string>;
 };
 
 export type Squad = { id: string; name: string; members: string[]; leader: string; createdAt: number; mission: Mission | null; last: { kind: MissionKind; result: string; at: number } | null; log: string[]; seq: number };
@@ -295,6 +315,51 @@ export const MISSION = {
   /** espera humana antes de viajar, por miembro (ms) */
   WARP_STAGGER_MS: [2_000, 22_000] as readonly [number, number],
 };
+
+/**
+ * Campaña de crianza `follow` (pedido del usuario): el padrino (fuerte) resetea y arranca de nivel 1 con
+ * todos sus stats; el protegido va en su party y lo sigue por toda su ruta, así los dos suben parejos.
+ * Todo SUPUESTO sin medir en vivo (docs/escuadras.md).
+ */
+export const FOLLOW_MISSION = {
+  /** Tras un reset el padrino queda en nivel <= esto: ahí arranca solo una misión armada. */
+  AUTO_START_MAX_LEVEL: 20,
+  /** Reparto parejo: el protegido cobra al menos esta fracción de lo del padrino (nivel protegido / nivel padrino). */
+  MIN_RATIO: 0.5,
+  /** Nivel mínimo del umbral (un protegido de 5 igual espera un reset). */
+  MIN_THRESHOLD: 20,
+  /** Un reset se ve en las lecturas: el nivel cae al menos esto de golpe, o sube `resets`. */
+  LEVEL_DROP: 60,
+  /** Si el nivel todavía no bajó tras ver el reset, espera hasta esto. */
+  RESET_GRACE_MS: 3 * 60_000,
+  DEFAULT_MAX_MS: 8 * 60 * 60_000,
+  /** Armada sin que el padrino resetee: se cae sola (24 h). */
+  ARM_MAX_MS: 24 * 60 * 60_000,
+  /** Protegido que muere esto en DEATH_WINDOW_MS: retirada. */
+  DEATHS_ABORT: 2,
+  /** Correa corta (tiles) del protegido: pasa a Follower(far). */
+  LEASH_FAR: 6,
+  MAX_UNTIL_RESETS: 20,
+};
+
+export type FollowDecision = { ok: boolean; maxPadLevel: number; ratio: number; msg: string };
+
+/**
+ * ¿Rinde seguir al padrino con su NIVEL REAL de ahora? Con niveles parecidos el reparto de la party es
+ * parejo (duo.ts partyShares: según nivel de cada uno). Si el padrino está muy por encima del protegido más
+ * flojo, no arranca y espera al próximo reset. Se recalcula en cada arranque y reset.
+ */
+export function followDecision(padrinoLevel: number, wardLevels: readonly number[]): FollowDecision {
+  const weakest = Math.min(...wardLevels);
+  const maxPadLevel = Math.max(FOLLOW_MISSION.MIN_THRESHOLD, Math.floor(weakest / FOLLOW_MISSION.MIN_RATIO));
+  const shares = partyShares([padrinoLevel, ...wardLevels], 40);
+  const ratio = shares[0] > 0 ? shares[1 + wardLevels.indexOf(weakest)] / shares[0] : 1;
+  const ok = padrinoLevel <= maxPadLevel;
+  return { ok, maxPadLevel, ratio, msg: ok ? `reparto parejo (el protegido cobra ${(ratio * 100).toFixed(0)}% de lo del padrino)` : `esperá al próximo reset del padrino (nivel < ${maxPadLevel}; hoy está en ${padrinoLevel})` };
+}
+
+/** El warp más bajo que entra a ese mapa, o null si no hay (mapa fuera de SQUAD_MAPS). */
+const warpForMap = (map: number) => SQUAD_MAPS.find((m) => m.map === map) ?? null;
 
 type StepOut = { orders: Map<string, Order>; events: string[] };
 
@@ -372,6 +437,8 @@ export function stepMission(squad: Squad, snap: Snapshot, cells: Cell[], rand: (
   };
 
   if (isTerminal(m.phase)) { for (const c of squad.members) out.orders.set(key(c), { kind: 'release', leaveParty: false }); return out; }
+
+  if (m.follow) return stepFollow(squad, m, snap, act, out, rand, finish);
 
   // --- Cortes de seguridad (en cualquier fase menos retreat) --------------------------------
   if (m.phase !== 'retreat') {
@@ -482,6 +549,114 @@ export function stepMission(squad: Squad, snap: Snapshot, cells: Cell[], rand: (
   return out;
 }
 
+/**
+ * Crianza `follow`: armed (espera el reset del padrino) → follow → done/aborted. El padrino SIEMPRE tiene
+ * `farm`: nunca se frena por el protegido; el protegido es el que viaja, espera o se retira.
+ */
+function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[], out: StepOut, rand: () => number, finish: (p: 'done' | 'aborted', why: string) => void): StepOut {
+  void squad;
+  const now = snap.now;
+  const pad = key(m.padrino!);
+  const P = act.find((a) => key(a.char) === pad);
+  const wards = act.filter((a) => key(a.char) !== pad);
+  const note = (c: string, text: string) => { if (m.notes[c] !== text) { m.notes[c] = text; out.events.push(`${c}: ${text}`); } };
+  if (P) out.orders.set(pad, { kind: 'farm' });
+
+  // Resets del padrino: sube `resets` o el nivel se cae de golpe.
+  let reset = false;
+  if (P) {
+    if (P.resets != null && m.lastPadResets != null && P.resets > m.lastPadResets) reset = true;
+    if (m.lastPadLevel - P.level >= FOLLOW_MISSION.LEVEL_DROP) reset = true;
+    if (P.resets != null) m.lastPadResets = P.resets;
+    m.lastPadLevel = P.level;
+  }
+
+  if (m.phase === 'armed') {
+    for (const w of wards) out.orders.set(key(w.char), { kind: 'farm' });
+    if (now - m.startedAt > FOLLOW_MISSION.ARM_MAX_MS) { finish('done', 'el padrino no reseteó: la misión armada venció'); return out; }
+    if (reset) m.resetSeenAt = now;
+    if (!P || !wards.length) return out;
+    if (m.resetSeenAt && now - m.resetSeenAt > FOLLOW_MISSION.RESET_GRACE_MS) m.resetSeenAt = 0;
+    if (m.resetSeenAt && P.level <= FOLLOW_MISSION.AUTO_START_MAX_LEVEL) {
+      const d = followDecision(P.level, wards.map((w) => w.level));
+      if (d.ok) {
+        m.startedAt = now;
+        m.resetSeenAt = 0;
+        m.resetsDone = 0;
+        m.overtaken = false;
+        m.map = P.map;
+        setPhase(m, 'follow', now, out, `el padrino reseteó (nivel ${P.level}): arranca la campaña, ${d.msg}`);
+        reset = false; // este reset ya es el de arranque
+      }
+    }
+    if (m.phase === 'armed') return out;
+  }
+
+  if (m.phase !== 'retreat') {
+    const recent = Object.entries(m.deaths).filter(([c]) => c !== pad).flatMap(([, t]) => t).filter((t) => now - t <= MISSION.DEATH_WINDOW_MS).length;
+    const hostile = snap.hostiles.some((h) => now - h.at < 60_000 && wards.some((w) => w.map === h.map && dist(w, h) <= 15));
+    let why: string | null = null;
+    if (now - m.startedAt > m.maxMs) { finish('done', 'tiempo cumplido'); return out; }
+    if (!P) why = 'el padrino no está disponible';
+    else if (!wards.length) why = 'no queda ningún protegido activo';
+    else if (recent >= FOLLOW_MISSION.DEATHS_ABORT) why = `${recent} muerte(s) del protegido en 10 min`;
+    else if (hostile) why = 'jugador hostil cerca';
+    if (why) {
+      setPhase(m, 'retreat', now, out, `retirada (${why})`);
+      m.result = `retirada: ${why}`;
+    }
+  }
+
+  if (m.phase === 'retreat') {
+    // El padrino sigue con lo suyo; los protegidos van a Lorencia (o se quedan quietos si no pueden).
+    for (const w of wards) {
+      const town = squadMapByWarp(2)!;
+      if (w.map !== town.map && w.level >= town.reqLevel) out.orders.set(key(w.char), { kind: 'warp', warp: town.warp, map: town.map, delayMs: Math.round(MISSION.WARP_STAGGER_MS[0] + rand() * 4000) });
+      else out.orders.set(key(w.char), { kind: 'idle', why: 'retirada: me quedo quieto' });
+    }
+    if (now - m.phaseAt > MISSION.RETREAT_MS) finish('aborted', m.result ?? 'retirada');
+    return out;
+  }
+
+  // --- follow ---
+  const p = P!;
+  if (reset) {
+    m.resetsDone++;
+    m.overtaken = false;
+    out.events.push(`el padrino reseteó (van ${m.resetsDone}); ${followDecision(p.level, wards.map((w) => w.level)).msg}`);
+    if (m.untilResets > 0 && m.resetsDone >= m.untilResets) { finish('done', `el padrino reseteó ${m.resetsDone} veces`); return out; }
+  }
+  const lowest = Math.min(...wards.map((w) => w.level));
+  if (p.level > lowest) m.overtaken = true;
+  if (m.targetLevel > 0 && wards.every((w) => w.level >= m.targetLevel)) { finish('done', `los protegidos llegaron al ${m.targetLevel}`); return out; }
+  if (m.overtaken && wards.every((w) => w.level >= p.level)) { finish('done', 'el protegido alcanzó al padrino'); return out; }
+  if (m.map !== p.map) out.events.push(`el padrino cambió de mapa (${m.map} → ${p.map})`);
+  m.map = p.map;
+  const target = warpForMap(p.map);
+  for (const w of wards) {
+    const k = key(w.char);
+    if (w.map === p.map) {
+      m.lastShared = { map: p.map, x: p.x, y: p.y };
+      delete m.warpDelays[k];
+      delete m.notes[k];
+      out.orders.set(k, { kind: 'follow', leader: pad, tight: true, at: { x: p.x, y: p.y } });
+      continue;
+    }
+    // Está en otro mapa: viaja al del padrino si puede entrar; si no, espera donde estuvieron juntos.
+    let dest = target && w.level >= target.reqLevel ? target : null;
+    if (!dest) {
+      note(k, target ? `no entra a ${target.name} (nivel ${target.reqLevel}): espera en zona segura` : `el padrino está en un mapa sin warp (${p.map}): espera en zona segura`);
+      const sh = m.lastShared ? warpForMap(m.lastShared.map) : null;
+      if (sh && w.map !== sh.map && w.level >= sh.reqLevel) dest = sh;
+    } else delete m.notes[k];
+    if (dest) {
+      m.warpDelays[k] ??= Math.round(MISSION.WARP_STAGGER_MS[0] + rand() * (MISSION.WARP_STAGGER_MS[1] - MISSION.WARP_STAGGER_MS[0]));
+      out.orders.set(k, { kind: 'warp', warp: dest.warp, map: dest.map, delayMs: m.warpDelays[k] });
+    } else out.orders.set(k, { kind: 'idle', why: m.notes[k] ?? 'espero al padrino' });
+  }
+  return out;
+}
+
 /** converge (explore) / engage / loot (golden): todos al mismo punto o al mismo dorado. */
 function stepFound(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[], out: StepOut, rand: () => number): StepOut {
   const now = snap.now;
@@ -527,7 +702,7 @@ function stepFound(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[], 
 }
 
 // --- Libro de escuadras (lo que guarda la estación) ---------------------------------------------
-export type StartMission = { kind: MissionKind; warp?: number; targetLevel?: number; maxMin?: number; padrino?: string };
+export type StartMission = { kind: MissionKind; warp?: number; targetLevel?: number; maxMin?: number; padrino?: string; follow?: boolean; untilResets?: number };
 
 export class SquadBook {
   squads = new Map<string, Squad>();
@@ -575,6 +750,29 @@ export class SquadBook {
     let padrino: string | null = null;
     let warp = req.warp ?? 0;
     let note = '';
+    if (req.kind === 'nurture' && req.follow) {
+      if (!req.padrino) return { ok: false, msg: 'seguir al padrino: hay que indicar quién es el padrino' };
+      const padrino = key(req.padrino);
+      const pm = act.find((a) => key(a.char) === padrino);
+      if (!pm) return { ok: false, msg: 'el padrino tiene que estar conectado y recibir órdenes' };
+      const wards = act.filter((a) => a !== pm);
+      if (!wards.length) return { ok: false, msg: 'hace falta al menos un protegido' };
+      const d = followDecision(pm.level, wards.map((w) => w.level));
+      s.leader = padrino; // solo el padrino invita a la party
+      s.members = [padrino, ...s.members.filter((c) => c !== padrino)];
+      const maxMs = Math.round((req.maxMin ?? 0) * 60_000) || FOLLOW_MISSION.DEFAULT_MAX_MS;
+      const roles = Object.fromEntries(s.members.map((c) => [c, c === padrino ? 'padrino' : 'protegido'])) as Record<string, SquadRole>;
+      const m: Mission = {
+        id: `${id}-m${++s.seq}`, kind: 'nurture', warp: 0, map: pm.map, startedAt: snap.now, phase: d.ok ? 'follow' : 'armed', phaseAt: snap.now, maxMs,
+        roles, meet: null, targetLevel: req.targetLevel ?? 0, padrino, visited: [], danger: [], cellOf: {}, found: null, foundAt: 0, deaths: {}, warpDelays: {}, result: null,
+        follow: true, untilResets: req.untilResets ?? 0, resetsDone: 0, lastPadResets: pm.resets ?? null, lastPadLevel: pm.level, resetSeenAt: 0, overtaken: false,
+        lastShared: wards.some((w) => w.map === pm.map) ? { map: pm.map, x: pm.x, y: pm.y } : null, notes: {},
+      };
+      s.mission = m;
+      const msg = d.ok ? `campaña de crianza: los protegidos siguen a ${padrino} por toda su ruta (${d.msg})` : `campaña armada: ${d.msg}. Arranca sola en su próximo reset`;
+      this.push(s, msg, snap.now);
+      return { ok: true, msg };
+    }
     if (req.kind === 'nurture') {
       padrino = key(req.padrino ?? [...act].sort((a, b) => b.level - a.level)[0].char);
       const pm = act.find((a) => key(a.char) === padrino);
@@ -602,6 +800,7 @@ export class SquadBook {
     const m: Mission = {
       id: `${id}-m${++s.seq}`, kind: req.kind, warp, map: sp.map, startedAt: snap.now, phase: 'travel', phaseAt: snap.now, maxMs,
       roles, meet: null, targetLevel: req.targetLevel ?? 0, padrino, visited: [], danger: [], cellOf: {}, found: null, foundAt: 0, deaths: {}, warpDelays: {}, result: null,
+      follow: false, untilResets: 0, resetsDone: 0, lastPadResets: null, lastPadLevel: 0, resetSeenAt: 0, overtaken: false, lastShared: null, notes: {},
     };
     s.mission = m;
     this.push(s, `misión ${req.kind} en ${sp.name}${note}`, snap.now);
@@ -613,6 +812,7 @@ export class SquadBook {
     if (!s?.mission || isTerminal(s.mission.phase)) return { ok: false, msg: 'no hay misión en curso' };
     const m = s.mission;
     m.result = why;
+    if (m.phase === 'armed') { m.phase = 'aborted'; m.phaseAt = now; s.last = { kind: m.kind, result: why, at: now }; this.push(s, `desarmada (${why})`, now); return { ok: true, msg: 'campaña desarmada' }; }
     m.phase = 'retreat';
     m.phaseAt = now;
     this.push(s, `retirada (${why})`, now);
@@ -640,7 +840,7 @@ export class SquadBook {
         const order = out.orders.get(c) ?? { kind: 'idle', why: '' } as Order;
         const cls = snap.members.get(c)?.cls;
         const lvl = snap.members.get(c)?.level ?? 0;
-        const buffs = cls && !isTerminal(m.phase) ? CLASS_KIT[cls].buffs.filter((b) => lvl >= b.minLevel) : [];
+        const buffs = cls && !isTerminal(m.phase) && m.phase !== 'armed' ? CLASS_KIT[cls].buffs.filter((b) => lvl >= b.minLevel) : [];
         this.assignments.set(c, this.build(s, c, order, snap.now, m, invite, buffs));
       }
       if (isTerminal(m.phase) && snap.now - m.phaseAt > 2 * ASSIGNMENT_TTL_MS) s.mission = null;
@@ -650,15 +850,17 @@ export class SquadBook {
 
   /** Quién invita a quién: solo el líder, mientras la misión está viva y falta gente en la party. */
   private invites(s: Squad, m: Mission, snap: Snapshot): string[] {
-    if (isTerminal(m.phase) || m.phase === 'retreat') return [];
-    return s.members.filter((c) => c !== s.leader && snap.members.get(c)?.online && snap.members.get(c)?.obeys);
+    if (isTerminal(m.phase) || m.phase === 'retreat' || m.phase === 'armed') return [];
+    const lead = m.follow && m.padrino ? m.padrino : s.leader;
+    return s.members.filter((c) => c !== lead && snap.members.get(c)?.online && snap.members.get(c)?.obeys);
   }
 
   private build(s: Squad, c: string, order: Order, now: number, m: Mission | null, invite: string[] = [], buffs: BuffStep[] = []): Assignment {
     const mem = m?.roles[c] ?? null;
+    const lead = m?.follow && m.padrino ? m.padrino : s.leader;
     return {
-      v: 1, char: c, squadId: s.id, missionId: m?.id ?? null, role: mem, order, leader: s.leader, members: s.members,
-      invite: c === s.leader ? invite : [], buffs, seq: ++s.seq, issuedAt: now, expiresAt: now + ASSIGNMENT_TTL_MS,
+      v: 1, char: c, squadId: s.id, missionId: m?.id ?? null, role: mem, order, leader: lead, members: s.members,
+      invite: c === lead ? invite : [], buffs, seq: ++s.seq, issuedAt: now, expiresAt: now + ASSIGNMENT_TTL_MS,
     };
   }
 
@@ -676,7 +878,7 @@ export class SquadBook {
   view(snap: Snapshot): SquadView[] {
     return [...this.squads.values()].map((s) => ({
       id: s.id, name: s.name, leader: s.leader, last: s.last, log: s.log.slice(-12),
-      mission: s.mission ? { id: s.mission.id, kind: s.mission.kind, phase: s.mission.phase, map: s.mission.map, warp: s.mission.warp, result: s.mission.result, since: s.mission.startedAt, maxMs: s.mission.maxMs, visited: s.mission.visited.length, found: s.mission.found ? { x: s.mission.found.x, y: s.mission.found.y, kind: s.mission.found.kind } : null } : null,
+      mission: s.mission ? { id: s.mission.id, kind: s.mission.kind, phase: s.mission.phase, map: s.mission.map, warp: s.mission.warp, result: s.mission.result, since: s.mission.startedAt, maxMs: s.mission.maxMs, visited: s.mission.visited.length, follow: s.mission.follow, resetsDone: s.mission.resetsDone, untilResets: s.mission.untilResets, notes: s.mission.notes, found: s.mission.found ? { x: s.mission.found.x, y: s.mission.found.y, kind: s.mission.found.kind } : null } : null,
       members: s.members.map((c) => {
         const m = snap.members.get(c);
         const a = this.assignments.get(c);
@@ -705,14 +907,14 @@ export class SquadBook {
 
 export type SquadView = {
   id: string; name: string; leader: string; last: Squad['last']; log: string[];
-  mission: null | { id: string; kind: MissionKind; phase: Phase; map: number; warp: number; result: string | null; since: number; maxMs: number; visited: number; found: { x: number; y: number; kind: string } | null };
+  mission: null | { id: string; kind: MissionKind; phase: Phase; map: number; warp: number; result: string | null; since: number; maxMs: number; visited: number; follow: boolean; resetsDone: number; untilResets: number; notes: Record<string, string>; found: { x: number; y: number; kind: string } | null };
   members: { char: string; cls: SquadClass | null; level: number; online: boolean; obeys: boolean; hpPct: number; map: number; x: number; y: number; role: SquadRole | null; order: Order | null }[];
 };
 
 // --- Pedidos del navegador (parse estricto) ------------------------------------------------------
 export type SquadRequest =
   | { action: 'squad-create'; name: string; chars: string[]; leader?: string }
-  | { action: 'squad-mission'; squad: string; kind: MissionKind; warp?: number; targetLevel?: number; maxMin?: number; padrino?: string; confirm: true }
+  | { action: 'squad-mission'; squad: string; kind: MissionKind; warp?: number; targetLevel?: number; maxMin?: number; padrino?: string; follow?: true; untilResets?: number; confirm: true }
   | { action: 'squad-abort'; squad: string }
   | { action: 'squad-disband'; squad: string }
   | { action: 'squad-accounts'; mode: 'plan' | 'start' | 'stop'; n?: number; classes?: SquadClass[] };
@@ -739,16 +941,18 @@ export function parseSquadRequest(v: unknown): SquadRequest | null {
       return { action: 'squad-create', name: r.name.trim(), chars: r.chars as string[], ...(r.leader ? { leader: r.leader as string } : {}) };
     }
     case 'squad-mission': {
-      if (!onlyKeys(r, ['action', 'squad', 'kind', 'confirm'], ['warp', 'targetLevel', 'maxMin', 'padrino'])) return null;
+      if (!onlyKeys(r, ['action', 'squad', 'kind', 'confirm'], ['warp', 'targetLevel', 'maxMin', 'padrino', 'follow', 'untilResets'])) return null;
       if (r.confirm !== true) return null; // nunca sin confirmación explícita
       if (typeof r.squad !== 'string' || !/^sq\d+$/.test(r.squad) || !MISSION_KINDS.includes(r.kind as MissionKind)) return null;
       if (r.warp !== undefined && !(int(r.warp, 0, 255) && squadMapByWarp(r.warp))) return null;
       if (r.targetLevel !== undefined && !int(r.targetLevel, 1, 400)) return null;
-      if (r.maxMin !== undefined && !int(r.maxMin, 1, 240)) return null;
+      if (r.follow !== undefined && (r.follow !== true || r.kind !== 'nurture' || r.padrino === undefined || r.warp !== undefined)) return null;
+      if (r.untilResets !== undefined && (r.follow !== true || !int(r.untilResets, 1, FOLLOW_MISSION.MAX_UNTIL_RESETS))) return null;
+      if (r.maxMin !== undefined && !int(r.maxMin, 1, r.follow ? 720 : 240)) return null;
       if (r.padrino !== undefined && (typeof r.padrino !== 'string' || !CHAR_KEY.test(r.padrino))) return null;
       if (r.kind !== 'nurture' && (r.padrino !== undefined || r.targetLevel !== undefined)) return null;
       if (r.kind !== 'nurture' && r.warp === undefined) return null;
-      return { action: 'squad-mission', squad: r.squad, kind: r.kind as MissionKind, confirm: true, ...(r.warp !== undefined ? { warp: r.warp as number } : {}), ...(r.targetLevel !== undefined ? { targetLevel: r.targetLevel as number } : {}), ...(r.maxMin !== undefined ? { maxMin: r.maxMin as number } : {}), ...(r.padrino ? { padrino: r.padrino as string } : {}) };
+      return { action: 'squad-mission', squad: r.squad, kind: r.kind as MissionKind, confirm: true, ...(r.warp !== undefined ? { warp: r.warp as number } : {}), ...(r.targetLevel !== undefined ? { targetLevel: r.targetLevel as number } : {}), ...(r.maxMin !== undefined ? { maxMin: r.maxMin as number } : {}), ...(r.padrino ? { padrino: r.padrino as string } : {}), ...(r.follow ? { follow: true as const } : {}), ...(r.untilResets !== undefined ? { untilResets: r.untilResets as number } : {}) };
     }
     case 'squad-abort':
     case 'squad-disband':

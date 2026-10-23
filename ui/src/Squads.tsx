@@ -28,7 +28,7 @@ const KINDS = [
   { value: "nurture", label: "Crianza (padrino)" },
 ];
 const PHASES: Record<string, string> = {
-  travel: "Viajando", gather: "Reuniéndose", sweep: "Recorriendo", converge: "Convergiendo", search: "Buscando",
+  armed: "Esperando reset", follow: "Siguiendo", travel: "Viajando", gather: "Reuniéndose", sweep: "Recorriendo", converge: "Convergiendo", search: "Buscando",
   engage: "Sobre el dorado", loot: "Juntando cajas", farm: "Criando", retreat: "Retirada", done: "Terminada", aborted: "Abortada",
 };
 const ROLES: Record<string, string> = { tanque: "Tanque", dano: "Daño", apoyo: "Apoyo", explorador: "Explorador", padrino: "Padrino", protegido: "Protegido" };
@@ -39,7 +39,7 @@ const orderText = (o: SquadView["members"][number]["order"]): string => {
     case "idle": return o.why || "espera";
     case "warp": return `viaja (warp ${o.warp})`;
     case "goto": return `va a (${o.x},${o.y})`;
-    case "follow": return `sigue a ${o.leader}`;
+    case "follow": return o.tight ? `acompaña a ${o.leader}` : `sigue a ${o.leader}`;
     case "hold": return `cobra cerca de ${o.leader}`;
     case "hunt": return o.focus ? `sobre el dorado (${o.focus.x},${o.focus.y})` : `pelea en (${o.x},${o.y})`;
     case "farm": return "su rutina";
@@ -72,6 +72,8 @@ function SquadCard({ s, call, say }: { s: SquadView; call: Call; say: (m: string
   const [padrino, setPadrino] = useState("auto");
   const [target, setTarget] = useState("");
   const [confirm, setConfirm] = useState(false);
+  const [follow, setFollow] = useState(false);
+  const [resets, setResets] = useState("");
   const live = isLive(s);
   const levels = s.members.filter((m) => m.online).map((m) => m.level);
   const icon = kind === "explore" ? <Compass size={14} /> : kind === "golden" ? <Swords size={14} /> : <Sprout size={14} />;
@@ -79,7 +81,8 @@ function SquadCard({ s, call, say }: { s: SquadView; call: Call; say: (m: string
     const body: SquadRequest = {
       action: "squad-mission", squad: s.id, kind: kind as "explore", confirm: true as const,
       ...(kind !== "nurture" ? { warp: Number(warp) } : {}),
-      ...(kind === "nurture" && padrino !== "auto" ? { padrino } : {}),
+      ...(kind === "nurture" && !follow && padrino !== "auto" ? { padrino } : {}),
+      ...(kind === "nurture" && follow ? { follow: true as const, padrino: padrino !== "auto" ? padrino : [...s.members].sort((a, b) => b.level - a.level)[0].char, ...(resets ? { untilResets: Number(resets) } : {}) } : {}),
       ...(kind === "nurture" && target ? { targetLevel: Number(target) } : {}),
     };
     const r = await call(body);
@@ -97,10 +100,16 @@ function SquadCard({ s, call, say }: { s: SquadView; call: Call; say: (m: string
       {s.mission && (
         <p className="muted squad-mission-line">
           {KINDS.find((k) => k.value === s.mission!.kind)?.label} · mapa {s.mission.map}
+          {s.mission.follow ? ` · resets del padrino: ${s.mission.resetsDone}${s.mission.untilResets ? `/${s.mission.untilResets}` : ""}` : ""}
           {s.mission.visited ? ` · ${s.mission.visited} celdas vistas` : ""}
           {s.mission.found ? ` · hallazgo en (${s.mission.found.x},${s.mission.found.y})` : ""}
           {s.mission.result ? ` · ${s.mission.result}` : ""}
         </p>
+      )}
+      {s.mission?.follow && (
+        <ul className="squad-plan">
+          {s.members.map((m) => <li key={m.char}><strong>{m.char}</strong> · Nv. {m.level || "—"} · mapa {m.map}{s.mission!.notes[m.char] ? ` · ${s.mission!.notes[m.char]}` : ""}</li>)}
+        </ul>
       )}
       {!s.mission && s.last && <p className="muted squad-mission-line">Última: {s.last.result}</p>}
       <div className="squad-table-wrap">
@@ -123,6 +132,11 @@ function SquadCard({ s, call, say }: { s: SquadView; call: Call; say: (m: string
           ) : (
             <>
               <Choice label="Padrino" value={padrino} onChange={setPadrino} items={[{ value: "auto", label: "Padrino: el de más nivel" }, ...s.members.map((m) => ({ value: m.char, label: `Padrino: ${m.char}` }))]} />
+              <label className="squad-confirm">
+                <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+                Seguir al padrino por toda la ruta (arranca en su próximo reset)
+              </label>
+              {follow && <input className="squad-input" inputMode="numeric" placeholder="Terminar tras N resets del padrino (opcional)" value={resets} onChange={(e) => setResets(e.target.value.replace(/\D/g, "").slice(0, 2))} aria-label="Resets del padrino para terminar" />}
               <input className="squad-input" inputMode="numeric" placeholder="Nivel meta (opcional)" value={target} onChange={(e) => setTarget(e.target.value.replace(/\D/g, "").slice(0, 3))} aria-label="Nivel meta de los protegidos" />
             </>
           )}
@@ -296,7 +310,7 @@ function makeDemo() {
       id: "sq1", name: "Alfa", leader: "umbrion",
       last: null,
       log: ["14:02:11 misión explore en Arena 2", "14:02:41 gather: reunidos", "14:03:05 sweep: reunidos 5/5"],
-      mission: { id: "sq1-m1", kind: "explore", phase: "sweep", map: 83, warp: 24, result: null, since: Date.now() - 240_000, maxMs: 1_500_000, visited: 6, found: null },
+      mission: { id: "sq1-m1", kind: "explore", phase: "sweep", map: 83, warp: 24, result: null, since: Date.now() - 240_000, maxMs: 1_500_000, visited: 6, follow: false, resetsDone: 0, untilResets: 0, notes: {}, found: null },
       members: [
         m("umbrion", "dk", 342, 92, "explorador", { kind: "goto", map: 83, x: 62, y: 38, radius: 4 }),
         m("kaelthor", "mg", 318, 88, "dano", { kind: "goto", map: 83, x: 48, y: 62, radius: 4 }),
@@ -307,12 +321,12 @@ function makeDemo() {
     },
     {
       id: "sq2", name: "Cría de Hume", leader: "hume", last: null,
-      log: ["15:10:02 misión nurture en Arena 2 (el protegido cobra ~1.9× de lo que haría solo, supuesto)"],
-      mission: { id: "sq2-m1", kind: "nurture", phase: "farm", map: 83, warp: 24, result: null, since: Date.now() - 900_000, maxMs: 5_400_000, visited: 0, found: null },
+      log: ["15:10:02 campaña de crianza: los protegidos siguen a hume por toda su ruta"],
+      mission: { id: "sq2-m1", kind: "nurture", phase: "follow", map: 83, warp: 0, result: null, since: Date.now() - 900_000, maxMs: 28_800_000, visited: 0, follow: true, resetsDone: 1, untilResets: 3, notes: { thalis: "no entra a Arena 2 (nivel 100): espera en zona segura" }, found: null },
       members: [
-        m("hume", "dk", 405, 88, "padrino", { kind: "farm" }),
-        m("zamu", "dw", 118, 100, "protegido", { kind: "hold", leader: "hume" }),
-        m("thalis", "elf", 104, 100, "protegido", { kind: "hold", leader: "hume" }, { obeys: false }),
+        m("hume", "dk", 142, 88, "padrino", { kind: "farm" }),
+        m("zamu", "dw", 118, 100, "protegido", { kind: "follow", leader: "hume", tight: true }),
+        m("thalis", "elf", 64, 100, "protegido", { kind: "idle", why: "no entra a Arena 2 (nivel 100): espera en zona segura" }, { map: 2 }),
       ],
     },
   ];
@@ -342,7 +356,7 @@ function makeDemo() {
         }
         case "squad-mission": {
           const s = squads.find((x) => x.id === body.squad)!;
-          s.mission = { id: `${s.id}-m9`, kind: body.kind, phase: "travel", map: 83, warp: body.warp ?? 24, result: null, since: Date.now(), maxMs: 1_500_000, visited: 0, found: null };
+          s.mission = { id: `${s.id}-m9`, kind: body.kind, phase: "travel", map: 83, warp: body.warp ?? 24, result: null, since: Date.now(), maxMs: 1_500_000, visited: 0, follow: !!body.follow, resetsDone: 0, untilResets: body.untilResets ?? 0, notes: {}, found: null };
           return { ok: true, msg: `misión ${body.kind} (demo): no se mandó nada a ningún bot` };
         }
         case "squad-abort": {
