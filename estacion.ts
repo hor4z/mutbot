@@ -464,7 +464,7 @@ function view() {
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine,
       role: s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine), roleSaved: !!s.cfg.role, stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
-      panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
+      panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending, equipPlan: st?.equipPlan ?? null,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
         map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
@@ -682,6 +682,11 @@ Bun.serve({
       }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
+      if (r.action === 'bot') {
+        if (s.pid == null || s.status !== 'on') return json({ ok: false, msg: `${s.cfg.char} no está en el juego` }, 409);
+        const res = await sendCommand(s, r.command);
+        return json(res, res.ok ? 200 : 409);
+      }
       if (r.action === 'role') {
         db.setRole(s.cfg.char, r.role);
         refreshSlots();

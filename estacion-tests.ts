@@ -234,6 +234,14 @@ console.log(fails ? `\n${fails} FALLARON` : '\nTodo OK');
   ok('bolsa: uso por casillas', bagUsage(undefined) === null && bagUsage([{ w: 2, h: 4 }, {}]) === 9 / 64 && bagUsage(Array(80).fill({})) === 1);
 }
 
+// --- Órdenes puntuales al bot ---------------------------------------------------------------
+{
+  const bot = (command: unknown) => parseStationRequest({ action: 'bot', char: 'horaz', command });
+  ok('bot: equipplan, equip y /pkclear pasan', bot({ cmd: 'equipplan' })?.action === 'bot' && bot({ cmd: 'equip' })?.action === 'bot' && bot({ cmd: 'say', text: '/pkclear' })?.action === 'bot');
+  ok('bot: el resto no pasa', bot({ cmd: 'say', text: 'hola' }) === null && bot({ cmd: 'say', text: '/pkclear', to: 'x' }) === null && bot({ cmd: 'warp', warp: 2 }) === null && bot({ cmd: 'hunt' }) === null && bot({ cmd: 'say', text: '/move lorencia' }) === null);
+  ok('bot: sin char válido o con claves de más → null', parseStationRequest({ action: 'bot', char: 'Ho raz', command: { cmd: 'equip' } }) === null && parseStationRequest({ action: 'bot', char: 'horaz', command: { cmd: 'equip' }, x: 1 }) === null);
+}
+
 // --- Insights de los bots ---------------------------------------------------------------------
 {
   const msg = (o: object) => ({ from: 'Horaz', kind: 'insight', at: 1, ...o });

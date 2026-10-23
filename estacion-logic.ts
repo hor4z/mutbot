@@ -127,7 +127,15 @@ export type StationRequest =
   | NewCharRequest
   | { action: 'add'; user: string; char: string; cls: CharClassKey | null }
   // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
-  | { action: 'probe'; user: string; pass?: string };
+  | { action: 'probe'; user: string; pass?: string }
+  // Órdenes puntuales al bot (solo las de BOT_ORDERS): calcular el plan de equipo, ejecutarlo, limpiar el PK.
+  | { action: 'bot'; char: string; command: PanelCommand };
+
+/** Lo único que la estación le reenvía a un bot por /api/do { action: 'bot' } (la interfaz pide confirmación antes de las que mueven o tocan algo). */
+export function isBotOrder(c: unknown): c is PanelCommand {
+  if (!isPanelCommand(c)) return false;
+  return c.cmd === 'equipplan' || c.cmd === 'equip' || (c.cmd === 'say' && c.text === '/pkclear');
+}
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
@@ -184,6 +192,7 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
+  if (r.action === 'bot') return keys.length === 3 && isBotOrder(r.command) ? { action: 'bot', char: r.char, command: r.command } : null;
   if (r.action === 'role') return keys.length === 3 && isRoleAssign(r.role) ? { action: 'role', char: r.char, role: r.role } : null;
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
   if (r.action === 'connect' || r.action === 'routine') {
