@@ -104,6 +104,18 @@ export function parseHitDamage(raw: Uint8Array | DataView | ArrayBuffer): { id: 
   return { id: ((b[3] << 8) | b[4]) & 0x7fff, damage: (b[5] << 8) | b[6] };
 }
 
+/**
+ * ObjectHitExtended (C1 16 11, docs/Packets/C1-11-ObjectHitExtended de OpenMU): el server lo manda cuando YO pego
+ * (o me pegan) e incluye la vida que le queda al blanco: es la barra roja del cliente. Byte 3 = tipo de daño (bits
+ * bajos), id u16 LITTLE endian @4, vida restante @6 en fracciones de 1/250, escudo @7, daño u32 LE @8 y daño al
+ * escudo u32 LE @12. null si no es ese paquete. Sin verificar contra bytes reales (ver las líneas RAW del log).
+ */
+export function parseHitExtended(raw: Uint8Array | DataView | ArrayBuffer): { kind: number; id: number; healthStatus: number; shieldStatus: number; damage: number } | null {
+  const b = u8(raw);
+  if (b.length !== 16 || b[0] !== 0xc1 || b[2] !== 0x11) return null;
+  return { kind: b[3] & 0x0f, id: (b[4] | (b[5] << 8)) & 0x7fff, healthStatus: b[6], shieldStatus: b[7], damage: (b[8] | (b[9] << 8) | (b[10] << 16) | (b[11] << 24)) >>> 0 };
+}
+
 // ---------------------------------------------------------------------------
 // Ítems. Este server manda casi todos los ítems en 5 bytes (formato clásico 0.97); el cliente web los
 // convierte a 12 antes de leerlos. Confirmado con bytes reales de Horaz (2026-10-11): inventario y

@@ -27,6 +27,7 @@ import { DEFENSE, Defense } from './defense';
 import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
 import { goldFeedHints } from './gold-feed';
 import { FightHeat, parseFight } from './fight-heat';
+import { parseHitExtended } from './protocol097';
 import { Finisher, finisherOn } from './finisher';
 import monstersData from './data/monsters.json';
 import { SweepPlanner, zonePrior } from './sweep';
@@ -327,7 +328,22 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     r.n++; rawSeen.set(tag, r);
     log(`RAW ${tag} (${dragonFight.current}): ${Buffer.from(toBytes(raw)).toString('hex')}`);
   };
-  const onObjectHitRaw = (raw: any) => dumpRaw('0x11', raw);
+  let lastHpLog = 0;
+  const onObjectHitRaw = (raw: any) => {
+    dumpRaw('0x11', raw);
+    const h = parseHitExtended(toBytes(raw));
+    if (!h) return;
+    // La barra roja del cliente: vida que le queda al blanco tras MI golpe (solo dragones y dorados de valor).
+    const npc = world.npcs.get(h.id);
+    if (npc && (DRAGON_TYPES.has(npc.type) || isGolden(npc))) {
+      dragonFight.ownHit(h.id, h.damage, h.healthStatus);
+      const now = Date.now();
+      if (DRAGON_TYPES.has(npc.type) && now - lastHpLog > 5000) {
+        lastHpLog = now;
+        panelLog(`${monsterName(npc.type)}: le queda ${Math.round((h.healthStatus / 250) * 100)} % de vida (mi golpe: ${h.damage}).`);
+      }
+    }
+  };
   const onHitDamage = (raw: any) => {
     dumpRaw(`0x15/${toBytes(raw).length}`, raw);
     const h = parseHitDamage(toBytes(raw));
