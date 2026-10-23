@@ -7,6 +7,7 @@ import "@fontsource/geist-mono/latin-400.css";
 import { Station } from "./Station";
 import { Panel } from "./Panel";
 import "./style.css";
-createRoot(document.getElementById("root")!).render(
-  document.body.dataset.surface === "panel" ? <Panel /> : <Station />,
-);
+import "./panel.css";
+// `panel.html` trae data-surface="panel"; en `ui:dev` se abre con `?panel` (y `&demo` para el bot simulado).
+const panel = document.body.dataset.surface === "panel" || new URLSearchParams(location.search).has("panel");
+createRoot(document.getElementById("root")!).render(panel ? <Panel /> : <Station />);
