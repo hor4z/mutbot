@@ -120,6 +120,8 @@ export type PanelCommand =
   | { cmd: 'farm' }
   /** cazar dorados; sin map = el mapa con más vivos al alcance según 0xFD */
   | { cmd: 'hunt'; map?: number }
+  /** explorador: recorre mapas seguros SIN pelear (salvo defensa propia) y publica a la estación qué ve (scout.ts); `farm` lo corta */
+  | { cmd: 'scout' }
   /**
    * chat del personaje: `to` = susurro a ese personaje; si no, `channel` normal (default), party o
    * guild. Texto de 1 a 60 caracteres imprimibles; los comandos ("/...") no se aceptan.
@@ -137,7 +139,7 @@ export type PanelCommand =
 /** Comandos del server que `say` deja pasar (texto exacto, sin canal ni destinatario). */
 export const SAY_COMMANDS: readonly string[] = ['/pkclear'];
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault', 'equipplan', 'equip'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'scout', 'warp', 'say', 'vault', 'equipplan', 'equip'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
@@ -153,7 +155,7 @@ export type PanelClientMessage = { type: 'command'; id: number; command: PanelCo
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'], equipplan: ['cmd'], equip: ['cmd'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], scout: ['cmd'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'], equipplan: ['cmd'], equip: ['cmd'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {

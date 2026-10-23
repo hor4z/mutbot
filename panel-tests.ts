@@ -70,12 +70,12 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('0x91 CC sin byte 6 → null', parseOpeningState(Uint8Array.from([0xc1, 6, 0x91, 4, 0, 0]), NOW) === null);
 }
 
-// --- isPanelCommand: solo las 9 órdenes con sus campos ----------------------------
+// --- isPanelCommand: solo las 10 órdenes con sus campos ----------------------------
 {
-  ok('PANEL_COMMANDS son 9 (equipplan y equip, aditivas)', PANEL_COMMANDS.length === 9 && PANEL_COMMANDS.includes('equipplan') && PANEL_COMMANDS.includes('equip'));
+  ok('PANEL_COMMANDS son 10 (equipplan, equip y scout, aditivas)', PANEL_COMMANDS.length === 10 && PANEL_COMMANDS.includes('scout') && !isPanelCommand({ cmd: 'scout', map: 1 }) && PANEL_COMMANDS.includes('equipplan') && PANEL_COMMANDS.includes('equip'));
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
-    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'say', text: '/pkclear' }, { cmd: 'vault' }, { cmd: 'equipplan' }, { cmd: 'equip' },
+    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'say', text: '/pkclear' }, { cmd: 'vault' }, { cmd: 'equipplan' }, { cmd: 'equip' }, { cmd: 'scout' },
   ]) {
     ok(`acepta ${JSON.stringify(c)}`, isPanelCommand(c));
   }
@@ -88,7 +88,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'hunt', map: 'Noria' }, { cmd: 'hunt', map: 300 }, { cmd: 'hunt', map: 3, warp: 3 },
     { cmd: 'hunt', sector: 1 },
     { cmd: 'vault', move: 1 }, { cmd: 'equip', confirm: true }, { cmd: 'equip', slot: 2 }, { cmd: 'equipplan', dryRun: false }, { cmd: 'Equip' },
-    { cmd: 'scout' }, { cmd: 'atlas' },
+    { cmd: 'scout', map: 1 }, { cmd: 'scout', extra: 1 }, { cmd: 'Scout' }, { cmd: 'atlas' },
     { cmd: 'ranking' }, { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '/pkclear x' }, { cmd: 'say', text: '/pkclear', to: 'Melu' }, { cmd: 'say', text: '/pkclear', channel: 'party' }, { cmd: 'say', text: ' /pkclear' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
     { cmd: 'say', text: 'a\nb' }, { cmd: 'say', text: 'hola', to: 'no válido!' }, { cmd: 'say', text: 'hola', channel: 'global' }, { cmd: 'say', text: 'hola', to: 'Melu', channel: 'party' },
     { cmd: 'say', text: 'hola', extra: 1 }, { cmd: 'say', text: 42 },

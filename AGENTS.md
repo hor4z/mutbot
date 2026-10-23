@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health
+bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, recovery, watchdog, hunt-explorer, insights, health, scout
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -77,6 +77,7 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `equip-plan.ts` | `planEquip`: plan de equipamiento desde el baúl (qué sacar, a qué casilla, qué desvestir, qué poner, en orden). Puro. |
 | `crafting.ts` | Recetas del Chaos Goblin, Alquimista, armonía y Fenrir con sus tasas publicadas y `planCrafts` (propone por valor esperado, **nunca ejecuta**). Puro. Datos y fuentes en `docs/items-y-maquinas.md`. |
 | `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
+| `scout.ts` | Explorador (lógica pura): mapas seguros, recorrido (`ScoutTour`), compás de publicación (`ScoutPublisher`), reporte y consumo de reportes por los cazadores (`scoutFactor`, `scoutHints`). Tests en `scout-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
 | `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
@@ -748,8 +749,8 @@ su consola.
 
 **Flota, estrategias y alertas** (`estacion-logic.ts`, tests en `estacion-tests.ts`; interfaz en `ui/src`: Flota, Personaje, Estrategias, Dorados, Ranking, Consola, paleta Ctrl/Cmd+K):
 
-- **Estrategia (`RoleAssign`)** por personaje, guardada en `characters.role` (migración 2 de `estacion-db.ts`). `golden` (rutina `hunt`), `route`, `explorer` y `support` (rutina `farm`), `spot` (+`warp`). `POST /api/do {action:'role', char, role}` la guarda y, si el bot está en el juego, aplica `roleRoutine(role)`. La rutina `{kind:'hunt'}` es nueva (orden `hunt` del panel). `GET /api/team` suma `role` en cada miembro.
-- **Exploración:** un explorador publica `POST /api/team {from, kind:'scout', map, x, y, players?, monsters?, golds?, note?}` (sin Origin). La estación guarda el último por explorador y mapa 10 min (`ScoutReport`) y los devuelve en `GET /api/team` (`scouts`) y `/api/state`. Los bots todavía no publican ni consumen esto: falta del lado del bot.
+- **Estrategia (`RoleAssign`)** por personaje, guardada en `characters.role` (migración 2 de `estacion-db.ts`). `golden` (rutina `hunt`), `explorer` (rutina `scout`), `route` y `support` (rutina `farm`), `spot` (+`warp`). `POST /api/do {action:'role', char, role}` la guarda y, si el bot está en el juego, aplica `roleRoutine(role)`. La rutina `{kind:'hunt'}` es nueva (orden `hunt` del panel). `GET /api/team` suma `role` en cada miembro.
+- **Exploración:** un explorador publica `POST /api/team {from, kind:'scout', map, x, y, players?, monsters?, golds?, note?}` (sin Origin). La estación guarda el último por explorador y mapa 10 min (`ScoutReport`) y los devuelve en `GET /api/team` (`scouts`) y `/api/state`. `goldTypes?: string[]` (hasta 8 nombres, opcional y aditivo) dice qué dorados vio. Del lado del bot ver "Explorador" abajo.
 - **Alertas:** `/api/state` devuelve `alerts` (más nueva primero, ≤120, `Alert`), `invasion`, `scouts` y `now`. La estación detecta muertes, bloqueos, bolsa llena, subidas de nivel, entradas/salidas, bots trabados (5 min sin moverse farmeando o cazando) e invasiones (`diffAlerts`). Los bots pueden sumar avisos con `POST /api/alert {from, kind:'pk'|'bagfull'|'stuck', text}` (sin Origin). `view()` de cada personaje suma `role`, `roleSaved`, `stuck` y en `game`: `mp`, `zen`, `bag`, `nearby`, `resetsPerDay`, `session`.
 - **Demo de la interfaz:** `bun run ui:dev` y abrir `/?demo`: datos simulados, no sale ninguna orden (`ui/src/mock.ts`).
 
@@ -761,6 +762,16 @@ y ver la rutina aplicada al entrar.
 API que usa el cliente web para `/ranking`: `https://<host del proxy>/api/ranking`, o `MUBOT_RANKING_URL`),
 con caché de 1 min; la interfaz lo muestra en la pestaña "Ranking" con los personajes propios marcados.
 `/ranking` por el chat del juego NO existe (el server contesta "Comando desconocido").
+
+### Explorador (`scout.ts`, orden `scout`)
+
+- **Orden** `{cmd:'scout'}` (aditiva, sin campos; `farm` la corta; la rutina de la estación es `{kind:'scout'}` y el rol `explorer` la usa, así que al entrar al mundo la estación la manda sola). Es una `bot.hunting` con `scout` (`HuntState.scout`): hereda todo lo que ya frena una cacería (no resetea, no cambia de spot, no vuelve a la esquina, sin skill de área en el camino). El modo del panel sigue siendo `hunt` y `doing` dice "explorando ... sin pelear".
+- **No pelea**: sin objetivos ni dorados. Solo se defiende de un monstruo que le pegó en los últimos 4 s (aggro 0x18/0x19), a <= 2 tiles y que `power.ts` dice que puede vencer. La defensa contra jugadores (`defense.ts`) sigue igual.
+- **Recorrido**: `HuntExplorer.useTerrain` con el `.att` real, primero las celdas con dorados vistos (`zones.ts`) y al final las de `avoidCells` (muertes de la base, `insights.ts`). `ScoutTour` rota por los mapas de `HUNT_MAPS` (Lorencia, Noria, Devias, Atlans, Tarkan): ~3 min por mapa (0,8-1,3x al azar) o antes si dio una vuelta entera; elige el menos cubierto, contando los reportes de otros exploradores (`scoutCovered`).
+- **Seguridad**: solo mapas con nivel >= requerido + 20 (y un personaje limitado, `isFreshChar`, solo los de entrada <= 20: Lorencia, Noria, Devias). Peligro (vida < 50 % o un monstruo a <= 5 tiles que `canFight` descarta) = veta el mapa 15 min y va al más seguro (Lorencia); morir lo veta 45 min; si el vigía (`watchdog.ts`) diagnostica traba, además de su remedio veta el mapa y vuelve al más seguro (`ScoutTour.onStuck`); no poder warpear 3 veces veta el mapa; sin ningún mapa seguro (o si reseteó y el nivel ya no alcanza) deja de explorar y vuelve a farmear.
+- **Publica** cada 30-60 s al azar (el primero a los 8 s de llegar a un mapa) con `POST MUBOT_TEAM_URL`: `{from, kind:'scout', map, x, y, players, monsters, golds, goldTypes, note}`. `players` no cuenta a los compañeros (`MUBOT_MATES`). Si la estación no responde, se ignora.
+- **Los cazadores consumen** los reportes: `team.ts` ya consultaba `GET MUBOT_TEAM_URL` cada 5 s y ahora lee también `scouts`; `scoutReports()` devuelve los de otros con < 10 min y es vacío si la estación no contesta hace > 2 min (comportamiento de siempre). `huntData()` (farm-loop) multiplica el valor de cada mapa de `pickHuntMap` por `scoutFactor`: dorados vivos reportados suben hasta x2 (decae lineal en 10 min), 5+ jugadores x0,6 y 2-4 x0,85 (decae igual). Cazando en un mapa con dorados reportados hace < 3 min, la posición del reporte entra a los dorados recordados (`scoutHints`, una vez por reporte) y va primero ahí.
+- **Sin verificar en vivo**: todo. Tests offline con reloj simulado (`scout-tests.ts`); falta ver un explorador real en la estación, el alcance real de la vista (el scope es lo que manda el server) y que `canFight` como amenaza no vete de más.
 
 ## Panel externo
 
@@ -808,7 +819,7 @@ cacería), `command-result` y `decision` (el diario).
   que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
 
 **Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 9 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `vault`, `equipplan`, `equip`) **con sus campos exactos** (un campo de más = rechazo);
+acepta solo las 10 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `vault`, `equipplan`, `equip`, `scout`) **con sus campos exactos** (un campo de más = rechazo);
 mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
 `command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
 el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
