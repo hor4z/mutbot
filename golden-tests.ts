@@ -6,6 +6,10 @@ import { nextZone } from './zones';
  */
 import { DRAGON_RUSH_MS, DragonFight, GOLDEN_RULE, GoldenRule, dragonRush, stickyGolden } from './golden';
 
+import { Finisher } from './finisher';
+import { AliveHistory, CROWD_DIVISOR, CROWD_MAX_DROP, dragonBonusFactor, pickHuntMap } from './panel-logic';
+import type { Invasion } from './panel-protocol';
+
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : ` -> ${JSON.stringify(got)}`}`);
@@ -96,5 +100,48 @@ const me = { x: 100, y: 100 };
   ok('carrera: otro mapa / sin aviso / sin zona: como siempre', !dragonRush({ ...base, huntMap: 3 }) && !dragonRush({ ...base, announceAt: null }) && !dragonRush({ ...base, hasZone: false }));
 }
 
+{
+  const F = new Finisher();
+  const own = (id: number, dmg: number, at: number) => { F.cast(id, at); F.damage(id, dmg, at + 300); };
+  ok('remate: sin muestra propia → none', F.decide(1, 100_000, 0).verdict === 'none');
+  own(1, 1000, 0); own(1, 1200, 1000); own(1, 800, 2000); // mediana 1000
+  ok('remate: mediana del golpe propio', F.ownHit() === 1000);
+  ok('remate: sin otros atacantes → none', F.decide(1, 100_000, 3000).verdict === 'none');
+  F.other(1, 77, 3000);
+  F.damage(1, 50_000, 3100);
+  const r1 = F.decide(1, 100_000, 3200);
+  ok('remate: otros pegan y falta mucho → wait', r1.verdict === 'wait' && r1.remaining === 100_000 - 50_000 - 3000, r1);
+  F.damage(1, 45_000, 4000); F.other(1, 77, 4000);
+  ok('remate: faltan <= 3 golpes → strike', F.decide(1, 100_000, 4100).verdict === 'strike');
+  ok('remate: los otros dejaron de pegar hace > 3 s → none', F.decide(1, 100_000, 9000).verdict === 'none');
+  F.damage(1, 40_000, 9500); F.other(1, 77, 9500);
+  ok('remate: daño visto > HP → none (inconsistente)', F.decide(1, 100_000, 9600).verdict === 'none');
+  const G = new Finisher();
+  G.cast(2, 0); G.damage(2, 1000, 100); G.cast(2, 1000); G.damage(2, 1000, 1100);
+  G.other(2, 5, 0);
+  ok('remate: espera', G.decide(2, 200_000, 0).verdict === 'wait' && G.waited(2));
+  for (let t = 1000; t <= 24_000; t += 1000) G.other(2, 5, t);
+  ok('remate: antes de 25 s sin bajar sigue esperando', G.decide(2, 200_000, 24_000).verdict === 'wait');
+  G.other(2, 5, 26_000);
+  ok('remate: 25 s sin que baje la vida → strike y se queda en strike', G.decide(2, 200_000, 26_000).verdict === 'strike' && G.decide(2, 200_000, 27_000).verdict === 'strike');
+  ok('remate: sin HP conocido → none', new Finisher().decide(3, null, 0).verdict === 'none');
+}
+{
+  const H = new AliveHistory();
+  const inv = (d: number, l: number, at: number): Invasion => ({ status: 'active', total: d + l, at, nextAt: at, maps: [{ map: 2, name: 'Devias', alive: d }, { map: 0, name: 'Lorencia', alive: l }] });
+  H.record(inv(10, 29, 0), 0);
+  ok('multitud: sin historial suficiente → factor 1', H.factor(2, 30_000) === 1);
+  H.record(inv(3, 27, 120_000), 120_000);
+  ok('multitud: Devias cae 3,5/min → 1/(1+1,75)', Math.abs(H.factor(2, 120_000) - 1 / 2.75) < 1e-9, H.factor(2, 120_000));
+  ok('multitud: Lorencia cae 1/min → 0,67', Math.abs(H.factor(0, 120_000) - 1 / 1.5) < 1e-9);
+  ok('multitud: tope', (() => { const K = new AliveHistory(); K.record(inv(100, 0, 0), 0); K.record(inv(0, 0, 60_000), 60_000); return K.factor(2, 60_000) === 1 / (1 + CROWD_MAX_DROP / CROWD_DIVISOR); })());
+  process.env.MUBOT_COMPETITION = '0';
+  ok('multitud: MUBOT_COMPETITION=0 apaga factor y decaimiento', H.factor(2, 120_000) === 1 && dragonBonusFactor(0, 200_000) === 1);
+  delete process.env.MUBOT_COMPETITION;
+  ok('bonus del dragón: entero al aviso, mitad a los 2 min, 0 a los 4, sin dato entero', dragonBonusFactor(0, 0) === 1 && dragonBonusFactor(0, 120_000) === 0.5 && dragonBonusFactor(0, 240_000) === 0 && dragonBonusFactor(null, 5) === 1);
+  const mk = (now: number, dragonAt: number | undefined) => pickHuntMap({ invasion: inv(10, 29, 0), level: 400, dragonMap: 2, dragonAt, now });
+  ok('pickHuntMap: bonus fresco → Devias; vencido a los 5 min → Lorencia (29 vivos)', (mk(10_000, 0) as any).hunt.map === 2 && (mk(300_000, 0) as any).hunt.map === 0);
+  ok('pickHuntMap: sin dragonAt → como siempre', (mk(300_000, undefined) as any).hunt.map === 2);
+}
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE DORADOS PASARON' : `\n${fails} TEST(S) DE DORADOS FALLARON`);
 process.exit(fails ? 1 : 0);

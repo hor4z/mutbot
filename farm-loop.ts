@@ -48,7 +48,7 @@ import { squadActive, squadStep } from './squad-client';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
-import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
+import { AUTO_HUNT, aliveHistory, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type HuntState, type ScopedNpc } from './state';
@@ -79,7 +79,7 @@ function huntData(now: number) {
   const hourUtc = m >= 50 ? d.getUTCHours() : m < 5 ? (d.getUTCHours() + 23) % 24 : (d.getUTCHours() + 1) % 24;
   // Reportes de exploradores (scout.ts): dorados vivos vistos suben el mapa, la competencia lo baja. Sin reportes: 1.
   const reports = scoutReports(now);
-  return { factor: (map: number) => huntFactor(ins, map, now) * scoutFactor(reports, map, now), predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
+  return { factor: (map: number) => huntFactor(ins, map, now) * scoutFactor(reports, map, now) * aliveHistory.factor(map, now), dragonAt: bot.dragonMap?.at ?? null, now, predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
 }
 // Personaje nuevo: no encadena cacerías (no puede con los dorados).
 const weakNow = () => isFreshChar(world.resets, world.stats);

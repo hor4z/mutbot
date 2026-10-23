@@ -180,6 +180,47 @@ export function redDragonMapFromServerMessage(text: string): number | null {
 export const RED_HUNT_MS = 12 * 60_000;
 
 export const HUNT_DRAGON_BONUS = 100;
+// Competencia por mapa (2026-10-23: Devias bajó de 10 a 3 vivos en minutos por la multitud; Lorencia y Noria casi
+// sin cazadores). Se guarda el historial de vivos por mapa (cada 0xFD) y el puntaje se divide por
+// 1 + caídaPorMin / CROWD_DIVISOR; con tope CROWD_MAX_DROP (factor mínimo 1/(1+3) = 0,25). Sin al menos
+// CROWD_MIN_SPAN_MS de historial: 1 (comportamiento de siempre). MUBOT_COMPETITION=0 lo apaga.
+export const CROWD_WINDOW_MS = 5 * 60_000;
+export const CROWD_MIN_SPAN_MS = 60_000;
+export const CROWD_DIVISOR = 2;
+export const CROWD_MAX_DROP = 6;
+// El bonus del mapa del dragón decae lineal hasta 0 a los DRAGON_BONUS_MS del aviso (ya los mataron o están rodeados).
+export const DRAGON_BONUS_MS = 4 * 60_000;
+export const competitionOn = () => process.env.MUBOT_COMPETITION !== '0';
+export class AliveHistory {
+  private h = new Map<number, { at: number; alive: number }[]>();
+  record(inv: Invasion | null, now: number) {
+    if (!inv || inv.status !== 'active') { this.h.clear(); return; }
+    for (const m of inv.maps) {
+      const a = this.h.get(m.map) ?? [];
+      a.push({ at: now, alive: m.alive });
+      while (a.length && now - a[0].at > CROWD_WINDOW_MS) a.shift();
+      this.h.set(m.map, a);
+    }
+  }
+  /** Vivos que se pierden por minuto en el mapa (0 sin historial suficiente o si no baja). */
+  dropPerMin(map: number, now: number): number {
+    const a = (this.h.get(map) ?? []).filter((x) => now - x.at <= CROWD_WINDOW_MS);
+    if (a.length < 2) return 0;
+    const span = a[a.length - 1].at - a[0].at;
+    if (span < CROWD_MIN_SPAN_MS) return 0;
+    return Math.min(CROWD_MAX_DROP, Math.max(0, ((a[0].alive - a[a.length - 1].alive) / span) * 60_000));
+  }
+  /** Multiplicador del puntaje: 1 / (1 + caídaPorMin / 2). */
+  factor(map: number, now: number): number {
+    return competitionOn() ? 1 / (1 + this.dropPerMin(map, now) / CROWD_DIVISOR) : 1;
+  }
+}
+export const aliveHistory = new AliveHistory();
+/** Bonus del mapa del dragón según los ms desde el aviso (sin dato o sin competencia: entero). */
+export function dragonBonusFactor(announceAt: number | null | undefined, now: number | undefined): number {
+  if (!competitionOn() || announceAt == null || now == null || now < announceAt) return 1;
+  return Math.max(0, 1 - (now - announceAt) / DRAGON_BONUS_MS);
+}
 // Sin ver un dorado en este tiempo, y con otro mapa que tenga más vivos, se pasa a ese: buscar los
 // últimos 1-2 a ciegas cuesta más dorados de los que da.
 export const HUNT_DRY_MS = 2 * 60_000;
@@ -211,7 +252,7 @@ export const HUNT_UNKNOWN_FACTOR = 0.25;
 // suma un cuarto del bonus solo mientras el server no avisó el mapa de verdad.
 export const HUNT_PREDICTED_FRACTION = 0.25;
 export function pickHuntMap(inp: { invasion: Invasion | null; level: number; done?: ReadonlySet<number>; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
-  factor?: (map: number) => number; predictedDragon?: number | null }): HuntChoice {
+  factor?: (map: number) => number; predictedDragon?: number | null; dragonAt?: number | null; now?: number }): HuntChoice {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active') return { ok: false, msg: 'no hay invasión activa' };
   let best: HuntMap | null = null;
@@ -222,7 +263,7 @@ export function pickHuntMap(inp: { invasion: Invasion | null; level: number; don
     const alive = inv.maps.find((x) => x.map === h.map)?.alive ?? 0;
     if (alive <= (h.stopAlive ?? AUTO_HUNT.stopAlive)) continue;
     const known = !inp.knownMaps || inp.knownMaps.has(h.map) || inp.dragonMap === h.map;
-    const bonus = inp.dragonMap === h.map ? HUNT_DRAGON_BONUS : inp.dragonMap == null && inp.predictedDragon === h.map ? HUNT_DRAGON_BONUS * HUNT_PREDICTED_FRACTION : 0;
+    const bonus = inp.dragonMap === h.map ? HUNT_DRAGON_BONUS * dragonBonusFactor(inp.dragonAt, inp.now) : inp.dragonMap == null && inp.predictedDragon === h.map ? HUNT_DRAGON_BONUS * HUNT_PREDICTED_FRACTION : 0;
     const score = Math.min(alive, 30) * (h.value ?? 1) * (known ? 1 : HUNT_UNKNOWN_FACTOR) * (inp.factor?.(h.map) ?? 1) + bonus;
     if (score > bestScore) { best = h; bestScore = score; bestAlive = alive; }
   }
@@ -287,13 +328,13 @@ export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, n
 export const invasionKey = (inv: Invasion) => Math.floor(inv.at / 3_600_000);
 
 export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
-  factor?: (map: number) => number; predictedDragon?: number | null }): HuntChoice | null {
+  factor?: (map: number) => number; predictedDragon?: number | null; dragonAt?: number | null }): HuntChoice | null {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active' || inp.now - inv.at > AUTO_HUNT.freshMs) return null;
   if (inp.lastKey === invasionKey(inv)) return null;
   // Recién reseteado no le gana a un dorado (usuario, 2026-10-23): sigue farmeando hasta el 400.
   if (inp.level < AUTO_HUNT.minLevel) return null;
-  const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps, factor: inp.factor, predictedDragon: inp.predictedDragon });
+  const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps, factor: inp.factor, predictedDragon: inp.predictedDragon, dragonAt: inp.dragonAt, now: inp.now });
   return ch.ok ? ch : null;
 }
 

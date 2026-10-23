@@ -4,7 +4,7 @@
  */
 import { sendToGS } from './connection';
 import { EventBus } from './net/eventBus';
-import { EVENT_KEYS, buildOpeningStateRequest, parseInvasion, parseOpeningState } from './panel-logic';
+import { EVENT_KEYS, aliveHistory, buildOpeningStateRequest, parseInvasion, parseOpeningState } from './panel-logic';
 import type { EventKey, EventTimer } from './panel-protocol';
 import { bot, world } from './state';
 import { log, toBytes } from './util';
@@ -56,6 +56,7 @@ export function trackPanelPackets() {
     if (!inv) return;
     const prev = bot.invasion;
     bot.invasion = inv;
+    aliveHistory.record(inv, Date.now());
     if (!prev || prev.status !== inv.status || prev.total !== inv.total) {
       log(`Invasión dorada: ${inv.status}, ${inv.total} vivo(s)${inv.maps.length ? ` (${inv.maps.map((m) => `${m.name}: ${m.alive}`).join(' · ')})` : ''}.`);
     }
