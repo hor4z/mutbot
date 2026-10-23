@@ -33,6 +33,7 @@ const POLL_MS = 3000;
 
 let current: Assignment | null = null;
 let lastSeq = -1;
+let lastSquadKey = '';
 let polling = false;
 let partyNames: string[] = [];
 let partyIndex = -1;
@@ -42,6 +43,7 @@ let released = '';
 const invites = new InviteScheduler();
 const follower = new Follower();
 let lastShortcutAt = 0;
+let lastSquadWarpAt = 0;
 /** Campaña de crianza: correa corta (2-6 tiles) detrás del padrino. */
 const tightFollower = new Follower(Math.random, FOLLOW_MISSION.LEASH_FAR);
 let warpSeenAt = 0;
@@ -63,7 +65,13 @@ export function startSquadPolling() {
         const body = (await r.json()) as unknown;
         if ((body as { none?: boolean })?.none) { current = null; return; }
         const v = verifyAssignment(KEY, body, bot.charName, Date.now(), lastSeq);
-        if ('a' in v) { current = v.a; lastSeq = v.a.seq; } else log(`Escuadra: orden descartada (${v.err}).`);
+        if ('a' in v) { current = v.a; lastSeq = v.a.seq; }
+        else if (v.err && /vieja/i.test(String(v.err))) {
+          // La estación reinició o hay una misión nueva: su seq empieza de 0 y no puede quedar descartada hasta alcanzar el viejo.
+          const raw = body as { squadId?: string; missionId?: string; seq?: number };
+          if (raw.squadId !== lastSquadKey && typeof raw.seq === 'number') { lastSeq = -1; lastSquadKey = String(raw.squadId); }
+          log(`Escuadra: orden descartada (${v.err}).`);
+        } else log(`Escuadra: orden descartada (${v.err}).`);
       }
     } catch {
       // sin estación: el bot sigue solo
@@ -81,6 +89,8 @@ export function squadShadow(): boolean {
 }
 
 export function squadActive(): boolean {
+  // Orden vencida (la estación se cayó o la misión terminó): se suelta lo fijado aunque nadie llame a squadStep.
+  if ((!current || Date.now() > current.expiresAt) && savedPin !== undefined) restore();
   return !!current && Date.now() <= current.expiresAt && current.order.kind !== 'release';
 }
 
@@ -130,6 +140,11 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
   }
   released = '';
   if (world.hp <= 0 || bot.paused || bot.resetting || !bot.inGameAt) return false;
+  // Sombra: se fija el spot del mapa actual para que la ruta fija no la warpee a su tramo (ping-pong de mapa); se suelta con restore().
+  if ((o.kind === 'follow' || o.kind === 'hold' || o.kind === 'idle') && !bot.pendingWarp) {
+    const here = WARP_SPOTS.filter((s) => s.map === world.map && s.reqLevel <= world.level).sort((x, y) => (x.arrival ? dist(x.arrival, world) : 999) - (y.arrival ? dist(y.arrival, world) : 999))[0];
+    if (here && bot.pinnedSpot?.index !== here.index) { if (savedPin === undefined) savedPin = bot.pinnedSpot; bot.pinnedSpot = here; bot.hunting = null; }
+  }
 
   // Party: el líder invita a los que faltan (uno por vez, con espera larga).
   const vis = new Map<string, number>();
@@ -160,7 +175,8 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       if (Date.now() - warpSeenAt < o.delayMs) { bot.doing = 'escuadra: espero para viajar'; await sleep(humanPace(500)); return true; }
       const sp = WARP_SPOTS.find((s) => s.index === o.warp);
       if (!sp || sp.reqLevel > world.level) { log(`Escuadra: no puedo viajar al warp ${o.warp}.`); return false; }
-      if (!bot.pendingWarp) {
+      if (!bot.pendingWarp && Date.now() - lastSquadWarpAt > 20_000) { // sin reintentar cada tick si el warp no responde
+        lastSquadWarpAt = Date.now();
         if (savedPin === undefined) savedPin = bot.pinnedSpot;
         bot.pendingWarp = sp;
         bot.pinnedSpot = sp;

@@ -803,7 +803,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           askHelp('corner', world.map, me.x, me.y, `${rivals} rivales en la esquina, ${Math.round(rate / 1e6)}M/min`))
           decide(`Pido ayuda a ${mates.map((m) => m.char).join(', ')} en la esquina: ${rivals} rivales y ${Math.round(rate / 1e6)}M/min.`);
       }
-      for (const r of newRequests()) {
+      for (const r of (shadow ? [] : newRequests())) {
         if (r.kind === 'corner') {
           if (world.level < CORNER.minLevel) decide(`${r.from} pide ayuda en la esquina, pero me falta nivel (${world.level}/${CORNER.minLevel}).`);
           else if (bot.hunting || bot.resetting || bot.paused) decide(`${r.from} pide ayuda en la esquina, pero estoy ${bot.hunting ? 'cazando' : bot.resetting ? 'reseteando' : 'en pausa'}.`);
@@ -838,7 +838,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const racing = isPriorityChar(bot.charName);
     // Un personaje nuevo no sale a cazar dorados: no puede con ellos.
     // 1e') Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
-    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting && bot.redDragon &&
+    if (AUTO_HUNT_ON && !shadow && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting && bot.redDragon &&
         nowG - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at && world.level >= AUTO_HUNT.minLevel) {
       lastRedAt = bot.redDragon.at;
       const hm = HUNT_MAPS.find((x) => x.map === bot.redDragon!.map);
@@ -850,7 +850,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         continue;
       }
     }
-    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting) {
+    if (AUTO_HUNT_ON && !shadow && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting) {
       const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG), ...huntData(nowG) });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);
