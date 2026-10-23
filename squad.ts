@@ -322,6 +322,8 @@ export const MISSION = {
  * Todo SUPUESTO sin medir en vivo (docs/escuadras.md).
  */
 export const FOLLOW_MISSION = {
+  /** Con todos los protegidos desde este nivel el padrino vuelve a su ruta normal (Arena 2 pide 100). */
+  ROUTE_FREE_LEVEL: 100,
   /** Tras un reset el padrino queda en nivel <= esto: ahí arranca solo una misión armada. */
   AUTO_START_MAX_LEVEL: 20,
   /** Reparto parejo: el protegido cobra al menos esta fracción de lo del padrino (nivel protegido / nivel padrino). */
@@ -604,6 +606,19 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
     if (why) {
       setPhase(m, 'retreat', now, out, `retirada (${why})`);
       m.result = `retirada: ${why}`;
+    }
+  }
+
+  // El padrino se adapta al más débil: mientras algún protegido no pueda entrar al mapa siguiente de su ruta (Arena 2
+  // pide nivel 100), se queda cazando en el mejor mapa al que los protegidos sí entran. Con todos al nivel, vuelve a su ruta.
+  if (m.phase === 'follow' && P && wards.length) {
+    const minWard = Math.min(...wards.map((w) => w.level));
+    if (minWard < FOLLOW_MISSION.ROUTE_FREE_LEVEL) {
+      const opt = nurtureOptions(P.level, wards.map((w) => w.level))[0];
+      if (opt) {
+        out.orders.set(pad, { kind: 'warp', warp: opt.warp, map: opt.map, delayMs: 0 });
+        note(P.char, `me quedo en ${opt.name} hasta que ${wards.find((w) => w.level === minWard)!.char} llegue al ${FOLLOW_MISSION.ROUTE_FREE_LEVEL}`);
+      }
     }
   }
 

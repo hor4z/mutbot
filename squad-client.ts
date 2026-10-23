@@ -143,7 +143,12 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       await sleep(humanPace(600));
       return true;
     case 'warp': {
-      if (world.map === o.map) return false;
+      if (world.map === o.map) {
+        // Ya estoy en ese mapa: se fija el spot para que mi ruta no me lleve a otro (el padrino espera al más débil).
+        const here = WARP_SPOTS.find((s) => s.index === o.warp);
+        if (here && bot.pinnedSpot?.index !== here.index) { if (savedPin === undefined) savedPin = bot.pinnedSpot; bot.pinnedSpot = here; }
+        return false;
+      }
       const k = `${a.missionId}:${o.warp}:${o.delayMs}`; // cada viaje con su espera nueva
       if (warpKey !== k) { warpKey = k; warpSeenAt = Date.now(); }
       if (Date.now() - warpSeenAt < o.delayMs) { bot.doing = 'escuadra: espero para viajar'; await sleep(humanPace(500)); return true; }
