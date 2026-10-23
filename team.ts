@@ -6,7 +6,8 @@
  */
 import { bot } from './state';
 
-export type TeamMember = { char: string; level: number; map: number; x: number; y: number; mode: string };
+// fresh: personaje nuevo (isFreshChar, por los stats): lo usa el dúo de crianza (duo.ts).
+export type TeamMember = { char: string; level: number; map: number; x: number; y: number; mode: string; fresh?: boolean };
 export type HelpKind = 'corner' | 'golden';
 export type TeamRequest = { from: string; kind: HelpKind; map: number; x: number; y: number; note: string; at: number };
 

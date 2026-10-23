@@ -2,8 +2,8 @@
  * El arranque del ciclo, del reset al nivel 100 (port de `browser/corner.js`, la parte de Lorencia y
  * Devias que hacía que el navegador llegara al 100 en 2-3 min):
  *
- *  - Lorencia (10-19): directo al grupo de Lich (134,202), con una salida variada en cada reset
- *    (directa, apenas por el oeste o por el este del camino) y un punto de parada a ±3 tiles; objetivos
+ *  - Lorencia (10-19): al grupo de Lich (134,202), con varios caminos caminables tras el
+ *    cuello de botella del pueblo y un punto de parada a ±5 tiles; objetivos
  *    a <= 8 del campamento (usuario: "en Lorencia te saliste del spot").
  *  - Devias 4 (20-99): el spot lleno pegado a la llegada. Campamento = centro del grupo más grande
  *    (>= 3 monstruos a <= 4) a <= 15 de la llegada; si el campamento queda pobre (< 3 a <= 10) 10 s,
@@ -27,7 +27,7 @@ export { dist, type Pos };
  *   sur:   Lich (14)                              x 95-175,  y 168-244
  * Ya en el campo, lo recorre. El nivel no decide: un personaje con más fuerza o resets sube de campo
  * antes (usuario: "la estrategia sale de los stats del personaje"). Al llegar a `untilLevel` pasa al farmeo avanzado
- * (Devias, Arenas). Solo para personajes nuevos (`isFreshChar`): después de un reset, con stats
+ * (Devias, Arenas). Solo para personajes débiles por stats (`isFreshChar`, aunque tengan algún reset): con stats
  * enormes, va directo al Lich como siempre.
  *
  * Hume (2026-10-12) salió del inicial en el 10 directo al Lich, sin puntos repartidos, y lo mató:
@@ -113,7 +113,7 @@ export function initialCamp<M extends Pos>(inp: { me: Pos; field: Field; monster
 }
 
 export const EARLY = {
-  lorencia: { map: 0, maxLevel: 20, lich: { x: 134, y: 202 } as Pos, jitter: 3 },
+  lorencia: { map: 0, maxLevel: 20, lich: { x: 134, y: 202 } as Pos, jitter: 5 },
   devias: { map: 2, maxLevel: 100, spot: { x: 69, y: 181 } as Pos },
   leash: 8,            // objetivos a <= esto del campamento
   dropTargetAt: 10,    // un objetivo que se alejó más de esto del campamento se suelta
@@ -142,18 +142,34 @@ export function biggestCluster<M extends Pos>(pool: readonly M[], r: number = EA
 }
 
 /**
- * Plan de salida de Lorencia tras el reset: campamento en el Lich ±jitter y, a veces, un punto de
- * paso por el oeste o el este. `rand` en [0,1) (Math.random); `walkable` para no elegir una pared.
+ * El servidor decide dónde aparece tras el reset. Desde ahí se elige un camino
+ * distinto entre corredores caminables al Lich. El pueblo tiene cuatro puertas: la
+ * del sur (paso (133,166)) es la directa; por el oeste o el este se rodea por afuera
+ * (~57-61 tiles más, ~22 s). Las rutas recientes se excluyen para no repetir el mismo
+ * recorrido en cada ciclo (usuario: "sale por la misma puerta, parece un bot").
  */
-export function lorenciaPlan(rand: () => number, walkable: (p: Pos) => boolean = () => true): { camp: Pos; via: Pos | null } {
+export const LORENCIA_ROUTES: readonly (readonly Pos[])[] = [
+  [], // directo cuando el camino está libre
+  [{ x: 133, y: 166 }, { x: 133, y: 176 }, { x: 122, y: 178 }, { x: 125, y: 192 }],
+  [{ x: 133, y: 166 }, { x: 133, y: 176 }, { x: 147, y: 179 }, { x: 142, y: 193 }],
+  [{ x: 133, y: 166 }, { x: 133, y: 176 }, { x: 114, y: 178 }, { x: 119, y: 198 }],
+  [{ x: 133, y: 166 }, { x: 133, y: 176 }, { x: 155, y: 182 }, { x: 148, y: 196 }],
+  // puerta oeste y por afuera
+  [{ x: 100, y: 127 }, { x: 88, y: 145 }, { x: 95, y: 172 }, { x: 118, y: 190 }],
+  // puerta este y por afuera
+  [{ x: 172, y: 127 }, { x: 186, y: 150 }, { x: 170, y: 175 }, { x: 150, y: 192 }],
+];
+export type LorenciaPlan = { camp: Pos; vias: Pos[]; variant: number };
+export function lorenciaPlan(rand: () => number, walkable: (p: Pos) => boolean = () => true, recent: readonly number[] = []): LorenciaPlan {
+  const available = LORENCIA_ROUTES.map((path, variant) => ({ path, variant }))
+    .filter(({ path, variant }) => !recent.slice(-2).includes(variant) && path.every(walkable));
+  const choices = available.length ? available : [{ path: LORENCIA_ROUTES[0], variant: 0 }];
+  const choice = choices[Math.min(choices.length - 1, Math.floor(rand() * choices.length))];
   const r = (n: number) => Math.round((rand() * 2 - 1) * n);
   const L = EARLY.lorencia;
   let camp = { x: L.lich.x + r(L.jitter), y: L.lich.y + r(L.jitter) };
   if (!walkable(camp)) camp = { ...L.lich };
-  const vias: (Pos | null)[] = [null, { x: 130 + r(2), y: 150 + r(4) }, { x: 141 + r(2), y: 165 + r(4) }, null];
-  let via = vias[Math.floor(rand() * vias.length)] ?? null;
-  if (via && !walkable(via)) via = null;
-  return { camp, via };
+  return { camp, vias: choice.path.map((p) => ({ ...p })), variant: choice.variant };
 }
 
 /**

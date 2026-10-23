@@ -348,6 +348,50 @@ function Controls({
     </Section>
   );
 }
+// Dorados de un vistazo (usuario, 2026-10-23: "en el panel no puedo ver rápido dónde quedan criaturas"):
+// los que se ven, con distancia y flecha (arriba = +y, igual que el radar), y los vivos por mapa en la invasión.
+const ARROWS = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"];
+const arrow = (dx: number, dy: number) =>
+  dx === 0 && dy === 0 ? "•" : ARROWS[Math.round(((Math.atan2(dy, dx) + 2 * Math.PI) % (2 * Math.PI)) / (Math.PI / 4)) % 8];
+function Goldens({ s }: { s: PanelState }) {
+  const me = s.where;
+  const golds = (s.entities?.monsters ?? [])
+    .filter((m) => m.gold)
+    .map((m) => ({ ...m, d: Math.max(Math.abs(m.x - me.x), Math.abs(m.y - me.y)), dragon: m.type === 44 || m.type === 79 }))
+    .sort((a, b) => Number(b.dragon) - Number(a.dragon) || a.d - b.d);
+  const inv = s.invasion?.status === "active" ? s.invasion : null;
+  return (
+    <Section title="Dorados" extra={<span className="count">{golds.length}</span>}>
+      <div className="near-list">
+        {golds.map((g) => (
+          <div key={g.id}>
+            <span className={g.type === 44 ? "red-dragon" : g.type === 79 ? "golden-dragon" : "gold"}>
+              {arrow(g.x - me.x, g.y - me.y)} {g.name}
+              {g.target ? <small> · objetivo</small> : null}
+            </span>
+            <small>
+              {g.d} tiles · {g.x},{g.y}
+            </small>
+          </div>
+        ))}
+        {!golds.length && <p className="empty-copy">Ningún dorado a la vista.</p>}
+      </div>
+      {inv && (
+        <div className="near-footer">
+          {inv.maps
+            .filter((m) => m.alive > 0)
+            .map((m) => (
+              <span key={m.map} className={m.map === me.map ? "gold" : ""}>
+                {m.name} {m.alive}
+                {" · "}
+              </span>
+            ))}
+          {inv.total} vivos
+        </div>
+      )}
+    </Section>
+  );
+}
 function Near({ s }: { s: PanelState }) {
   const groups = new Map<string, { n: number; near: number; gold: boolean }>();
   for (const m of s.entities?.monsters ?? []) {
@@ -612,6 +656,7 @@ export function Panel() {
             <Radar state={s} />
             <div className="overview-side">
               <Controls s={s} send={send} disabled={!online || !s} />
+              {s && <Goldens s={s} />}
               <Section title="Estado del personaje">
                 <Meter
                   value={s?.char.hp[0] ?? 0}

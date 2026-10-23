@@ -16,6 +16,7 @@ import { serveRadarAsset } from './radar-assets';
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
 import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
+import { isFreshChar } from './farming';
 import { coolNames } from './names';
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
@@ -490,6 +491,7 @@ function team() {
   for (const [k, r] of teamRequests) if (now - r.at > TEAM_REQUEST_TTL_MS) teamRequests.delete(k);
   const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
     char: s.cfg.char, level: s.state!.char.level, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
+    fresh: isFreshChar(s.state!.char.resets, s.state!.char.stats),
   }));
   return { members, requests: [...teamRequests.values()] };
 }

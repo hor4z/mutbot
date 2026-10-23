@@ -18,11 +18,19 @@ const DB_PASSWORD = process.env.MUBOT_DB_PASSWORD ?? '';
 const FLUSH_MS = 5_000;
 export const MAX_ROWS = 5_000;
 
-/** Commit del bot (para comparar versiones contra la línea base). */
+/**
+ * Commit del bot (para comparar versiones contra la línea base). Con cambios sin commitear le
+ * suma `+` y un hash del diff: si no, todas las pruebas sobre el árbol sucio salían con el mismo
+ * commit y no se podían comparar (Hume, 2026-10-19).
+ */
 export const VERSION = (() => {
   try {
-    const r = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: import.meta.dir });
-    return r.success ? r.stdout.toString().trim() : 'desconocida';
+    const git = (...a: string[]) => Bun.spawnSync(['git', ...a], { cwd: import.meta.dir });
+    const r = git('rev-parse', '--short', 'HEAD');
+    if (!r.success) return 'desconocida';
+    const head = r.stdout.toString().trim();
+    const diff = git('diff', 'HEAD').stdout.toString() + git('ls-files', '--others', '--exclude-standard').stdout.toString();
+    return diff ? `${head}+${Bun.hash(diff).toString(16).slice(0, 7)}` : head;
   } catch { return 'desconocida'; }
 })();
 

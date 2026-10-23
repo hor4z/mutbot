@@ -437,11 +437,16 @@ export function classFamily(classId: number | null | undefined): keyof typeof FR
   if (classId == null) return null;
   return (['wizard', 'knight', 'elf', 'gladiator'] as const)[classId >> 2] ?? null;
 }
-/** ¿Personaje nuevo? Sin resets y con pocos puntos (si el server todavía no mandó los resets, por los stats). */
+/**
+ * ¿Personaje débil (nuevo)? Lo deciden los stats, no los resets: Hume con 1 reset tenía fuerza 121 y el
+ * bot lo trataba como a Horaz (energía primero, grupos de 5, spots disputados) (2026-10-17). Los resets
+ * solo cuentan mientras el server no mandó los stats (todo en 0).
+ */
 export const FRESH_MAX_STATS = 3000;
 export function isFreshChar(resets: number | null | undefined, stats: StatValues): boolean {
-  if (resets != null && resets > 0) return false;
-  return stats.str + stats.agi + stats.vit + stats.ene < FRESH_MAX_STATS;
+  const total = stats.str + stats.agi + stats.vit + stats.ene;
+  if (total === 0) return !(resets != null && resets > 0);
+  return total < FRESH_MAX_STATS;
 }
 export function planFreshStats(points: number, family: keyof typeof FRESH_STATS): StatValues {
   const share = FRESH_STATS[family];
@@ -488,8 +493,11 @@ export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_
 export const VALUABLE_JEWELS_14 = new Set([11, 13, 14, 16, 22, 31]);
 export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean };
 
-// Solo cajas (14/11: Box of Luck / de Kundun). Usuario 2026-10-11: las joyas se compran en Lorencia y
-// llenaban el inventario; los excelentes que caen no sirven (y al tirarlos se volvían a levantar).
+// Lo que vale en este server (2026-10-23): las cajas (14/11, Box of Kundun) y los Cristales (14/31): la
+// moneda de la tienda del creador (el Mercado cobra en Cristales) y del Alquimista; también los
+// talismanes (14/7 Protección, 14/12 +14, 14/20 +15). Siempre, con o sin lugar (son de 1x1 y se apilan).
+// Con lugar en la bolsa (`gear`), los excelentes: el Alquimista los cristaliza en Cristales. Las joyas no
+// valen nada para comerciar (usuario: "las joyas no valen nada"): no se levantan.
 /**
  * `fresh` (personaje nuevo, sin resets): además el zen (en este server llega como ítem 14/15), las
  * pociones (manzana y pociones de vida, 14/0-3), las joyas y, si `gear`, el equipo (grupos 0-11: armas,
@@ -502,8 +510,15 @@ export function isValuableDrop(d: DropInfo, fresh = false, gear = false): boolea
   if (fresh && d.group === 14 && (d.num <= 3 || d.num === 15 || JEWELS.has(d.num))) return true;
   if (fresh && d.group === 12 && d.num === 15) return true; // Jewel of Chaos
   if (fresh && gear && d.group <= 11) return true;
-  return d.group === 14 && d.num === 11;
+  if (d.group === 14 && CURRENCY_ITEMS.has(d.num)) return true;
+  return gear && !!d.excellent && d.group <= 11;
 }
+
+/** Cajas, Cristales y talismanes (grupo 14): ver isValuableDrop. */
+export const CURRENCY_ITEMS: ReadonlySet<number> = new Set([11, 31, 7, 12, 20]);
+
+/** Orden de recolección: la caja primero aunque una joya esté hasta LOOT_BOX_FIRST tiles más cerca. */
+const LOOT_BOX_FIRST = 8;
 
 // El drop valioso más cercano a <= radius (o null).
 export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false): D | null {
@@ -512,8 +527,9 @@ export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, 
   for (const d of drops) {
     if (!isValuableDrop(d, fresh, gear)) continue;
     const dd = cheb(me, d);
-    if (dd <= radius && dd < bd) {
-      bd = dd;
+    const score = dd - (d.group === 14 && d.num === 11 ? LOOT_BOX_FIRST : 0);
+    if (dd <= radius && score < bd) {
+      bd = score;
       best = d;
     }
   }

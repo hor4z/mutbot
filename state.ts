@@ -72,7 +72,10 @@ export type ItemSlot = { slot: number; group: number; num: number; level?: numbe
 export type SkillInfo = { index: number; number: number; level: number };
 
 export const isGolden = (n: ScopedNpc) => GOLDEN_TYPES.has(n.type);
-export const monsterName = (type: number) => MONSTER_NAMES.get(type) ?? `tipo ${type}`;
+// El 44 es el Dragón Rojo de su invasión, pero el cliente lo llama "Golden Dragon" como al 79: en el log y el
+// panel se confundían (2026-10-23).
+const NAME_FIXES = new Map<number, string>([[44, 'Dragón Rojo']]);
+export const monsterName = (type: number) => NAME_FIXES.get(type) ?? MONSTER_NAMES.get(type) ?? `tipo ${type}`;
 // Nivel por TypeNumber (farmeo inicial: solo monstruos acordes al personaje). Custom >= 300: sin dato.
 const MONSTER_LEVELS = new Map<number, number>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Level]));
 export const monsterLevel = (type: number): number | undefined => MONSTER_LEVELS.get(type);
@@ -112,7 +115,13 @@ export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextW
   // Después de morir o si se van de scope, se vuelve directo ahí en vez de recorrer celdas.
   spots?: Map<number, { x: number; y: number; type: number; at: number }>;
   // Zonas de dragones ya recorridas en esta cacería ("x,y"; zones.ts).
-  zonesVisited?: Set<string> };
+  zonesVisited?: Set<string>;
+  // Mapas ya cazados en esta invasión (el encadenado no vuelve a ellos).
+  done?: Set<number>;
+  // Cacería del Dragón Rojo: corta por tiempo (RED_HUNT_MS), no por el 0xFD de la invasión dorada.
+  red?: boolean;
+  // Último dorado a la vista en este mapa (para huntDryOut).
+  lastSeenAt?: number };
 
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.
@@ -141,6 +150,8 @@ export const bot = {
   hunting: null as HuntState | null,
   // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
   pendingWarp: null as Spot | null,
+  // Orden `vault` del panel: leer el baúl en el próximo paso del loop.
+  pendingVault: false,
   pinnedSpot: null as Spot | null,
   resetting: false,
   // El loop descarta su objetivo en el próximo tick (cambio de modo).
@@ -155,6 +166,10 @@ export const bot = {
   goalPoint: null as [number, number] | null,
   // Última invasión (0xFD).
   invasion: null as Invasion | null,
+  // Mapa del Golden Dragon que avisó el server ("[Devias] Golden invasion!") y cuándo.
+  dragonMap: null as { map: number; at: number } | null,
+  // Invasión del Dragón Rojo avisada por el server ("[Noria] Red Dragon invasion!").
+  redDragon: null as { map: number; at: number } | null,
 };
 
 // ---------------------------------------------------------------------------

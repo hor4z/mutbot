@@ -15,10 +15,14 @@ type RadarApi = {
   setObjects: (visible: boolean) => void;
   dispose: () => void;
 };
+// Vos en blanco: en amarillo se confundía con los dorados (usuario, 2026-10-23). Los dragones con color
+// propio: Golden Dragon (79) naranja, Dragón Rojo (44) rojo.
 const colors = {
-  self: 0xf4d28e,
+  self: 0xffffff,
   monster: 0xe86d7b,
   gold: 0xffd361,
+  dragon: 0xff8c1a,
+  red: 0xff3b3b,
   player: 0x77c6f1,
   drop: 0xc6a0ff,
   camp: 0x6ad7b0,
@@ -186,7 +190,7 @@ function makeRadar(
     return materials.get(color)!;
   }
   const haloMat = new T.MeshBasicMaterial({
-    color: 0xf4d28e,
+    color: 0xffffff,
     transparent: true,
     opacity: 0.16,
     depthWrite: false,
@@ -216,6 +220,8 @@ function makeRadar(
       } else {
         const mesh = new T.Mesh(kind === "monster" ? cone : gem, mat);
         mesh.position.y = kind === "monster" ? 0.9 : 1;
+        // Los dragones, más grandes: se ven de lejos.
+        if (kind === "dragon" || kind === "red") mesh.scale.setScalar(1.7);
         group.add(mesh);
       }
       const r = new T.Mesh(ring, mat);
@@ -447,7 +453,7 @@ function makeRadar(
     for (const m of s.entities?.monsters ?? [])
       marker(
         `m${m.id}`,
-        m.gold ? "gold" : "monster",
+        m.type === 44 ? "red" : m.type === 79 ? "dragon" : m.gold ? "gold" : "monster",
         m.x,
         m.y,
         `${m.name} · ${m.x}, ${m.y}${m.target ? " · Objetivo" : ""}`,
@@ -734,6 +740,8 @@ export function Radar({ state }: { state: PanelState | null }) {
             ["self", "Vos"],
             ["monster", "Monstruos"],
             ["gold", "Dorados"],
+            ["dragon", "Golden Dragon"],
+            ["red", "Dragón Rojo"],
             ["player", "Jugadores"],
             ["drop", "Objetos"],
             ["zone", "Zonas de dragones"],

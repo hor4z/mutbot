@@ -6,7 +6,8 @@
  * corridas, por eso no se usan.
  *
  * Packet (adaptador del cliente web para el 0.97d, `adaptOutgoing` de 0x24):
- *   C3 0C 24 <de: depósito> <de: casilla> <ítem 5 bytes> <a: depósito> <a: casilla>
+ *   C3 0C 24 <de: depósito> <de: casilla> <ítem 5 bytes> <a: depósito> <a: casilla> (C3 0D 24 con el
+ *   ítem de 6 bytes que manda el server desde la armonía, 2026-10-23)
  * depósito 0 = inventario (equipo 0-11, bolsa 12-75). Respuesta `ItemMoved` (C3 24): byte 3 = casilla
  * nueva, o 0xFF si no se pudo.
  */
@@ -55,9 +56,9 @@ const key = (it: ItemSlot) => `${it.group}/${it.num}/${it.level ?? 0}`;
 const rejected = new Set<string>();
 
 async function move(it: ItemSlot, to: number): Promise<boolean> {
-  if (!it.raw || it.raw.length !== 5) return false;
+  if (!it.raw || (it.raw.length !== 5 && it.raw.length !== 6)) return false;
   const reply = waitFor('ItemMoved', 3000).catch(() => null);
-  sendToGS(rawPacket([0xc3, 0x0c, 0x24, 0, it.slot, ...it.raw, 0, to]));
+  sendToGS(rawPacket([0xc3, 7 + it.raw.length, 0x24, 0, it.slot, ...it.raw, 0, to]));
   const r = await reply;
   const b = r ? toBytes(r) : null;
   if (!b || b[3] === 0xff) return false;

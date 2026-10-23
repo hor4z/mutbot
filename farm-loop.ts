@@ -6,24 +6,27 @@
 import { askHelp, newRequests, teammates } from './team';
 import { track, trackEvent } from './telemetry';
 import { isPriorityChar } from './knowledge';
-import { dragonZones, nextZone } from './zones';
+import { dragonZones, goldenZones, mapsWithZones, nextZone } from './zones';
 import { DRAGON_TYPES } from './golden';
 import { closeSockets, sendToGS } from './connection';
 import { AUTO_HUNT_ON, ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS, WALK_PACE_MS } from './config';
 import { sendHit, sendTargetedSkill, step } from './actions';
 import { CAMP } from './camp';
-import { SKILL_TABLE, castReach, checkSurvival, isMage, pickAttackSkill, useSkill } from './combat';
+import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
 import { CORNER, cornerActive, inCorner } from './corner';
 import { cornerStep, newCornerState, type CornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
-import { GoldenRule } from './golden';
+import { GoldenRule, stickyGolden } from './golden';
 import { canFight } from './power';
+import { farmMiddleware, statPower } from './farm-middleware';
+import { ObserverTracker } from './observer';
 import { equipStep } from './equip';
-import { attackerOf, buildPartyInvite, ownAreaSkill } from './protocol097';
+import { attackerOf, buildPartyInvite, ownAreaSkill, ownTargetedSkill } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
-import { WARP_SPOTS } from './route';
+import { WARP_SPOTS, pinActive } from './route';
+import { readVault } from './vault';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
 import { SelfReport, classFamily, isFreshChar } from './farming';
@@ -34,12 +37,12 @@ import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx'
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
-import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, autoHuntChoice, invasionKey, mapName, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
+import { AUTO_HUNT, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
-import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, warpAndWait, zenTxt } from './route';
+import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, typeStats, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
-import { chebyshev, directionTowards, log, sleep } from './util';
+import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
 
 // Autoevaluación en consola cada esto (ver SelfReport en farming.ts).
@@ -50,6 +53,15 @@ const HUNT_NORMAL_RANGE = 3;
 // (como mucho un aviso cada 15 s).
 const HUNT_SPOT_TTL_MS = 3 * 60_000;
 const HUNT_SHARE_MS = 15_000;
+const SWELL_LIFE_MS = 55_000;
+const DRAGON_MEMORY_MS = 6_000;
+let lastRedAt = 0;
+let lastDragon: { id: number; x: number; y: number; at: number } | null = null;
+// El aviso "[Mapa] Golden invasion!" vale para esa invasión (15 min).
+const DRAGON_MAP_TTL_MS = 20 * 60_000;
+const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
+// Personaje nuevo: no encadena cacerías (no puede con los dorados).
+const weakNow = () => isFreshChar(world.resets, world.stats);
 // Arranque: este tiempo en el mapa sin nada de exp = spot agotado.
 const EARLY_STARVE_MS = 60_000;
 // Equipo: pedir ayuda en la esquina con esta cantidad de rivales y rindiendo menos que esto.
@@ -131,6 +143,16 @@ function hookAggro() {
       castSkill = n;
     });
   }
+  for (const ev of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
+    EventBus.on(ev, (raw: any) => {
+      const n = ownTargetedSkill(toBytes(raw), bot.playerId & 0x7fff);
+      if (n == null || n === lastOwnSkill) return;
+      lastOwnSkill = n;
+      log(`Tiro ${SKILL_TABLE.get(n)?.name ?? 'skill ' + n} (${n}).`);
+      trackEvent('cast', SKILL_TABLE.get(n)?.name ?? '', n);
+      castSkill = n;
+    });
+  }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
     EventBus.on(ev, (raw: any) => {
       const id = attackerOf(toBytes(raw), bot.playerId & 0x7fff);
@@ -150,12 +172,23 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   // Estado compartido con cornerStep, walkTowards y castOnTheWay (loop-ctx.ts).
   const ctx = newLoopCtx();
+  const observers = new ObserverTracker();
+  let lastObserverChange = 0;
   // Monstruos atacables: los de world.npcs que NO están en zona segura. Después del reset Horaz quedó
   // pegándole a unos Lord centurion parados en el pueblo de Lorencia (en zona segura no hay daño):
   // 0 exp hasta que se lo cortó. Se recalcula al inicio de cada tick; el panel sigue viendo todos.
   const refreshAttackable = () => {
     ctx.npcs = new Map();
-    for (const [id, n] of world.npcs) if (!isSafeZone(world.map, n.x, n.y)) ctx.npcs.set(id, n);
+    const fighter = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
+    const limited = isFreshChar(world.resets, world.stats) || farmMiddleware.profile(fighter, world.level, world.skills.has(41), Date.now()).limited;
+    for (const [id, n] of world.npcs) {
+      if (isSafeZone(world.map, n.x, n.y)) continue;
+      // También en Devias y campamentos generales: el modelo de poder protege a los
+      // personajes que subieron de nivel más rápido que sus stats. Los dorados los
+      // evalúa aparte la regla fuerte, con el límite estricto.
+      if (limited && !isGolden(n) && !farmMiddleware.target(fighter, n.type, world.skills.has(41))) continue;
+      ctx.npcs.set(id, n);
+    }
   };
   let totalExpGained = 0;
   let kills = 0;
@@ -168,11 +201,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastReport = Date.now();
   let lastCycleCheck = 0;
   let lastBarrierAt = 0;
+  let lastSwellAt = 0;
   let phaseAt = Date.now();
   // Desde cuándo perseguimos al objetivo actual (segundos hasta matarlo).
   let targetSince = 0;
   let targetType = -1;
   let starvingLogged = 0;
+  let seededRoute = '';
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro
   // id); el meter descarta el duplicado. Se corta el tramo y se olvida el spot
@@ -183,6 +218,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     lastDeathAt = Date.now();
     deaths++;
     log(`Muerte #${deaths} (${source}) en ${bot.currentSpot?.name ?? 'spot desconocido'}.`);
+    const f = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
+    if (farmMiddleware.profile(f, world.level, world.skills.has(41), Date.now()).limited && farmMiddleware.death(world.map, Date.now()))
+      decide(`Muerte en ${mapName(world.map)}: no vuelvo a este mapa por 10 min.`);
     bot.lastSpotIndex = bot.currentSpot?.index ?? bot.lastSpotIndex;
     bot.currentSpot = null;
     bot.canAdopt = false;
@@ -307,6 +345,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
   while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked) {
     refreshAttackable();
+    const observerSignal = observers.update(Date.now(), world.map, { x: world.x, y: world.y },
+      [...world.players.entries()].map(([id, p]) => ({ id, ...p, mate: !!p.name && isMate(p.name) })));
     // Ciego: el server a veces deja de mandar el scope de monstruos (Horaz y Melu en Lorencia: 0
     // monstruos, 0 muertes, solo jugadores y paquetes 0x11). Reconectar lo arregla: con NINGÚN
     // monstruo a la vista (ni en zona segura) durante BLIND_RECONNECT_MS, se corta y se vuelve a entrar.
@@ -367,7 +407,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (isMage() && world.skills.has(16) && Date.now() - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && Date.now() - ctx.lastCastAt > SKILL_PACE_MS) {
       lastBarrierAt = Date.now(); ctx.lastCastAt = Date.now();
       sendTargetedSkill(world.skills.get(16)!.index, bot.playerId);
-      await sleep(SKILL_PACE_MS);
+      await sleep(humanPace(SKILL_PACE_MS));
+    }
+    // 0c) Caballero: Swell Life (48, más vida para él y la party) siempre prendido, cada ~55 s. Contra los
+    //     dorados quedaba en 22 % sin pociones (2026-10-23).
+    if (!isMage() && world.skills.has(48) && skillLevelOk(48) && Date.now() - lastSwellAt > SWELL_LIFE_MS && world.mana >= (SKILL_TABLE.get(48)?.mana ?? 0) && Date.now() - ctx.lastCastAt > SKILL_PACE_MS) {
+      lastSwellAt = Date.now(); ctx.lastCastAt = Date.now();
+      sendTargetedSkill(world.skills.get(48)!.index, bot.playerId);
+      await sleep(humanPace(SKILL_PACE_MS));
     }
     // 1) Sobrevivir tiene prioridad absoluta.
     if (checkSurvival()) {
@@ -398,14 +445,42 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       continue;
     }
+    // Orden `vault`: leer el baúl (vault.ts). Después, la ruta vuelve sola al spot.
+    if (bot.pendingVault && !bot.hunting) {
+      bot.pendingVault = false;
+      const r = await readVault();
+      panelLog(`Baúl: ${r.msg}`);
+      bot.currentSpot = null;
+      ctx.target = null;
+      continue;
+    }
     // Cacería: cortar a tiempo (0xFD dice 0 vivos, derrotada, 15 min) y llegar al mapa.
     if (bot.hunting) {
       const h = bot.hunting;
       const nowH = Date.now();
-      const stop = shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined });
+      const known = () => mapsWithZones(HUNT_MAPS.map((x) => x.map), nowH);
+      const stop = h.red
+        ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now: nowH, maxMs: RED_HUNT_MS })
+        : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now: nowH, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
+          (h.auto && world.map === h.hunt.map
+            ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now: nowH,
+                next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: known() }) })
+            : null);
+      if (stop) trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((nowH - h.since) / 60_000).toFixed(1), red: !!h.red });
       if (stop) {
         stopHunt(stop);
         ctx.target = null;
+        // Encadenar (usuario, 2026-10-23: "los dragones y dorados salen en varios mapas"): con la invasión
+        // activa, al mejor mapa que quede. Devias se vació en 3 min con Noria en 38 y Lorencia en 28.
+        if (h.auto && !h.red && !weakNow()) {
+          const done = new Set([...(h.done ?? []), h.hunt.map]);
+          const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(nowH), knownMaps: known() });
+          if (next.ok) {
+            bot.hunting = { hunt: next.hunt, since: nowH, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true, done };
+            decide(`Cazador: sigo en ${next.hunt.name} (${next.alive} vivos).`);
+            journal('travel', `cazador encadenado: ${next.hunt.name}`, { map: next.hunt.map, alive: next.alive, reason: 'auto-hunt-chain' });
+          }
+        }
         continue;
       }
       if (world.map !== h.hunt.map) {
@@ -453,10 +528,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (info && d <= castReach(sk!) && nowD - ctx.lastCastAt >= SKILL_PACE_MS) {
           sendTargetedSkill(info.index, foe.id);
           ctx.lastCastAt = nowD;
-          await sleep(SKILL_PACE_MS);
+          await sleep(humanPace(SKILL_PACE_MS));
         } else if (!info && d <= 1) {
           sendHit(foe.id, directionTowards(world.x, world.y, foe.x, foe.y));
-          await sleep(ATTACK_PACE_MS);
+          await sleep(humanPace(ATTACK_PACE_MS));
         } else await walkTowards(ctx, foe.x, foe.y);
         continue;
       }
@@ -468,9 +543,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const nowG = Date.now();
     // Personaje nuevo: solo los dorados con los que puede según sus stats (power.ts). Hume (nivel 10)
     // fue por un Golden Dragon y lo mató (2026-10-12). Horaz y Melu siguen yendo por todos.
-    const weak = isFreshChar(world.resets, world.stats);
+    const fighter = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
+    const profile = farmMiddleware.profile(fighter, world.level, world.skills.has(41), nowG);
+    learned.camps.setPower(statPower(fighter), profile.spot != null);
+    // Selector de mapa: sembrar con lo medido en la base una vez por reset y tramo de 80 niveles.
+    const seedKey = `${world.resets}:${Math.floor(world.level / 80)}`;
+    if (profile.spot != null && world.resets != null && seededRoute !== seedKey) {
+      seededRoute = seedKey;
+      void seedRouteFromDb(world.resets, world.level, statPower(fighter));
+    }
+    const routeLevel = profile.routeLevel;
+    const fresh = isFreshChar(world.resets, world.stats);
+    const weak = fresh || profile.limited;
     const me = weak ? { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp } : null;
-    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowG);
+    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowG, ctx.target);
     const goldHold = !bot.hunting && golden.holding(nowG);
     if (gold && ctx.target !== gold.id) {
       if (!goldAnnounced.has(gold.id)) {
@@ -531,13 +617,26 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Carrera de resets: el prioritario (Horaz) no sale a cazar; los dorados son de Melu.
     const racing = isPriorityChar(bot.charName);
     // Un personaje nuevo no sale a cazar dorados: no puede con ellos.
-    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.pinnedSpot && !bot.paused && !bot.resetting) {
-      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey });
+    // 1e') Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
+    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting && bot.redDragon &&
+        nowG - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at && world.level >= AUTO_HUNT.minLevel) {
+      lastRedAt = bot.redDragon.at;
+      const hm = HUNT_MAPS.find((x) => x.map === bot.redDragon!.map);
+      if (hm && world.level >= hm.reqLevel) {
+        bot.hunting = { hunt: hm, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true, red: true };
+        ctx.target = null;
+        decide(`Cazador: invasión del Dragón Rojo en ${hm.name}: salgo a cazarlo (${RED_HUNT_MS / 60_000} min).`);
+        journal('travel', `cazador: Dragón Rojo en ${hm.name}`, { map: hm.map, reason: 'red-dragon' });
+        continue;
+      }
+    }
+    if (AUTO_HUNT_ON && !racing && !weak && !bot.hunting && !bot.paused && !bot.resetting) {
+      const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now: nowG, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(nowG), knownMaps: mapsWithZones(HUNT_MAPS.map((h) => h.map), nowG) });
       if (ch?.ok) {
         lastAutoHuntKey = invasionKey(bot.invasion!);
         bot.hunting = { hunt: ch.hunt, since: nowG, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), auto: true };
         ctx.target = null;
-        decide(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}: salgo a cazar (corto con ${AUTO_HUNT.stopAlive} o menos).`);
+        decide(`Cazador: invasión dorada con ${ch.alive} vivos en ${ch.hunt.name}${freshDragonMap(nowG) === ch.hunt.map ? ' (el Golden Dragon está acá)' : ''}: salgo a cazar (corto con ${ch.hunt.stopAlive ?? AUTO_HUNT.stopAlive} o menos y sigo en otro mapa).`);
         journal('travel', `cazador automático: ${ch.hunt.name}`, { map: ch.hunt.map, alive: ch.alive, reason: 'auto-hunt' });
         continue;
       }
@@ -571,6 +670,19 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 3) Invertir puntos de atributo cuando junte un lote, en segundo plano (sigue peleando).
     investStatPointsInBackground((n) => { statPointsSpent += n; });
 
+    // Una presencia persistente cerca del recorrido justifica cambiar de grupo
+    // o entrada. No se presume que sea un guardia: puede ser otro granjero.
+    // Solo personajes limitados: con stats completos lo cubre el hambre (exp real con
+    // jugadores cerca). Hume (39 resets) se iba de Arena 2 a 359M/min por un jugador quieto.
+    if (weak && observerSignal && !bot.hunting && !bot.pinnedSpot && Date.now() - lastObserverChange > 120_000) {
+      lastObserverChange = Date.now();
+      decide(`Jugador ${observerSignal.name ?? '#' + observerSignal.id} ${observerSignal.kind} cerca hace ${Math.round(observerSignal.ms / 1000)} s: cambio de zona sin disputarle el lugar.`);
+      if (world.map === 2 && await maybeChangeSpot({ crowded: true })) { ctx.target = null; continue; }
+      if (world.map === CORNER.map) corner.awayUntil = Date.now() + 3 * 60_000;
+      if (learned.camps.camp) learned.camps.leave(Date.now(), world.level, 'presencia persistente de otro jugador', true, expLog);
+      ctx.target = null;
+    }
+
     // Afuera de la esquina (llena o sin rendir): medir cuánto rinde esta Arena, para compararla la
     // próxima vez (promedio móvil por warp, una medición por minuto con al menos 1 min en el mapa).
     if (corner.awayUntil > Date.now() && bot.currentSpot && Date.now() - bot.lastArrivalAt > 60_000 && Date.now() - altMeasuredAt > 60_000) {
@@ -584,9 +696,26 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Cerca del reset no vuelve a la esquina (el camino lleva ~1 min): sigue afuera.
     // (el prioritario vuelve siempre: afuera hacía 350→400 en Arena 4 a ~50M/min, el ciclo de 36 min)
     if (corner.awayUntil && Date.now() >= corner.awayUntil && world.level >= CORNER.noReturnLevel && !isPriorityChar(bot.charName)) corner.awayUntil = Date.now() + 60_000;
-    if (!bot.hunting && !bot.pinnedSpot && !goldHold && cornerActive({ level: world.level, resetLevel: RESET_LEVEL, awayUntil: corner.awayUntil, now: Date.now() })) {
+    if (!bot.hunting && !pinActive() && !goldHold && profile.corner &&
+        !farmMiddleware.keepCurrentArena(world.map, world.level, CORNER.altMinRate, statPower(fighter)) &&
+        cornerActive({ level: routeLevel, resetLevel: RESET_LEVEL, awayUntil: corner.awayUntil, now: Date.now() })) {
       await cornerStep(ctx, corner);
       continue;
+    }
+
+    // Medición neta: incluye la caminata desde el warp. Si un mapa no da exp o
+    // rinde mucho menos que uno ya medido a nivel parecido, el middleware lo
+    // deja 10 min; en Devias prueba otra entrada. Así no pasea por todo el mapa.
+    // Solo personajes limitados: evitar una Arena baja el tramo a Devias, y a Hume con
+    // stats completos lo mandaba de Arena 2 (nivel 300) a Devias 4 a 20M/min.
+    if (weak && !bot.hunting && !bot.pinnedSpot && bot.currentSpot && !goldHold) {
+      const now = Date.now();
+      const why = farmMiddleware.observe({ spot: bot.currentSpot.index, map: world.map, level: world.level,
+        now, arrivalAt: bot.lastArrivalAt, rate: expLog.rateSince(bot.lastArrivalAt, now), f: fighter, twistingSlash: world.skills.has(41) });
+      if (why) {
+        decide(`Rendimiento: ${why}.`);
+        if (await maybeChangeSpot({ crowded: world.map === 2 })) { ctx.target = null; continue; }
+      }
     }
 
     // 4) Hambre: casi nada de exp en 45 s con jugadores cerca → cambiar YA de
@@ -650,14 +779,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const targetInMeleeRange =
       ctx.target != null && npcs.has(ctx.target) && chebyshev(world.x, world.y, npcs.get(ctx.target)!.x, npcs.get(ctx.target)!.y) <= 1;
     // Personaje nuevo: equiparse con lo que levantó (equip.ts), cada 8 s, en segundo plano.
-    if (weak && Date.now() - lastEquipTry > 8000) {
+    if (fresh && Date.now() - lastEquipTry > 8000) {
       lastEquipTry = Date.now();
       void equipStep().catch(() => {});
     }
-    const fightNear = weak && early.initial() && early.targets(ctx.npcs.values()).some((n) => chebyshev(world.x, world.y, n.x, n.y) <= 8);
+    const fightNear = fresh && early.initial() && early.targets(ctx.npcs.values()).some((n) => chebyshev(world.x, world.y, n.x, n.y) <= 8);
     // Personaje nuevo en un spot ocupado sin rendir: pedir party al jugador más cercano (una vez cada 5 min)
     // y, si a los 90 s sigue sin exp, irse a otro campo (pedido del usuario: "pedir party o salir de ahí").
-    if (weak && early.initial() && !bot.inParty) {
+    if (fresh && early.initial() && !bot.inParty) {
       const nowP = Date.now();
       const near = [...world.players.entries()].map(([id, p]) => ({ id, p, d: chebyshev(world.x, world.y, p.x, p.y) })).filter((x) => x.d <= 10).sort((a, b) => a.d - b.d);
       const dry = nowP - bot.lastArrivalAt > 60_000 && expLog.perMin(nowP, 60_000) === 0;
@@ -672,7 +801,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (left) decide(`${left}: ocupado por ${near.length} jugador(es) y sin exp en 90 s: me voy a otro campo por 5 min.`);
       }
     }
-    if (!targetInMeleeRange && (await lootStep(weak, fightNear))) {
+    if (!targetInMeleeRange && (await lootStep(fresh, fightNear))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;
@@ -682,23 +811,26 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
     const hunting = bot.hunting;
     if (hunting) {
-      // Cacería: el dorado más cercano siempre manda (aunque estemos pegándole a
-      // otro); a los comunes solo si están a HUNT_NORMAL_RANGE (no frenan la búsqueda).
+      // Cacería: un dorado siempre manda sobre los comunes, pero con correa (stickyGolden): no se suelta
+      // el que ya tiene el golpe salvo por un dragón. A los comunes solo si están a HUNT_NORMAL_RANGE.
       const now = Date.now();
-      let gold: ScopedNpc | null = null;
-      let gd = Infinity;
-      for (const n of ctx.npcs.values()) {
-        if (!isGolden(n) || unreachable.has(n.id)) continue;
-        const d = chebyshev(world.x, world.y, n.x, n.y);
-        if (d < gd) {
-          gd = d;
-          gold = n;
-        }
+      const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t));
+      const gd = gold ? chebyshev(world.x, world.y, gold.x, gold.y) : Infinity;
+      // El dragón que se le está pegando sale un instante de la vista: no repartir el daño con un Goblin
+      // cercano (lo vio el usuario, 2026-10-23); ir a donde estaba hasta DRAGON_MEMORY_MS.
+      if (gold && DRAGON_TYPES.has(gold.type)) lastDragon = { id: gold.id, x: gold.x, y: gold.y, at: now };
+      if (lastDragon && (!gold || !DRAGON_TYPES.has(gold.type)) && !ctx.npcs.has(lastDragon.id) && now - lastDragon.at < DRAGON_MEMORY_MS && world.map === hunting.hunt.map) {
+        ctx.target = null;
+        ctx.phase = 'walk';
+        bot.doing = `cazando: el Golden Dragon salió de la vista, voy a (${lastDragon.x},${lastDragon.y})`;
+        await walkTowards(ctx, lastDragon.x, lastDragon.y);
+        continue;
       }
       // Recordar dónde está cada dorado a la vista (y avisar al compañero de los nuevos, rápido).
       const spots = (hunting.spots ??= new Map());
       for (const n of ctx.npcs.values()) {
         if (!isGolden(n)) continue;
+        if (world.map === hunting.hunt.map) hunting.lastSeenAt = now;
         if (!spots.has(n.id) && world.map === hunting.hunt.map) {
           askHelp('golden', world.map, n.x, n.y, monsterName(n.type), HUNT_SHARE_MS);
           trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
@@ -742,7 +874,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const cur = ctx.target != null ? ctx.npcs.get(ctx.target) : null;
       if (cur && dist(cur, camp) > EARLY.dropTargetAt) ctx.target = null;
       if (ctx.target == null && !early.viaPending()) {
-        const t = leashedTarget({ x: world.x, y: world.y }, camp, early.targets([...ctx.npcs.values()].filter((n) => !unreachable.has(n.id))));
+        const t = leashedTarget({ x: world.x, y: world.y }, camp, early.targets([...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), ctx.aggro));
         if (t) {
           ctx.target = t.id;
           targetType = t.type;
@@ -809,15 +941,15 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           await sleep(SKILL_PACE_MS - sinceCast);
           continue;
         }
-        if (useSkill(target)) {
+        if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
           ctx.lastCastAt = Date.now();
           ctx.skillsUsed++;
-          await sleep(SKILL_PACE_MS);
+          await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
-          await sleep(ATTACK_PACE_MS);
+          await sleep(humanPace(ATTACK_PACE_MS));
         } else {
-          await sleep(SKILL_PACE_MS); // sin maná para el skill: esperar en vez de pegar de lejos
+          await sleep(humanPace(SKILL_PACE_MS)); // sin maná para el skill: esperar en vez de pegar de lejos
         }
         continue;
       }
@@ -834,7 +966,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const straight = directionTowards(world.x, world.y, t.x, t.y);
       const dir = stuckCount >= 3 ? (straight + 2 + (stuckCount % 4)) % 8 : straight;
       step(dir);
-      await sleep(WALK_PACE_MS);
+      await sleep(humanPace(WALK_PACE_MS));
       if (world.x === ctx.lastX && world.y === ctx.lastY) stuckCount++;
       else stuckCount = 0;
       ctx.lastX = world.x;
@@ -879,8 +1011,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // Sin dorado recordado: la zona de dragones más cercana sin visitar (zones.ts, de la base).
       if (!mem && world.map === bot.hunting.hunt.map) {
         const visited = (bot.hunting.zonesVisited ??= new Set());
-        for (const z of dragonZones(world.map)) if (chebyshev(world.x, world.y, z.x, z.y) <= 6) visited.add(`${z.x},${z.y}`);
-        const z = nextZone(dragonZones(world.map), { x: world.x, y: world.y }, visited);
+        // Primero las zonas de dragones; después las de cualquier dorado.
+        const zs = dragonZones(world.map).length && [...dragonZones(world.map)].some((z) => !visited.has(`${z.x},${z.y}`)) ? dragonZones(world.map) : goldenZones(world.map);
+        for (const z of zs) if (chebyshev(world.x, world.y, z.x, z.y) <= 6) visited.add(`${z.x},${z.y}`);
+        const z = nextZone(zs, { x: world.x, y: world.y }, visited);
         if (z) {
           bot.goalPoint = [z.x, z.y];
           bot.doing = `cazando dorados en ${bot.hunting.hunt.name}: voy a la zona de dragones (${z.x},${z.y}) (${z.n} avistamientos)`;

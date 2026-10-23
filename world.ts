@@ -21,7 +21,8 @@ import {
 import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
 import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
 import { journal } from './journal';
-import { isFreshChar } from './farming';
+import { classFamily, isFreshChar } from './farming';
+import { farmMiddleware, statPower } from './farm-middleware';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
 import { scheduleEventPolls } from './events';
 import { isMonsterType, isTownNpcType } from './explore';
@@ -186,7 +187,16 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number;
 // campamento (camp.ts).
 export function onMapArrival() {
   bot.lastArrivalAt = Date.now();
-  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level);
+  const f = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
+  const prof = farmMiddleware.profile(f, world.level, world.skills.has(41), bot.lastArrivalAt);
+  const localOnly = world.map >= 83 && world.map <= 85 && !prof.corner;
+  learned.camps.setPower(statPower(f), prof.spot != null);
+  // Telemetría de Hume: en Arena 4 el corredor (84,48) rindió bien y las
+  // muertes de personajes frágiles se concentraron cerca de (85,14–22).
+  // El campamento aprendido del propio personaje siempre tiene prioridad.
+  const preferred = world.map === 85 && world.maxHp > 0 && world.maxHp < 5_000 && !localOnly
+    ? { x: 84, y: 48 } : undefined;
+  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level, localOnly, preferred);
   const lz = learned.camps.leashFor(world.map);
   log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
   for (const e of learned.camps.events) log(`Campamento: ${e}.`);

@@ -1552,7 +1552,11 @@ time {
   white-space: nowrap;
   text-shadow: 0 1px 1px #000;
 }
-.radar-tag-self { color: #f4d28e; font-weight: 600; }
+.radar-tag-self { color: #ffffff; font-weight: 600; }
+.radar-tag-dragon { color: #ff8c1a; font-weight: 700; }
+.golden-dragon { color: #ff8c1a; font-weight: 700; }
+.red-dragon { color: #ff3b3b; font-weight: 700; }
+.radar-tag-red { color: #ff3b3b; font-weight: 700; }
 .radar-tag-player { color: #9fd8f7; }
 .radar-tag-gold { color: #ffd361; font-weight: 600; }
 .radar-tag-drop { color: #d6bdff; }

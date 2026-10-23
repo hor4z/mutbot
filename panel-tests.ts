@@ -8,7 +8,7 @@
  */
 import { PANEL_COMMANDS, isPanelCommand } from './panel-protocol';
 import {
-  AUTO_HUNT, autoHuntChoice, invasionKey, resetBlockedByInvasion,
+  AUTO_HUNT, HUNT_DRY_MS, autoHuntChoice, dragonMapFromServerMessage, huntDryOut, redDragonMapFromServerMessage, invasionKey, pickHuntMap, resetBlockedByInvasion,
   GoldReporter, HUNT_MAX_MS, HuntExplorer, buildOpeningStateRequest, chooseHuntMap, countTickets, goldSighting,
   goldenTypes, nextInvasionAt, parseInvasion, parseOpeningState, resetsPerDay, shouldStopHunt,
   toPanelCycle, validateWarp,
@@ -70,12 +70,12 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('0x91 CC sin byte 6 → null', parseOpeningState(Uint8Array.from([0xc1, 6, 0x91, 4, 0, 0]), NOW) === null);
 }
 
-// --- isPanelCommand: solo las 6 órdenes con sus campos ----------------------------
+// --- isPanelCommand: solo las 7 órdenes con sus campos ----------------------------
 {
-  ok('PANEL_COMMANDS son 6', PANEL_COMMANDS.length === 6);
+  ok('PANEL_COMMANDS son 7', PANEL_COMMANDS.length === 7);
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
-    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' },
+    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'vault' },
   ]) {
     ok(`acepta ${JSON.stringify(c)}`, isPanelCommand(c));
   }
@@ -87,6 +87,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'warp', warp: 2, map: 0 },
     { cmd: 'hunt', map: 'Noria' }, { cmd: 'hunt', map: 300 }, { cmd: 'hunt', map: 3, warp: 3 },
     { cmd: 'hunt', sector: 1 },
+    { cmd: 'vault', move: 1 },
     { cmd: 'scout' }, { cmd: 'atlas' },
     { cmd: 'ranking' }, { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
     { cmd: 'say', text: 'a\nb' }, { cmd: 'say', text: 'hola', to: 'no válido!' }, { cmd: 'say', text: 'hola', channel: 'global' }, { cmd: 'say', text: 'hola', to: 'Melu', channel: 'party' },
@@ -219,16 +220,36 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   const inv = (status: number, maps: [number, number][], at: number) =>
     ({ ...parseInvasion(Uint8Array.from([0xc1, 7 + maps.length * 3, 0xfd, status, 0, 0, maps.length, ...maps.flatMap(([m, a]) => [m, a >> 8, a & 0xff])]), at)! });
   const active = inv(1, [[0, 10], [2, 40], [3, 30]], t0);
-  const ch = autoHuntChoice({ invasion: active, level: 300, now: t0 + 1000, lastKey: null });
+  const ch = autoHuntChoice({ invasion: active, level: 400, now: t0 + 1000, lastKey: null });
   ok('auto: invasión activa con > 25 vivos → caza el mapa con más (Devias 40)', ch?.ok === true && ch.hunt.map === 2, ch);
-  ok('auto: una vez por invasión', autoHuntChoice({ invasion: active, level: 300, now: t0 + 1000, lastKey: invasionKey(active) }) === null);
-  ok('auto: 25 o menos vivos → no sale', autoHuntChoice({ invasion: inv(1, [[2, 25]], t0), level: 300, now: t0, lastKey: null }) === null);
-  ok('auto: 0xFD viejo (> 2 min) → no sale', autoHuntChoice({ invasion: active, level: 300, now: t0 + AUTO_HUNT.freshMs + 1, lastKey: null }) === null);
-  ok('auto: invasión derrotada → no sale', autoHuntChoice({ invasion: inv(2, [], t0), level: 300, now: t0, lastKey: null }) === null);
-  ok('auto: corta con 20 o menos vivos', shouldStopHunt({ invasion: inv(1, [[2, 20]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) !== null &&
-    shouldStopHunt({ invasion: inv(1, [[2, 21]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) === null);
+  ok('auto: una vez por invasión', autoHuntChoice({ invasion: active, level: 400, now: t0 + 1000, lastKey: invasionKey(active) }) === null);
+  ok('auto: sale aunque queden pocos', autoHuntChoice({ invasion: inv(1, [[2, 1]], t0), level: 400, now: t0, lastKey: null })?.ok === true);
+  ok('auto: 0 vivos → no sale', autoHuntChoice({ invasion: inv(1, [[2, 0]], t0), level: 400, now: t0, lastKey: null }) === null);
+  ok('auto: 0xFD viejo (> 2 min) → no sale', autoHuntChoice({ invasion: active, level: 400, now: t0 + AUTO_HUNT.freshMs + 1, lastKey: null }) === null);
+  ok('auto: invasión derrotada → no sale', autoHuntChoice({ invasion: inv(2, [], t0), level: 400, now: t0, lastKey: null }) === null);
+  ok('auto: debajo del 380 (recién reseteado) → no sale', autoHuntChoice({ invasion: active, level: 379, now: t0 + 1000, lastKey: null }) === null);
+  ok('hasta 0: sigue con 1 vivo y corta con 0', shouldStopHunt({ invasion: inv(1, [[2, 1]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) === null &&
+    shouldStopHunt({ invasion: inv(1, [[2, 0], [3, 4]], t0 + 5), map: 2, since: t0, now: t0 + 10, stopAlive: AUTO_HUNT.stopAlive }) !== null);
+  const dryInv = inv(1, [[2, 2], [0, 25]], t0);
+  const other = pickHuntMap({ invasion: dryInv, level: 400, done: new Set([2]) });
+  ok('a secas: 2 min sin ver un dorado y otro mapa con más → se va', huntDryOut({ invasion: dryInv, map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS, next: other }) !== null);
+  ok('a secas: viendo dorados hace poco → se queda', huntDryOut({ invasion: dryInv, map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS - 1, next: other }) === null);
+  ok('a secas: el otro mapa tiene menos → se queda', huntDryOut({ invasion: inv(1, [[2, 9], [0, 3]], t0), map: 2, lastSeenAt: t0, now: t0 + HUNT_DRY_MS, next: pickHuntMap({ invasion: inv(1, [[2, 9], [0, 3]], t0), level: 400, done: new Set([2]) }) }) === null);
+  // La invasión del 2026-10-23 09:50: Devias se vació en 3 min con Noria 38, Lorencia 28, Atlans 26 y Tarkan 18.
+  const real = inv(1, [[0, 28], [2, 10], [3, 38], [7, 19], [8, 11]], t0);
+  const next = pickHuntMap({ invasion: real, level: 400, done: new Set([2]) });
+  ok('encadenar: después de Devias, Atlans (19 × 3,5) antes que Noria (30 × 1)', next.ok && next.hunt.map === 7, next);
+  ok('encadenar: hechos Devias y Atlans, Lorencia (28 × 2) antes que Tarkan (11 × 4)', (() => { const n = pickHuntMap({ invasion: real, level: 400, done: new Set([2, 7]) }); return n.ok && n.hunt.map === 0; })());
+  ok('encadenar: nivel 100 no va a Tarkan ni cuenta Atlans si no llega', (() => { const n = pickHuntMap({ invasion: inv(1, [[8, 30]], t0), level: 100 }); return !n.ok; })());
+  ok('a ciegas: Atlans sin zonas conocidas pierde contra Devias', (() => { const n = pickHuntMap({ invasion: inv(1, [[2, 50], [7, 45]], t0), level: 400, knownMaps: new Set([0, 2, 3]) }); return n.ok && n.hunt.map === 2; })());
+  ok('a ciegas: con zonas, Atlans gana', (() => { const n = pickHuntMap({ invasion: inv(1, [[2, 50], [7, 45]], t0), level: 400, knownMaps: new Set([0, 2, 3, 7]) }); return n.ok && n.hunt.map === 7; })());
+  ok('dragón: el mapa del aviso gana', (() => { const n = pickHuntMap({ invasion: real, level: 400, dragonMap: 3 }); return n.ok && n.hunt.map === 3; })());
+  ok('dragón: lee "[Devias] Golden invasion!"', dragonMapFromServerMessage('[Devias] Golden invasion!') === 2 && dragonMapFromServerMessage('[Lorencia] Golden invasion!') === 0);
+  ok('Dragón Rojo: lee "[Lorencia] Red Dragon invasion!"', redDragonMapFromServerMessage('[Lorencia] Red Dragon invasion!') === 0 && redDragonMapFromServerMessage('[Devias] Golden invasion!') === null);
+  ok('dragón: el aviso de cierre no cuenta', dragonMapFromServerMessage('[Noria] Golden invasion has ended.') === null);
+  ok('dragón: otros avisos no', dragonMapFromServerMessage('Hume entered the game.') === null && dragonMapFromServerMessage('[Kalima] Golden invasion!') === null);
   const at = (h: number, m: number) => new Date(2026, 9, 11, h, m, 0).getTime();
-  ok('sin reset entre :47 y :51', resetBlockedByInvasion(at(13, 47)) && resetBlockedByInvasion(at(13, 50)) && !resetBlockedByInvasion(at(13, 51)) && !resetBlockedByInvasion(at(13, 46)));
+  ok('sin reset entre :30 y :05', resetBlockedByInvasion(at(13, 30)) && resetBlockedByInvasion(at(13, 50)) && resetBlockedByInvasion(at(13, 4)) && !resetBlockedByInvasion(at(13, 5)) && !resetBlockedByInvasion(at(13, 29)));
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DEL PANEL PASARON' : `\n${fails} TEST(S) DEL PANEL FALLARON`);

@@ -73,7 +73,7 @@ export function checkSurvival(): boolean {
 // (DirectHit / AreaSkillAutomaticHits / AreaSkillExplicitTarget / Buff / Other) y distancia de cast.
 // Sin esto Evil Spirit (9) e Inferno (14) iban como TargetedSkill y el server no hacía nada: Melu sin
 // navegador caminaba entre monstruos sin ganar exp (2026-10-11).
-type SkillRow = { num: number; name: string; type: string; distance: number; damage: number; mana: number };
+type SkillRow = { num: number; name: string; type: string; distance: number; damage: number; mana: number; level?: number; ag?: number };
 export const SKILL_TABLE = new Map<number, SkillRow>((skillsData as SkillRow[]).map((r) => [r.num, r]));
 export const AREA_SKILLS = new Set([41, 42, ...[...SKILL_TABLE.values()].filter((r) => r.type.startsWith('AreaSkill')).map((r) => r.num)]);
 // Mago (DW/SM): Evil Spirit primero (pedido del usuario), después Decay, Inferno, Hellfire...
@@ -130,6 +130,22 @@ export function pickAttackSkill(prefer: number | undefined = isMage() && mageNee
     if (known) return known;
   }
   return undefined;
+}
+
+/** ¿Le da el nivel para el skill? Después de un reset queda debajo del 160/170 de los del Blade Knight. */
+export const skillLevelOk = (num: number, level = world.level) => level >= (SKILL_TABLE.get(num)?.level ?? 0);
+
+// Contra un dorado (2026-10-23): Hume es Blade Knight y pegaba con Twisting Slash (daño de skill 0)
+// teniendo Death Stab (70, a un objetivo) y Rageful Blow (60); la caja del Golden Dragon es del que más
+// daño le hace. Orden: Death Stab, Rageful Blow, y si no le da el nivel o el maná, el de siempre.
+export const GOLDEN_SKILLS = [43, 42] as const;
+export function goldenSkill(level = world.level): SkillInfo | undefined {
+  if (world.mana <= 0) return undefined;
+  for (const num of GOLDEN_SKILLS) {
+    const s = world.skills.get(num);
+    if (s && skillLevelOk(num, level) && world.mana >= (SKILL_TABLE.get(num)?.mana ?? 0)) return s;
+  }
+  return pickAttackSkill();
 }
 
 export function useSkill(targetId: number, skill = pickAttackSkill()): boolean {

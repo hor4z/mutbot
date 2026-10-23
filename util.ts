@@ -6,6 +6,11 @@
 export const log = (...a: unknown[]) => console.log(`[bot]`, ...a);
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Variación pequeña por acción: conserva SIEMPRE el mínimo humano de config.
+// Evita una cadencia idéntica por horas sin acelerar ataques, skills o pasos.
+export const humanPace = (minimumMs: number, rand = Math.random) =>
+  minimumMs + Math.floor(rand() * Math.min(75, minimumMs * 0.12));
+
 // createSocket emite un DataView; otros paths pueden dar Uint8Array. Normalizamos.
 export function toBytes(data: any): Uint8Array {
   if (data instanceof Uint8Array) return data;

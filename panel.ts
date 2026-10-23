@@ -86,6 +86,11 @@ function runPanelCommand(c: PanelCommand): CommandResult {
     }
     case 'say':
       return sayFromPanel(c);
+    case 'vault':
+      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      bot.pendingVault = true;
+      return { ok: true, msg: 'voy a Lorencia a leer el baúl (solo leo, no muevo nada)' };
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };

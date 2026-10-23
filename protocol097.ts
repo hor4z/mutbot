@@ -100,6 +100,8 @@ export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): b
 // drops de ítems en 5 bytes; los drops de zen (14/15) en el formato de 12.
 //   5 bytes: r = e[0] | (e[3] & 0x80) << 1 → grupo r >> 5, número r & 31; nivel (+N) en los bits 3-6
 //            de e[1]; opciones excelentes en los 6 bits bajos de e[3]; e[2] = durabilidad.
+//   6 bytes (desde la armonía, 2026-10-23): los 5 de antes más e[5] = armonía; e[4] & 0x10 es el bit 5
+//            del número y e[4] & 0x20 la opción 380 (función `x` del adaptador 0.97d del cliente).
 //   12 bytes (itemSerializer del cliente): número e[0], grupo nibble alto de e[5], nivel igual.
 // ---------------------------------------------------------------------------
 export type ItemInfo = { group: number; num: number; level: number; excellent: boolean };
@@ -108,7 +110,32 @@ export type ItemDrop = ItemInfo & { id: number; x: number; y: number };
 
 export function decodeItem5(e: Uint8Array): ItemInfo {
   const r = e[0] | ((e[3] & 0x80) << 1);
-  return { group: r >> 5, num: r & 31, level: (e[1] >> 3) & 0x0f, excellent: (e[3] & 0x3f) !== 0 };
+  return { group: r >> 5, num: (r & 31) | ((e[4] & 0x10) << 1), level: (e[1] >> 3) & 0x0f, excellent: (e[3] & 0x3f) !== 0 };
+}
+
+/**
+ * Todo lo que trae un ítem de 5/6 bytes (para decidir el set): misma lectura que el adaptador 0.97d del
+ * cliente (`x`) + su deserializador de 12 bytes. e[1]: nivel bits 3-6, skill bit 7, luck bit 2, opción
+ * bits 0-1 (+4 con e[3] & 0x40); e[3] & 0x3f excelentes; e[4] & 0x0f ancient, & 0x20 opción 380;
+ * e[5] armonía (opción en el nibble alto, nivel en el bajo).
+ */
+export type ItemDetail = ItemInfo & { durability: number; skill: boolean; luck: boolean; option: number; excFlags: number; excCount: number; ancient: number; opt380: boolean; harmony: { option: number; level: number } | null };
+export function decodeItemDetail(e: Uint8Array): ItemDetail {
+  const base = e.length >= 12 ? decodeItem12(e) : decodeItem5(e);
+  const excFlags = e.length >= 12 ? e[3] & 0x3f : e[3] & 0x3f;
+  const h = e.length === 6 ? e[5] : 0;
+  return {
+    ...base,
+    durability: e[2],
+    skill: (e[1] & 0x80) !== 0,
+    luck: (e[1] & 0x04) !== 0,
+    option: (e[1] & 0x03) + ((e[3] & 0x40) ? 4 : 0),
+    excFlags,
+    excCount: [0, 1, 2, 3, 4, 5].filter((i) => excFlags & (1 << i)).length,
+    ancient: e.length >= 5 ? e[4] & 0x0f : 0,
+    opt380: e.length >= 5 && (e[4] & 0x20) !== 0,
+    harmony: h >> 4 ? { option: h >> 4, level: h & 0x0f } : null,
+  };
 }
 
 export function decodeItem12(e: Uint8Array): ItemInfo {
@@ -116,12 +143,13 @@ export function decodeItem12(e: Uint8Array): ItemInfo {
 }
 
 /** Largo de cada ítem según el largo del paquete: `header + count * (prefix + item)`; 0 = no cuadra. */
-function itemSize(total: number, header: number, count: number, prefix: number): 5 | 12 | 0 {
+function itemSize(total: number, header: number, count: number, prefix: number): 5 | 6 | 12 | 0 {
+  if (total === header + count * (prefix + 6)) return 6;
   if (total === header + count * (prefix + 5)) return 5;
   if (total === header + count * (prefix + 12)) return 12;
   return 0;
 }
-const decode = (size: 5 | 12, e: Uint8Array) => (size === 5 ? decodeItem5(e) : decodeItem12(e));
+const decode = (size: 5 | 6 | 12, e: Uint8Array) => (size === 12 ? decodeItem12(e) : decodeItem5(e));
 
 /** CharacterInventory (C4 F3 10): count en el byte 5, después [slot][ítem]. null = largo inesperado. */
 export function parseInventory(raw: Uint8Array | DataView | ArrayBuffer): ItemSlot[] | null {
@@ -133,7 +161,7 @@ export function parseInventory(raw: Uint8Array | DataView | ArrayBuffer): ItemSl
   for (let i = 0; i < count; i++) {
     const o = 6 + i * (1 + size);
     const e = b.subarray(o + 1, o + 1 + size);
-    out.push({ slot: b[o], ...decode(size, e), ...(size === 5 ? { raw: e.slice() } : {}) });
+    out.push({ slot: b[o], ...decode(size, e), ...(size !== 12 ? { raw: e.slice() } : {}) });
   }
   return out;
 }
@@ -152,10 +180,11 @@ export function parseItemsDropped(raw: Uint8Array | DataView | ArrayBuffer): Ite
   return out;
 }
 
-/** ItemAddedToInventory (C3 22): slot en el byte 3, ítem desde el 4 (5 o 12 bytes). */
+/** ItemAddedToInventory (C3 22): slot en el byte 3, ítem desde el 4 (5, 6 o 12 bytes). */
 export function parseItemAdded(raw: Uint8Array | DataView | ArrayBuffer): ItemSlot | null {
   const b = u8(raw);
   if (b.length >= 4 + 12) return { slot: b[3], ...decodeItem12(b.subarray(4, 16)) };
+  if (b.length >= 4 + 6) return { slot: b[3], ...decodeItem5(b.subarray(4, 10)), raw: b.slice(4, 10) };
   if (b.length >= 4 + 5) return { slot: b[3], ...decodeItem5(b.subarray(4, 9)), raw: b.slice(4, 9) };
   return null;
 }
@@ -249,6 +278,19 @@ export function attackerOf(raw: Uint8Array | DataView | ArrayBuffer, me: number)
   if (b[2] === 0x18 && b.length >= 9) return u16(7) === me ? u16(3) : null;
   if (b[2] === 0x19 && b.length === 8) return u16(6) === me && !FRIENDLY_SKILLS.has(b[3]) ? u16(4) : null;
   if (b[2] === 0x19 && b.length >= 9) return u16(7) === me && !FRIENDLY_SKILLS.has(u16(3)) ? u16(5) : null;
+  return null;
+}
+
+/**
+ * Skill a un objetivo (0x19) que tiró `me`: 0.97d C3 08 19 <skill u8> <jugador u16> <objetivo u16>; con 9+
+ * bytes, skill u16 (season 6). null si no es mío. (Para saber si Death Stab sale de verdad, 2026-10-23.)
+ */
+export function ownTargetedSkill(raw: Uint8Array | DataView | ArrayBuffer, me: number): number | null {
+  const b = u8(raw);
+  const u16 = (i: number) => ((b[i] << 8) | b[i + 1]) & 0x7fff;
+  if (b[2] !== 0x19) return null;
+  if (b.length === 8) return u16(4) === me ? b[3] : null;
+  if (b.length >= 9) return u16(5) === me ? u16(3) : null;
   return null;
 }
 

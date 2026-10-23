@@ -185,8 +185,11 @@ const hpOf = (t: number) => HP[t] ?? null;
 
 // --- Loot valioso ------------------------------------------------------------------------------
 {
-  ok('solo cajas', isValuableDrop({ group: 14, num: 11 }) && ![13, 14, 16, 22, 31].some((n) => isValuableDrop({ group: 14, num: n })) && !isValuableDrop({ group: 12, num: 15 }));
-  ok('excelentes, guantes, pociones y zen: no', !isValuableDrop({ group: 5, num: 3, excellent: true }) && !isValuableDrop({ group: 10, num: 1 }) && !isValuableDrop({ group: 14, num: 1 }) && !isValuableDrop({ group: 14, num: 11, isMoney: true }));
+  ok('cajas, Cristales (14/31) y talismanes siempre', [11, 31, 7, 12, 20].every((n) => isValuableDrop({ group: 14, num: n })));
+  ok('joyas y Chaos: no, ni con lugar (no valen nada)', ![13, 14, 16, 22].some((n) => isValuableDrop({ group: 14, num: n }, false, true)) && !isValuableDrop({ group: 12, num: 15 }, false, true));
+  ok('con lugar: excelentes sí, equipo común no', isValuableDrop({ group: 5, num: 3, excellent: true }, false, true) && !isValuableDrop({ group: 5, num: 3 }, false, true));
+  ok('guantes, pociones y zen: no', !isValuableDrop({ group: 10, num: 1 }, false, true) && !isValuableDrop({ group: 14, num: 1 }, false, true) && !isValuableDrop({ group: 14, num: 11, isMoney: true }, false, true));
+  ok('la caja antes que un Cristal más cerca', pickLoot({ x: 50, y: 50 }, [{ id: 7, x: 51, y: 50, group: 14, num: 31 }, { id: 8, x: 56, y: 50, group: 14, num: 11 }], 12, false, true)?.id === 8);
   const me = { x: 50, y: 50 };
   const ds = [
     { id: 1, x: 52, y: 50, group: 14, num: 1 },          // poción: no
@@ -205,9 +208,10 @@ const hpOf = (t: number) => HP[t] ?? null;
   const dw = planFreshStats(5, 'wizard');
   ok('nuevo: mago energía primero', dw.ene >= 3 && dw.str === 0 && dw.ene + dw.agi + dw.vit === 5, dw);
   ok('nuevo: clase por classId (DK 4, BK 6, DW 0, SM 2, Elf 8, MG 12)', classFamily(4) === 'knight' && classFamily(6) === 'knight' && classFamily(0) === 'wizard' && classFamily(2) === 'wizard' && classFamily(8) === 'elf' && classFamily(12) === 'gladiator' && classFamily(null) === null);
-  ok('nuevo: sin resets y pocos stats sí; con resets o stats altos no',
+  ok('débil por stats: pocos stats sí aunque tenga resets; stats altos (o sin stats y con resets) no',
     isFreshChar(0, { str: 28, agi: 20, vit: 25, ene: 10 }) && isFreshChar(null, { str: 28, agi: 20, vit: 25, ene: 10 })
-    && !isFreshChar(120, { str: 28, agi: 20, vit: 25, ene: 10 }) && !isFreshChar(null, { str: 65535, agi: 100, vit: 100, ene: 65535 }));
+    && isFreshChar(1, { str: 121, agi: 59, vit: 60, ene: 300 }) && !isFreshChar(120, { str: 0, agi: 0, vit: 0, ene: 0 })
+    && !isFreshChar(null, { str: 65535, agi: 100, vit: 100, ene: 65535 }));
 }
 
 // --- Personaje nuevo: también zen y pociones -----------------------------------------------

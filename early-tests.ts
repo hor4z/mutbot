@@ -3,8 +3,9 @@
  *
  *   bun run early-tests.ts
  */
-import { EARLY, INITIAL, biggestCluster, deviasCamp, dist, fieldFor, inField, initialCamp, leashedTarget, lorenciaPlan } from './early';
-import { canFight, damageRange, estimateFight, monsterCombat } from './power';
+import { EARLY, INITIAL, LORENCIA_ROUTES, biggestCluster, deviasCamp, dist, fieldFor, inField, initialCamp, leashedTarget, lorenciaPlan } from './early';
+import { isWalkable } from './terrain';
+import { canFarmMonster, canFight, damageRange, estimateFight, farmRouteLevel, monsterCombat } from './power';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -58,18 +59,27 @@ const seq = (...v: number[]) => { let i = 0; return () => v[i++ % v.length]; };
   const e = estimateFight(nuevo, monsterCombat(6)!);
   ok('poder: el Lich mata a un recién creado (pierde más de toda la vida)', e.hpLoss > 1, e);
   ok('poder: tipo sin datos → no', !canFight(horaz, 99999));
+  const hume = { family: 'knight' as const, stats: { str: 4045, agi: 1698, vit: 706, ene: 2044 }, maxHp: 2763 };
+  ok('ruta: Hume sin skill de área todavía necesita Devias', farmRouteLevel(hume, 305) === 99);
+  ok('ruta: Hume con Twisting Slash puede probar Arena 3, no Arena 4', farmRouteLevel(hume, 305, true) === 299);
+  ok('ruta: Horaz fuerte alcanza Arena 4', farmRouteLevel(horaz, 305) === 305);
+  ok('ruta: el skill habilita Deathvim y Phantom Knight pero no Gaint Drakan',
+    canFarmMonster(hume, 20) && canFarmMonster(hume, 63, true) && canFarmMonster(hume, 72, true) && !canFarmMonster(hume, 75, true));
+  ok('ruta: sin stats recibidos todavía no restringe', farmRouteLevel({ ...hume, maxHp: 0 }, 305) === 305);
   const mago = { family: 'wizard' as const, stats: { str: 18, agi: 18, vit: 15, ene: 30 }, maxHp: 60 };
   ok('poder: el mago pega con energía', damageRange(mago)[1] === 30 / 4);
 }
 
 // --- Lorencia --------------------------------------------------------------------------------------
 {
-  // orden de los sorteos: campamento x, y; los dos pasos (x, y cada uno); cuál salida
-  const p = lorenciaPlan(seq(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.1));
-  ok('Lorencia: campamento en el Lich (rand 0,5 = sin corrimiento) y salida directa', p.camp.x === 134 && p.camp.y === 202 && p.via === null, p);
-  const q = lorenciaPlan(seq(1 - 1e-9, 0, 0.5, 0.5, 0.5, 0.5, 0.3));
-  ok('Lorencia: corrimiento de ±3 y paso por el oeste', Math.abs(q.camp.x - 134) <= 3 && Math.abs(q.camp.y - 202) <= 3 && q.via?.x === 130 && q.via?.y === 150, q);
-  ok('Lorencia: pared → el Lich exacto y sin paso', JSON.stringify(lorenciaPlan(seq(0.9, 0.9, 0.3), () => false)) === JSON.stringify({ camp: { x: 134, y: 202 }, via: null }));
+  const p = lorenciaPlan(seq(0, 0.5, 0.5));
+  ok('Lorencia: campamento en el Lich y salida directa', p.camp.x === 134 && p.camp.y === 202 && p.vias.length === 0 && p.variant === 0, p);
+  const q = lorenciaPlan(seq(0.25, 1 - 1e-9, 0));
+  ok('Lorencia: campamento ±5 y camino por el oeste', Math.abs(q.camp.x - 134) <= 5 && Math.abs(q.camp.y - 202) <= 5 && q.variant === 1 && q.vias.length === 4, q);
+  const other = lorenciaPlan(seq(0.25, 0.5, 0.5), () => true, [1]);
+  ok('Lorencia: no repite la ruta anterior', other.variant === 2 && other.vias[2].x > 140, other);
+  ok('Lorencia: los caminos alternativos usan puntos caminables', LORENCIA_ROUTES.every((path) => path.every((v) => isWalkable(0, v.x, v.y))));
+  ok('Lorencia: pared → Lich exacto y salida directa', JSON.stringify(lorenciaPlan(seq(0.9, 0.9, 0.3), () => false)) === JSON.stringify({ camp: { x: 134, y: 202 }, vias: [], variant: 0 }));
 }
 
 // --- Devias 4 --------------------------------------------------------------------------------------

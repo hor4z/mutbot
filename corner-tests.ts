@@ -3,7 +3,7 @@
  *
  *   bun run corner-tests.ts
  */
-import { mageNeedsPower, spotIsTight } from './combat';
+import { goldenSkill, mageNeedsPower, skillLevelOk, spotIsTight } from './combat';
 import { world } from './state';
 import { contestTarget, mageCenter, CORNER, CornerSides, SIDE, SIDES, altWarp, cornerActive, cornerFull, cornerTarget, inCorner, nextRoutePoint, spinRange, spinTarget } from './corner';
 
@@ -142,6 +142,22 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
   ok('nivel < 200: no se va (afuera es Arena 2 misma)', !cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 124 }));
   ok('nivel >= 200: sí se va si está llena y no rinde', cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 250 }));
   ok('con un compañero en la esquina: no se va', !cornerFull({ rivals: 5, inCornerSince: 0, now, rate1m: 0, level: 250, mateHere: true }));
+}
+
+// --- Skill contra dorados (Blade Knight, 2026-10-23) ----------------------------------------------
+{
+  const saved = { skills: new Map(world.skills), mana: world.mana, level: world.level, classId: world.classId };
+  world.skills.clear();
+  for (const [num, index] of [[23, 0], [41, 1], [42, 2], [43, 3], [47, 4], [48, 5]]) world.skills.set(num, { number: num, index, level: 0 } as any);
+  world.mana = 500;
+  ok('dorado: Death Stab en 400', goldenSkill(400)?.number === 43);
+  ok('dorado: debajo del 160 (recién reseteado) no usa los del BK', goldenSkill(100)?.number !== 43 && goldenSkill(100)?.number !== 42);
+  ok('nivel: Rageful Blow pide 170, Death Stab 160', skillLevelOk(43, 160) && !skillLevelOk(42, 169) && skillLevelOk(42, 170));
+  world.mana = 20;
+  ok('dorado: sin maná para Death Stab (15) → Death Stab igual; con 10 → otro', goldenSkill(400)?.number === 43 && ((world.mana = 10), goldenSkill(400)?.number !== 43));
+  world.skills.clear();
+  for (const [k, v] of saved.skills) world.skills.set(k, v);
+  world.mana = saved.mana; world.level = saved.level;
 }
 
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE LA ESQUINA PASARON' : `\n${fails} TEST(S) DE LA ESQUINA FALLARON`);

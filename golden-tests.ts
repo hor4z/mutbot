@@ -4,7 +4,7 @@ import { nextZone } from './zones';
  *
  *   bun run golden-tests.ts
  */
-import { GOLDEN_RULE, GoldenRule } from './golden';
+import { GOLDEN_RULE, GoldenRule, stickyGolden } from './golden';
 
 let fails = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -32,6 +32,25 @@ const me = { x: 100, y: 100 };
   ok('un id que dejó de verse se olvida (reaparece con el mismo id)', g2.pick(me, [{ id: 7, x: 110, y: 100, type: 78 }], golden, 10 * GOLDEN_RULE.giveUpMs)?.id === 7);
   ok('2 min sin matarlo: se deja', g.pick(me, [goblin], golden, GOLDEN_RULE.giveUpMs + 1) === null);
   ok('sin dorados: null', new GoldenRule().pick(me, [common], golden, 0) === null);
+}
+
+// --- Correa (2026-10-23): no repartir el daño entre dorados -------------------------------------------
+{
+  const goblin = { id: 1, x: 110, y: 100, type: 78 };
+  const titan = { id: 2, x: 102, y: 100, type: 53 };
+  const dragon = { id: 3, x: 115, y: 100, type: 79 };
+  ok('correa: sigue con el que le pega aunque aparezca otro dorado más cerca', stickyGolden(me, 1, [goblin, titan], golden)?.id === 1);
+  ok('correa: un dragón desplaza a un dorado chico', stickyGolden(me, 1, [goblin, titan, dragon], golden)?.id === 3);
+  ok('correa: un dragón no se suelta por otro dragón más cerca', stickyGolden(me, 3, [dragon, { id: 4, x: 101, y: 100, type: 44 }], golden)?.id === 3);
+  ok('correa: sin actual, el dragón antes que el chico más cerca', stickyGolden(me, null, [titan, dragon], golden)?.id === 3);
+  ok('correa: el actual ya no se ve → el más cercano', stickyGolden(me, 9, [goblin, titan], golden)?.id === 2);
+  ok('valor: sin actual, Titan (+2) a 9 antes que Goblin (+1) a 5', stickyGolden(me, null, [{ id: 10, x: 105, y: 100, type: 78 }, { id: 11, x: 109, y: 100, type: 53 }], golden)?.id === 11);
+  ok('valor: un Goblin pegado (a 1) antes que un Titan lejos (a 15)', stickyGolden(me, null, [{ id: 10, x: 101, y: 100, type: 78 }, { id: 11, x: 115, y: 100, type: 53 }], golden)?.id === 10);
+  ok('Dragón Rojo (44) desplaza a un chico', stickyGolden(me, 1, [goblin, { id: 12, x: 118, y: 100, type: 44 }], golden)?.id === 12);
+  ok('correa: un común no cuenta', stickyGolden(me, null, [{ id: 5, x: 100, y: 101, type: 26 }], golden) === null);
+  const g = new GoldenRule();
+  ok('regla: con correa sigue con el chico aunque otro esté más cerca', g.pick(me, [goblin, titan], golden, 0, 1)?.id === 1);
+  ok('regla: un dragón aguanta 5 min', g.pick(me, [dragon], golden, 0) != null && g.pick(me, [dragon], golden, GOLDEN_RULE.giveUpMs + 1000)?.id === 3);
 }
 
 // --- Zonas de dragones (zones.ts) -------------------------------------------------------------------

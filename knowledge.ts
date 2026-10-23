@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { PARTY_GAIN_MIN } from './duo';
 import { setPolicy } from './telemetry';
 
 export const KNOWLEDGE_PATH = process.env.MUBOT_KNOWLEDGE ?? join(homedir(), '.mubot', 'knowledge.json');
@@ -71,8 +72,16 @@ export function knowledge(now = Date.now()): Knowledge | null {
  */
 export const isPriorityChar = (name: string) => name.toLowerCase() === PRIORITY_CHAR.toLowerCase();
 
-/** Party en el dúo: lo aprendido, o lo contrario en un bloque de experimento. */
-export function partyWanted(now = Date.now()): { use: boolean; why: string } {
+/**
+ * Party en el dúo: lo aprendido, o lo contrario en un bloque de experimento. Con un compañero de nivel
+ * más bajo (`ward`: partyGain de duo.ts >= PARTY_GAIN_MIN) manda la cuenta del reparto de OpenMU: la
+ * party le suma al fuerte aunque el otro no mate, sin experimentos.
+ */
+export function partyWanted(now = Date.now(), ward?: { name: string; gain: number }): { use: boolean; why: string } {
+  if (ward && ward.gain >= PARTY_GAIN_MIN) {
+    setPolicy('party=si (reparto)');
+    return { use: true, why: `con ${ward.name} saco ${ward.gain.toFixed(1)}× por kill (reparto por nivel promedio de OpenMU)` };
+  }
   const p = knowledge(now)?.party;
   // Carrera: sin party por defecto (la exp se reparte: en el navegador los ciclos de Horaz pasaron de
   // ~9 a ~13,6 min) y sin experimentos; solo con datos que digan que le suma a Horaz.

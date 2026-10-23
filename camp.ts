@@ -20,6 +20,10 @@ export const CAMP = {
   // Tras EVAL_MS en el campamento, si rinde < MIN_FRAC de la vara del mapa, mudarse.
   EVAL_MS: 90_000,
   MIN_FRAC: 0.5,
+  // Si la tasa reciente se desploma aunque el promedio histórico del mismo
+  // campamento siga alto, buscar otro grupo en vez de esperar a que se vacíe.
+  RECENT_WINDOW_MS: 45_000,
+  RECENT_DROP_FRAC: 0.7,
   // Vacío (sin objetivo dentro del radio) durante EMPTY_MS → mudarse. El reloj
   // corre solo desde que llegó: mientras viaja no cuenta (si no, lo abandonaba a
   // mitad de camino y elegía otro: iba y venía).
@@ -42,17 +46,22 @@ export const CAMP = {
   DIST_DECAY: 12,
   // Penalización por jugador cerca de un campamento candidato (como la de objetivo).
   COMPETITION_PENALTY: 0.3,
+  // Entre objetivos/campamentos casi iguales en EXP/s, variar la elección.
+  // El objetivo elegido se mantiene hasta morir; esto no provoca zigzag.
+  CHOICE_NEAR_BEST_FRAC: 0.95,
   // En camino: pelear con lo que esté a <= EN_ROUTE_SCAN; si hay >= CLUSTER_STOP
   // monstruos juntos a <= EN_ROUTE_SCAN, acampar ahí mismo.
   EN_ROUTE_SCAN: 8,
   CLUSTER_STOP: 3,
+  TRAVEL_FIGHT_MS: 10_000,
   // Un campamento recién dejado no se vuelve a elegir durante esto.
   LEFT_MEMORY_MS: 120_000,
   // Si no llega al centro en esto (sin contar el tiempo peleando en el camino), se abandona.
   WALK_TIMEOUT_MS: 60_000,
-  // Curiosidad: atacar primero tipos con < CURIOSITY_KILLS kills medidos a <= CURIOSITY_RADIUS.
+  // Curiosidad: probar tipos nuevos solo si su ROI se acerca al mejor objetivo.
   CURIOSITY_RADIUS: 8,
   CURIOSITY_KILLS: 3,
+  CURIOSITY_MIN_RATE_FRAC: 0.7,
   // Recién llegado de un warp: no elegir campamento (el scope puede traer
   // monstruos del mapa anterior); solo pelear a <= ARRIVAL_SCAN.
   ARRIVAL_PENDING_MS: 3000,
@@ -73,6 +82,10 @@ export const CAMP = {
   MEM_MIN_MS: 45_000,         // estadías más cortas no se guardan
   MEM_EMA_OLD: 0.6,
   MEM_NEAR: 4,                // a <= esto es "el mismo" campamento
+  // Exploración del personaje estricto: celdas de 12, desde 4 monstruos juntos, una vez cada 20 min.
+  SCOUT_CELL: 12,
+  SCOUT_MIN_DENSITY: 4,
+  SCOUT_RETRY_MS: 20 * 60_000,
   MEM_MAX_PER_MAP: 20,
   MEM_LEFT_MS: 60_000,
   // Hambre: casi nada de exp en los últimos HUNGER_WINDOW_MS con jugadores cerca
@@ -116,7 +129,11 @@ export const DOWN_ZONE_DEFAULT: Record<number, Pos> = { 83: { x: 91, y: 13 }, 84
 // Memoria de campamentos: posición + exp/min real + nivel + n, por mapa.
 // Persiste en learning.json (entre resets y reinicios del bot).
 // ---------------------------------------------------------------------------
-export type KnownCamp = { map: number; x: number; y: number; rate: number; n: number; level: number };
+// power: suma de stats con que se midió (sin ella, dato viejo: el personaje débil no lo usa).
+export type KnownCamp = { map: number; x: number; y: number; rate: number; n: number; level: number; power?: number };
+
+/** ¿Medido con stats parecidos (±20 %)? */
+export const samePower = (a: number | undefined, b: number) => a != null && a > 0 && b > 0 && Math.abs(a - b) <= b * 0.2;
 
 export class CampMemory {
   private byMap = new Map<number, KnownCamp[]>();
@@ -135,20 +152,41 @@ export class CampMemory {
     return [...this.byMap.values()].flat().map((c) => ({ ...c }));
   }
 
-  record(map: number, x: number, y: number, rate: number, level: number) {
+  record(map: number, x: number, y: number, rate: number, level: number, power = 0) {
     const l = this.list(map);
     const near = l.find((c) => cheb(c, { x, y }) <= this.p.MEM_NEAR);
-    if (near) {
+    if (near && (power <= 0 || samePower(near.power, power))) {
       near.rate = near.rate * this.p.MEM_EMA_OLD + rate * (1 - this.p.MEM_EMA_OLD);
       near.n++;
       near.level = level;
-    } else l.push({ map, x, y, rate, n: 1, level });
+    } else if (near) {
+      // Medido con otros stats (antes de un grand reset): lo nuevo reemplaza a lo viejo.
+      Object.assign(near, { x, y, rate, n: 1, level, power });
+    } else l.push({ map, x, y, rate, n: 1, level, ...(power > 0 ? { power } : {}) });
     l.sort((a, b) => b.rate - a.rate);
     if (l.length > this.p.MEM_MAX_PER_MAP) l.length = this.p.MEM_MAX_PER_MAP;
   }
 
+  /**
+   * Campamentos medidos en la base (ClickHouse, horas de ticks por celda): pisan al aprendido
+   * cercano (la base promedia más tiempo que el EMA local) o se agregan.
+   */
+  seed(camps: readonly KnownCamp[]) {
+    for (const c of camps) {
+      if (![c.map, c.x, c.y, c.rate, c.n, c.level].every(Number.isFinite) || c.n < 1) continue;
+      const l = this.list(c.map);
+      const near = l.find((k) => cheb(k, c) <= this.p.MEM_NEAR && Math.abs(k.level - c.level) <= this.p.MEM_ARRIVAL_LEVEL_WINDOW);
+      if (near) Object.assign(near, { rate: c.rate, level: c.level, n: Math.max(near.n, c.n) });
+      else l.push({ ...c });
+    }
+    for (const l of this.byMap.values()) {
+      l.sort((a, b) => b.rate - a.rate);
+      if (l.length > this.p.MEM_MAX_PER_MAP) l.length = this.p.MEM_MAX_PER_MAP;
+    }
+  }
+
   // Al llegar a un mapa: el mejor aprendido a nivel parecido (±60) que cumpla `accept`.
-  bestForArrival(map: number, level: number, accept: (p: Pos) => boolean): KnownCamp | null {
+  bestForArrival(map: number, level: number, accept: (p: KnownCamp) => boolean): KnownCamp | null {
     return (
       this.list(map)
         .filter((k) => Math.abs(k.level - level) <= this.p.MEM_ARRIVAL_LEVEL_WINDOW && k.n >= 1 && accept(k))
@@ -157,7 +195,7 @@ export class CampMemory {
   }
 
   // Sin campamento: el mejor conocido cerca (rate / (1 + d/12)).
-  nearBest(map: number, me: Pos, level: number, accept: (p: Pos) => boolean): KnownCamp | null {
+  nearBest(map: number, me: Pos, level: number, accept: (p: KnownCamp) => boolean): KnownCamp | null {
     const score = (c: KnownCamp) => c.rate / (1 + cheb(c, me) / this.p.DIST_DECAY);
     return (
       this.list(map)
@@ -228,6 +266,10 @@ export type Camp = {
   crowdSince: number | null;
   counted: boolean;         // ya aportó a la vara del mapa
   why: string;
+  // Elegido por lo medido (memoria, base o zona conocida): en camino no se cambia por
+  // 3 monstruos juntos. Hume en Arena 3/4 acampaba junto a la llegada (73-245M/min)
+  // en vez de ir a (80,64) (554M/min).
+  planned?: boolean;
 };
 export type Arrival = { map: number; x: number; y: number };
 export type CampGoal = { x: number; y: number; kind: 'camp' | 'llegada' };
@@ -257,8 +299,80 @@ export class CampManager {
   // Lo que pasó en la última llamada (para loguear en el bot).
   events: string[] = [];
 
-  constructor(private readonly p: CampParams = CAMP, memory?: CampMemory) {
+  constructor(private readonly p: CampParams = CAMP, memory?: CampMemory, private readonly rand: () => number = () => 0) {
     this.memory = memory ?? new CampMemory(p);
+  }
+
+  // --- Potencia y exploración ---------------------------------------------
+  // strict: personaje que elige mapa por lo medido (farm-middleware.ts). Solo usa campamentos medidos
+  // con sus stats y explora los grupos densos de monstruos del mapa en vez de quedarse junto a la
+  // llegada (Hume tras el grand reset: siempre "arriba" de la Arena).
+  private power = 0;
+  private strict = false;
+  // Densidad vista por celda: monstruos atacables a la vista (en vivo o de la base, de cualquier personaje).
+  private readonly density = new Map<number, Map<number, { x: number; y: number; d: number }>>();
+  // Celdas exploradas (y cuándo): no se repiten hasta SCOUT_RETRY_MS.
+  private readonly scouted = new Map<string, number>();
+
+  setPower(power: number, strict: boolean) {
+    this.power = power;
+    this.strict = strict;
+  }
+
+  private fits = (k: KnownCamp) => !this.strict || samePower(k.power, this.power);
+
+  private densityOf(map: number) {
+    let m = this.density.get(map);
+    if (!m) this.density.set(map, (m = new Map()));
+    return m;
+  }
+
+  /** Densidad en vivo: cuántos monstruos atacables hay juntos en cada celda de SCOUT_CELL. */
+  observeDensity(map: number, monsters: readonly Pos[]) {
+    const cells = new Map<number, { n: number; sx: number; sy: number }>();
+    const C = this.p.SCOUT_CELL;
+    for (const m of monsters) {
+      const k = Math.floor(m.y / C) * 64 + Math.floor(m.x / C);
+      const c = cells.get(k) ?? { n: 0, sx: 0, sy: 0 };
+      c.n++; c.sx += m.x; c.sy += m.y;
+      cells.set(k, c);
+    }
+    const dm = this.densityOf(map);
+    for (const [k, c] of cells) {
+      const prev = dm.get(k);
+      const at = { x: Math.round(c.sx / c.n), y: Math.round(c.sy / c.n), d: c.n };
+      if (!prev || c.n >= prev.d) dm.set(k, at);
+      else prev.d = prev.d * 0.9 + c.n * 0.1;
+    }
+  }
+
+  /** Densidad medida en la base (promedio de monstruos cerca por celda). */
+  seedDensity(cells: readonly { map: number; x: number; y: number; d: number }[]) {
+    const C = this.p.SCOUT_CELL;
+    for (const c of cells) {
+      if (![c.map, c.x, c.y, c.d].every(Number.isFinite)) continue;
+      const dm = this.densityOf(c.map);
+      const k = Math.floor(c.y / C) * 64 + Math.floor(c.x / C);
+      if (!dm.has(k) || dm.get(k)!.d < c.d) dm.set(k, { x: c.x, y: c.y, d: c.d });
+    }
+  }
+
+  /** Próxima celda densa sin medir con estos stats (solo el personaje estricto). */
+  scoutTarget(map: number, me: Pos, level: number, now: number): (Pos & { d: number }) | null {
+    if (!this.strict) return null;
+    const measured = this.memory.list(map).filter((k) => this.fits(k) && Math.abs(k.level - level) <= this.p.MEM_LEVEL_WINDOW);
+    const cands = [...this.densityOf(map).values()].filter((c) =>
+      c.d >= this.p.SCOUT_MIN_DENSITY && this.inLeash(map, c) &&
+      now - (this.scouted.get(`${map}:${Math.floor(c.x / this.p.SCOUT_CELL)}:${Math.floor(c.y / this.p.SCOUT_CELL)}`) ?? -Infinity) > this.p.SCOUT_RETRY_MS &&
+      !measured.some((k) => cheb(k, c) <= this.p.SCOUT_CELL / 2) &&
+      !this.recentlyLeft(map, c, now, this.p.MEM_LEFT_MS, this.p.RADIUS));
+    const score = (c: { x: number; y: number; d: number }) => c.d / (1 + cheb(c, me) / 40);
+    return cands.sort((a, b) => score(b) - score(a))[0] ?? null;
+  }
+
+  private setScout(map: number, t: Pos & { d: number }, now: number) {
+    this.scouted.set(`${map}:${Math.floor(t.x / this.p.SCOUT_CELL)}:${Math.floor(t.y / this.p.SCOUT_CELL)}`, now);
+    this.setCamp(map, t.x, t.y, now, `exploro un grupo de ~${Math.round(t.d)} monstruos sin medir con estos stats`, true);
   }
 
   // --- Correa -------------------------------------------------------------
@@ -275,16 +389,26 @@ export class CampManager {
   // --- Ciclo de vida ------------------------------------------------------
   // Un warp terminó (MapChanged): registrar la llegada y elegir el primer
   // campamento: lo aprendido primero; si no conoce nada, la regla del usuario.
-  onArrival(map: number, x: number, y: number, now: number, level: number) {
+  onArrival(map: number, x: number, y: number, now: number, level: number, localOnly = false, preferred?: Pos) {
     this.events = [];
     this.arrival = { map, x, y };
     this.arrivalPendingUntil = now + this.p.ARRIVAL_PENDING_MS;
     // Un campamento de otro mapa (o fuera de la correa) se descarta.
     if (this.camp && (this.camp.map !== map || !this.inLeash(map, this.camp))) this.leave(now, level, `descarto campamento (${this.camp.x},${this.camp.y}): lejos de la llegada`, false);
     if (this.camp) return;
-    const known = this.memory.bestForArrival(map, level, (k) => this.inLeash(map, k));
+    // El estricto usa lo medido con sus stats en cualquier parte del mapa; lo demás, cerca de la llegada.
+    const known = this.memory.bestForArrival(map, level, (k) => this.inLeash(map, k) && this.fits(k) && (this.strict || !localOnly || cheb(k, { x, y }) <= 40));
+    const scout = this.scoutTarget(map, { x, y }, level, now);
+    if (scout) {
+      this.setScout(map, scout, now);
+      return;
+    }
     if (known) {
-      this.setCamp(map, known.x, known.y, now, `mejor spot aprendido (${known.x},${known.y}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`);
+      this.setCamp(map, known.x, known.y, now, `mejor spot aprendido (${known.x},${known.y}) ~${Math.round(known.rate / 1e6)}M exp/min (n=${known.n})`, true);
+      return;
+    }
+    if (preferred && !localOnly) {
+      this.setCamp(map, preferred.x, preferred.y, now, `zona medida (${preferred.x},${preferred.y})`, true);
       return;
     }
     const dir = ARRIVAL_SPOT_DIR[map];
@@ -293,8 +417,10 @@ export class CampManager {
       this.setCamp(map, clamp(x + dir[0] * ARRIVAL_SPOT_DIST), clamp(y + dir[1] * ARRIVAL_SPOT_DIST), now, 'spot de llegada (arriba)');
       return;
     }
-    const down = DOWN_ZONE_DEFAULT[map];
-    if (down) this.setCamp(map, down.x, down.y, now, 'zona de abajo');
+    // Un personaje que no puede con los Drakan no cruza toda la Arena hacia
+    // una zona pensada para Horaz: primero busca monstruos atacables cerca.
+    const down = localOnly ? undefined : DOWN_ZONE_DEFAULT[map];
+    if (down) this.setCamp(map, down.x, down.y, now, 'zona de abajo', true);
   }
 
   // Reset hecho: la vara por mapa depende del nivel, se vuelve a medir.
@@ -304,8 +430,8 @@ export class CampManager {
     this.crowdLeaves = [];
   }
 
-  private setCamp(map: number, x: number, y: number, now: number, why: string) {
-    this.camp = { map, x, y, since: now, arrivedAt: null, lastSeen: now, walkSince: now, crowdSince: null, counted: false, why };
+  private setCamp(map: number, x: number, y: number, now: number, why: string, planned = false) {
+    this.camp = { map, x, y, since: now, arrivedAt: null, lastSeen: now, walkSince: now, crowdSince: null, counted: false, why, planned };
     this.events.push(`campamento en (${x},${y}): ${why}`);
   }
 
@@ -315,7 +441,7 @@ export class CampManager {
     const cp = this.camp;
     if (!cp) return;
     if (remember && exp && cp.arrivedAt != null && now - cp.arrivedAt >= this.p.MEM_MIN_MS) {
-      this.memory.record(cp.map, cp.x, cp.y, exp.rateSince(cp.arrivedAt, now), level);
+      this.memory.record(cp.map, cp.x, cp.y, exp.rateSince(cp.arrivedAt, now), level, this.power);
     }
     this.left.push({ map: cp.map, x: cp.x, y: cp.y, at: now });
     if (this.left.length > 7) this.left.shift();
@@ -343,53 +469,57 @@ export class CampManager {
     const inRange = inp.monsters.filter((m) => cheb(from, m) < scan && this.inLeash(inp.map, m));
     const easy = inRange.filter((m) => inp.stats.killSecOf(m.type) <= FARM.MAX_KILL_SEC);
     const pool = easy.length ? easy : inRange;
-    let best: C | null = null;
-    let bestRate = 0;
+    const ranked: { monster: C; rate: number }[] = [];
     // La distancia se mide desde donde estoy (lo que cuesta llegar), no desde el centro.
     for (const m of pool) {
       const r = targetRate(inp.me, m, pool, inp.players, inp.stats);
-      if (r.rate > bestRate) {
-        bestRate = r.rate;
-        best = m;
-      }
+      if (r.rate > 0) ranked.push({ monster: m, rate: r.rate });
     }
-    return best;
+    if (!ranked.length) return null;
+    const bestRate = Math.max(...ranked.map((r) => r.rate));
+    const peers = ranked.filter((r) => r.rate >= bestRate * this.p.CHOICE_NEAR_BEST_FRAC);
+    return peers[Math.min(peers.length - 1, Math.floor(this.rand() * peers.length))].monster;
   }
 
   // Centro con más exp/s a <= RADIUS, penalizado por jugadores y por distancia.
   findCamp<C extends Candidate>(inp: PickInput<C>): Pos | null {
     const ms = inp.monsters.filter((m) => inp.stats.killSecOf(m.type) <= FARM.MAX_KILL_SEC && this.inLeash(inp.map, m));
-    let best: Pos | null = null;
-    let bv = 0;
+    const ranked: { at: Pos; rate: number }[] = [];
     for (const e of ms) {
+      // Después de abandonar un grupo de bajo rendimiento, probar otro grupo
+      // visible; si no se excluye el centro anterior, lo reelige enseguida.
+      if (this.recentlyLeft(inp.map, e, inp.now, this.p.LEFT_MEMORY_MS, 6)) continue;
       let v = 0;
       for (const o of ms) if (cheb(o, e) <= this.p.RADIUS) v += inp.stats.expOf(o.type) / Math.max(inp.stats.killSecOf(o.type), 0.1);
       v *= Math.pow(1 - this.p.COMPETITION_PENALTY, inp.players.filter((q) => cheb(q, e) <= this.p.RADIUS).length);
       v /= 1 + cheb(inp.me, e) / this.p.DIST_DECAY;
-      if (v > bv) {
-        bv = v;
-        best = { x: e.x, y: e.y };
-      }
+      if (v > 0) ranked.push({ at: { x: e.x, y: e.y }, rate: v });
     }
-    return best;
+    if (!ranked.length) return null;
+    const bestRate = Math.max(...ranked.map((r) => r.rate));
+    const peers = ranked.filter((r) => r.rate >= bestRate * this.p.CHOICE_NEAR_BEST_FRAC);
+    return peers[Math.min(peers.length - 1, Math.floor(this.rand() * peers.length))].at;
   }
 
   /** Sin objetivo: a quién atacar (o null). */
   pick<C extends Candidate>(inp: PickInput<C>): C | null {
     this.events = [];
     const { now, map, me } = inp;
-    // Curiosidad: tipos con pocos kills medidos van primero si están cerca.
+    if (this.strict) this.observeDensity(map, inp.monsters.filter((m) => inp.stats.killSecOf(m.type) <= FARM.MAX_KILL_SEC));
+    // Curiosidad acotada por ROI: antes perseguía monstruos débiles aislados
+    // solo porque todavía no tenía tres muestras de ese tipo.
     let cur: C | null = null;
-    let cd = Infinity;
+    let cr = 0;
+    const benchmark = this.freePick(inp, me, FARM.SCAN);
+    const pool = inp.monsters.filter((m) => cheb(me, m) < FARM.SCAN && this.inLeash(map, m));
     for (const m of inp.monsters) {
-      if ((inp.typeKills[m.type] ?? 0) >= this.p.CURIOSITY_KILLS || !this.inLeash(map, m)) continue;
+      if ((inp.typeKills[m.type] ?? 0) >= this.p.CURIOSITY_KILLS || !this.inLeash(map, m) || inp.stats.killSecOf(m.type) > FARM.MAX_KILL_SEC) continue;
       const d = cheb(me, m);
-      if (d <= this.p.CURIOSITY_RADIUS && d < cd) {
-        cd = d;
-        cur = m;
-      }
+      if (d > this.p.CURIOSITY_RADIUS || (this.camp?.map === map && cheb(this.camp, m) > this.p.RADIUS)) continue;
+      const rate = targetRate(me, m, pool, inp.players, inp.stats).rate;
+      if (rate > cr) { cr = rate; cur = m; }
     }
-    if (cur) return cur;
+    if (cur && (!benchmark || cr >= targetRate(me, benchmark, pool, inp.players, inp.stats).rate * this.p.CURIOSITY_MIN_RATE_FRAC)) return cur;
 
     if (this.camp && this.camp.map !== map) this.camp = null;
     const cp0 = this.camp;
@@ -407,12 +537,14 @@ export class CampManager {
       if (inp.monsters.some((m) => cheb(m, cp0) <= this.p.RADIUS)) cp0.lastSeen = now;
       const rate = this.campRate(cp0, now, inp.exp);
       const stay = cp0.arrivedAt != null ? now - cp0.arrivedAt : 0;
+      const recentRate = inp.exp.perMin(now, this.p.RECENT_WINDOW_MS);
       if (stay > this.p.EVAL_MS && !cp0.counted) {
         cp0.counted = true;
         const prev = this.best[map];
         this.best[map] = prev == null ? rate : prev * this.p.BEST_EMA_OLD + rate * (1 - this.p.BEST_EMA_OLD);
       }
       const poor = stay > this.p.EVAL_MS && rate < (this.best[map] ?? 0) * this.p.MIN_FRAC;
+      const fading = stay > this.p.EVAL_MS && rate > 0 && recentRate < rate * this.p.RECENT_DROP_FRAC;
       const empty = cp0.arrivedAt != null && now - cp0.lastSeen > this.p.EMPTY_MS;
       const rivalsHere = inp.players.filter((q) => cheb(q, cp0) <= this.p.RADIUS + 2).length;
       if (rivalsHere >= this.p.CROWD_RIVALS) cp0.crowdSince ??= now;
@@ -421,8 +553,8 @@ export class CampManager {
         cp0.crowdSince != null && now - cp0.crowdSince > this.p.CROWD_MS && stay > this.p.CROWD_MIN_STAY_MS &&
         rate < (this.best[map] ?? Infinity) * this.p.CROWD_MIN_FRAC;
       if (crowded) this.crowdLeaves.push(now);
-      if (poor || empty || crowded) {
-        this.leave(now, inp.level, poor ? `rinde ${Math.round(rate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos', true, inp.exp);
+      if (poor || fading || empty || crowded) {
+        this.leave(now, inp.level, poor ? `rinde ${Math.round(rate)} exp/min` : fading ? `exp reciente cayó a ${Math.round(recentRate)} exp/min` : crowded ? `${rivalsHere} jugadores cerca` : 'sin monstruos', true, inp.exp);
       }
     }
     if (!this.camp && now < this.arrivalPendingUntil) return this.freePick(inp, me, this.p.ARRIVAL_SCAN);
@@ -434,13 +566,14 @@ export class CampManager {
     const cp = this.camp!;
     if (cheb(me, cp) > this.p.RADIUS) {
       // En camino: si hay un montón de monstruos juntos, quedarse ahí.
+      const canPause = now - cp.since < this.p.TRAVEL_FIGHT_MS;
       const n = inp.monsters.filter((m) => inp.stats.killSecOf(m.type) <= FARM.MAX_KILL_SEC && cheb(m, me) <= this.p.EN_ROUTE_SCAN && this.inLeash(map, m)).length;
-      if (n >= this.p.CLUSTER_STOP) {
+      if (canPause && !cp.planned && n >= this.p.CLUSTER_STOP) {
         this.camp = null;
         this.setCamp(map, me.x, me.y, now, `me quedo: ${n} monstruos juntos`);
         this.camp!.arrivedAt = now;
       } else {
-        const near = this.freePick(inp, me, this.p.EN_ROUTE_SCAN + 1);
+        const near = canPause ? this.freePick(inp, me, this.p.EN_ROUTE_SCAN + 1) : null;
         if (near) {
           cp.walkSince = now; // pelear en el camino no consume el plazo de caminata
           return near;
@@ -470,9 +603,14 @@ export class CampManager {
     }
     if (now < this.arrivalPendingUntil) return null;
     // Memoria: el mejor campamento conocido cerca.
-    const known = this.memory.nearBest(map, me, level, (c) => this.inLeash(map, c) && !this.recentlyLeft(map, c, now, this.p.MEM_LEFT_MS, this.p.MEM_NEAR));
+    const scout = this.scoutTarget(map, me, level, now);
+    if (scout) {
+      this.setScout(map, scout, now);
+      return { x: scout.x, y: scout.y, kind: 'camp' };
+    }
+    const known = this.memory.nearBest(map, me, level, (c) => this.inLeash(map, c) && this.fits(c) && !this.recentlyLeft(map, c, now, this.p.MEM_LEFT_MS, this.p.MEM_NEAR));
     if (known) {
-      this.setCamp(map, known.x, known.y, now, `campamento conocido ~${Math.round(known.rate / 1e6)}M exp/min`);
+      this.setCamp(map, known.x, known.y, now, `campamento conocido ~${Math.round(known.rate / 1e6)}M exp/min`, true);
       return { x: known.x, y: known.y, kind: 'camp' };
     }
     const sc = START_CAMPS[map];
