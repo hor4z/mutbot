@@ -113,6 +113,9 @@ export type PanelCommand =
   /** leer el baúl (Baz, Lorencia) con el equipo y la bolsa: solo lee, no mueve nada */
   | { cmd: 'vault' };
 
+/** Comandos del server que `say` deja pasar (texto exacto, sin canal ni destinatario). */
+export const SAY_COMMANDS: readonly string[] = ['/pkclear'];
+
 export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
@@ -139,8 +142,9 @@ export function isPanelCommand(v: unknown): v is PanelCommand {
   const allowed = COMMAND_KEYS[c.cmd as (typeof PANEL_COMMANDS)[number]];
   if (Object.keys(c).some((k) => !allowed.includes(k))) return false;
   if (c.cmd === 'say') {
-    // Imprimible latin1 (sin controles), 1-60, sin comandos del server.
-    if (typeof c.text !== 'string' || !/^[\x20-\x7e\xa0-\xff]{1,60}$/.test(c.text) || c.text.trimStart().startsWith('/')) return false;
+    // Imprimible latin1 (sin controles), 1-60, sin comandos del server salvo los de SAY_COMMANDS.
+    if (typeof c.text !== 'string' || !/^[\x20-\x7e\xa0-\xff]{1,60}$/.test(c.text)) return false;
+    if (c.text.trimStart().startsWith('/') && !(SAY_COMMANDS.includes(c.text) && c.to === undefined && c.channel === undefined)) return false;
     if (c.to !== undefined && (typeof c.to !== 'string' || !/^[A-Za-z0-9_]{1,10}$/.test(c.to))) return false;
     if (c.channel !== undefined && !['normal', 'party', 'guild'].includes(c.channel as string)) return false;
     return !(c.to !== undefined && c.channel !== undefined && c.channel !== 'normal');

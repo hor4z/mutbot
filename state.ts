@@ -14,6 +14,7 @@ import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats } from './farming';
 import type { CharLearning, Spot } from './learning';
 import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
 import type { Invasion } from './panel-protocol';
+import { PkRecovery } from './recovery';
 import type { StatusServer } from './ws-server';
 import monstersData from './data/monsters.json';
 
@@ -193,6 +194,10 @@ export const learned = {
   hunger: new Hunger(),
   cycleLog: new CycleLog(Date.now()),
 };
+
+// Auto-recuperación del PK (recovery.ts): la alimentan el chat (avisos del server) y los warps (route.ts);
+// el loop manda /pkclear cuando toca.
+export const pkGuard = new PkRecovery();
 
 // Personajes propios (compañeros): no son rivales (esquina, lados, defensa) y con ellos sí hay party.
 // La estación los pasa en MUBOT_MATES (todos sus personajes); sin eso, Horaz y Melu.

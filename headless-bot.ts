@@ -64,6 +64,7 @@ import { drops, lootState } from './loot';
 import { LoginResponseLoginResultEnum } from './packets';
 import { buildPanelState, handlePanelCommand, noteModeChange, updateTrail } from './panel';
 import { Backoff } from './protocol097';
+import { watchLiveness } from './liveness';
 import { loadLearningState } from './route';
 import { bot, world } from './state';
 import { log, sleep } from './util';
@@ -118,6 +119,7 @@ async function session(deadline: number): Promise<LoopResult> {
     trackWorld();
     trackPanelPackets();
     watchChat();
+    watchLiveness();
     startTeamPolling();
     worldTracked = true;
   }

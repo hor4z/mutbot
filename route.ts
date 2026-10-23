@@ -11,7 +11,7 @@ import { journal } from './journal';
 import { CROWDED_SPOT_MS, CROWD_FALLBACK, activeDryExclusions, chooseFixedRoute, loadLearning, saveLearningChar, type Spot } from './learning';
 import { isPriorityChar } from './knowledge';
 import { farmMiddleware } from './farm-middleware';
-import { bot, hotGrid, learned, typeStats, world } from './state';
+import { bot, hotGrid, learned, pkGuard, typeStats, world } from './state';
 import { queryDb } from './telemetry';
 import { log } from './util';
 
@@ -182,6 +182,7 @@ export async function warpAndWait(spot: Spot): Promise<boolean> {
   warpTo(spot.index);
   bot.lastWarpAt = Date.now();
   const ok = !!(await waiter);
+  pkGuard.onWarp(ok, Date.now());
   if (ok) bot.currentSpot = spot;
   else log(`Warp a ${spot.name} sin respuesta (¿nivel, zen o PK?).`);
   return ok;

@@ -113,7 +113,7 @@ const foreignUntil = new Map<number, number>();
 // Joyas, excelentes y equipo solo con lugar en el inventario (casillas libres de las 64): que siempre
 // entren las cajas, el zen y las pociones.
 const LOOT_GEAR_MIN_FREE = 12;
-function bagRoom(): number {
+export function bagRoom(): number {
   let used = 0;
   for (const it of world.inventory.values()) if (it.slot >= 12 && it.slot < 76) { const i = itemInfo(it.group, it.num); used += i.w * i.h; }
   return 64 - used;
