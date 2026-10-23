@@ -111,6 +111,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 // --- Sondeo ---------------------------------------------------------------------------------------
+// Estación vieja (sin roles en /api/state): se deduce de la rutina, como hace la estación nueva.
+function withRole(c: Character): Character {
+  if (c.role) return c;
+  const r = c.routine ?? c.lastRoutine;
+  const role = r?.kind === "hunt" ? { role: "golden" as const } : r?.kind === "spot" ? { role: "spot" as const, warp: r.warp } : { role: "route" as const };
+  return { ...c, role, roleSaved: false };
+}
+
 const EMPTY: StationData = { chars: [], golds: [], alerts: [], invasion: null, scouts: [], now: 0 };
 
 /** Estado de la estación cada 2 s (solo lectura: GET /api/state). */
@@ -133,7 +141,7 @@ export function useStationData() {
         const s = await r.json();
         if (!live) return;
         setData({
-          chars: s.chars ?? [],
+          chars: (s.chars ?? []).map(withRole),
           golds: s.golds ?? [],
           alerts: s.alerts ?? [],
           invasion: s.invasion ?? null,
