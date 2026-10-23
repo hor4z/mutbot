@@ -9,8 +9,10 @@ import { Panel } from "./Panel";
 import "./style.css";
 import "./station.css";
 import { installMock } from "./mock";
+import { CommerceDemo } from "./CommerceDemo";
+import { isCommerceDemo } from "./commerce-mock";
 
 installMock();
 createRoot(document.getElementById("root")!).render(
-  document.body.dataset.surface === "panel" ? <Panel /> : <Station />,
+  isCommerceDemo() ? <CommerceDemo /> : document.body.dataset.surface === "panel" ? <Panel /> : <Station />,
 );

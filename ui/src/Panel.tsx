@@ -15,6 +15,7 @@ import {
   WifiOff,
   MessageSquare,
   Send,
+  Store,
 } from "lucide-react";
 import type { EquippedItem, PanelCommand, PanelState } from "../../panel-protocol";
 import {
@@ -28,6 +29,7 @@ import {
   compact,
 } from "./components";
 import { Radar } from "./Radar";
+import { CommerceView } from "./Commerce";
 // Equipo e inventario: íconos del cliente (assets/items, servidos por el bot en /radar-assets/items).
 const SLOT_NAMES = ["Arma", "Escudo / 2ª arma", "Casco", "Armadura", "Pantalones", "Guantes", "Botas", "Alas", "Mascota", "Collar", "Anillo", "Anillo"];
 const ICON_TIERS = [15, 13, 11, 9, 7, 5, 3, 0];
@@ -644,6 +646,7 @@ export function Panel() {
             { value: "events", label: "Eventos", Icon: Sparkles },
             { value: "activity", label: "Actividad", Icon: ScrollText },
             { value: "chat", label: "Chat", Icon: MessageSquare },
+            { value: "commerce", label: "Comercio", Icon: Store },
           ].map(({ value, label, Icon }) => (
             <Tabs.Tab key={value} value={value}>
               <Icon size={15} />
@@ -893,6 +896,9 @@ export function Panel() {
         </Tabs.Panel>
         <Tabs.Panel value="chat">
           <ChatPanel chats={chats} result={result} send={send} disabled={!online || !s} />
+        </Tabs.Panel>
+        <Tabs.Panel value="commerce">
+          <CommerceView state={s} send={send} online={online} />
         </Tabs.Panel>
       </Tabs.Root>
       {toast && (
