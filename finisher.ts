@@ -4,14 +4,14 @@
  * rango de cast sin pegar y se ataca cuando lo que falta, estimado, es <= FINISHER_HITS golpes propios.
  * Seguro: sin otros atacantes en los últimos 3 s, sin HP conocido, sin muestra del golpe propio o con lecturas
  * inconsistentes (daño visto > HP) se ataca como siempre. Tope: FINISHER_MAX_WAIT_MS sin que baje lo estimado.
- * Lógica pura (reloj por parámetro): se testea en `golden-tests.ts`. MUBOT_FINISHER=0 la apaga.
+ * Lógica pura (reloj por parámetro): se testea en `golden-tests.ts`. MUBOT_FINISHER=1 la enciende (apagada por defecto hasta validar el daño 0x15).
  */
 export const FINISHER_HITS = 3;
 export const FINISHER_OTHERS_MS = 3000;
 export const FINISHER_MAX_WAIT_MS = 25_000;
 // Un daño leído hasta este tiempo después de nuestro cast cuenta como golpe propio (muestra del daño típico).
 export const FINISHER_OWN_WINDOW_MS = 1500;
-export const finisherOn = () => process.env.MUBOT_FINISHER !== '0';
+export const finisherOn = () => process.env.MUBOT_FINISHER === '1'; // apagado hasta validar la lectura del daño (0x15) con dragon_fight
 export type FinisherVerdict = 'wait' | 'strike' | 'none';
 
 type T = { dmg: number; others: Map<number, number>; waitingSince: number | null; lastRemaining: number | null; progressAt: number; gaveUp: boolean };
