@@ -75,7 +75,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
   ok('PANEL_COMMANDS son 7', PANEL_COMMANDS.length === 7);
   for (const c of [
     { cmd: 'pause' }, { cmd: 'resume' }, { cmd: 'farm' }, { cmd: 'hunt' }, { cmd: 'hunt', map: 3 }, { cmd: 'warp', warp: 26 },
-    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'vault' },
+    { cmd: 'say', text: 'hola' }, { cmd: 'say', text: 'vamos', to: 'Melu' }, { cmd: 'say', text: 'arena 2', channel: 'party' }, { cmd: 'say', text: 'ñandú á' }, { cmd: 'say', text: '/pkclear' }, { cmd: 'vault' },
   ]) {
     ok(`acepta ${JSON.stringify(c)}`, isPanelCommand(c));
   }
@@ -89,7 +89,7 @@ const NOW = new Date(2026, 9, 10, 14, 20, 0).getTime(); // 14:20 hora local
     { cmd: 'hunt', sector: 1 },
     { cmd: 'vault', move: 1 },
     { cmd: 'scout' }, { cmd: 'atlas' },
-    { cmd: 'ranking' }, { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
+    { cmd: 'ranking' }, { cmd: 'say' }, { cmd: 'say', text: '' }, { cmd: 'say', text: '/reset' }, { cmd: 'say', text: '/pkclear x' }, { cmd: 'say', text: '/pkclear', to: 'Melu' }, { cmd: 'say', text: '/pkclear', channel: 'party' }, { cmd: 'say', text: ' /pkclear' }, { cmd: 'say', text: '  /add str 1' }, { cmd: 'say', text: 'x'.repeat(61) },
     { cmd: 'say', text: 'a\nb' }, { cmd: 'say', text: 'hola', to: 'no válido!' }, { cmd: 'say', text: 'hola', channel: 'global' }, { cmd: 'say', text: 'hola', to: 'Melu', channel: 'party' },
     { cmd: 'say', text: 'hola', extra: 1 }, { cmd: 'say', text: 42 },
   ];

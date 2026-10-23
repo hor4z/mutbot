@@ -8,14 +8,14 @@ import { serveRadarAsset } from './radar-assets';
  *
  * - Cuentas y personajes: en la base SQLite (`estacion-db.ts`, ~/.mubot/mubot.db). Los `.env` de la
  *   raíz se importan solos al arrancar. La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
- * - Los bots corren en su propia sesión (`setsid`) y escriben en ~/.mubot/logs/<personaje>.log:
+ * - Los bots corren en su propia sesión (`detached`, sin `setsid`: no existe en macOS) y escriben en ~/.mubot/logs/<personaje>.log:
  *   cerrar o reiniciar la estación NO los desconecta. Al arrancar, la estación adopta los que ya
  *   corren (los busca en /proc por cuenta y lee su --ws-port).
  * - Nunca dos sesiones de la misma cuenta: si ya corre un bot con esa cuenta no lanza otro, y el bot
  *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
 import { isFreshChar } from './farming';
 import { coolNames } from './names';
 import { EstacionDb, type DbChar } from './estacion-db';
@@ -106,6 +106,19 @@ function refreshSlots() {
 type Running = { pid: number; wsPort: number | null; cmdline: string[]; environ: string[] };
 function scanProcs(): Running[] {
   const out: Running[] = [];
+  if (!existsSync('/proc')) {
+    // macOS: sin /proc. `ps` da el cmdline (sin environ), alcanza para --user/--env-file/--ws-port.
+    const ps = Bun.spawnSync(['ps', '-axo', 'pid=,command=']).stdout.toString();
+    for (const line of ps.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!m) continue;
+      const cmdline = m[2].split(/\s+/).filter(Boolean);
+      if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) continue;
+      const i = cmdline.indexOf('--ws-port');
+      out.push({ pid: Number(m[1]), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ: [] });
+    }
+    return out;
+  }
   for (const d of readdirSync('/proc')) {
     if (!/^\d+$/.test(d)) continue;
     try {
@@ -292,8 +305,8 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
-  const proc = Bun.spawn(['setsid', process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
-    cwd: ROOT, env, stdin: 'ignore', stdout: fd, stderr: fd,
+  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
+    cwd: ROOT, env, detached: true, stdin: 'ignore', stdout: fd, stderr: fd,
   });
   closeSync(fd);
   s.pid = proc.pid;
