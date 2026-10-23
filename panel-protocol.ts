@@ -91,6 +91,15 @@ export type PanelState = {
   zones?: { x: number; y: number; n: number }[];
   /** desde que arrancó el bot: kills, muertes, skills tirados, exp ganada, loot, skill de ataque actual */
   session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
+  /**
+   * Opcionales (los llena quien los tenga; un bot viejo no los manda y la vista usa defaults):
+   * celdas letales / zonas de muertes del mapa actual (n = muertes vistas) …
+   */
+  hazards?: { x: number; y: number; n: number }[];
+  /** … miembros de escuadra / scouts en cualquier mapa … */
+  squad?: { name: string; map: number; x: number; y: number; role?: string }[];
+  /** … y skills con su espera (readyAt = ms epoch en que vuelve a estar listo; ausente = listo). */
+  skills?: { name: string; readyAt?: number; current?: boolean }[];
 };
 
 /** Ítem del personaje. `slot`: 0-11 equipo, 12-75 inventario (grilla de 8×8 desde el 12). `w`×`h`: casillas que ocupa. */
