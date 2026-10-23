@@ -435,3 +435,58 @@ export function parseTeamRequest(body: unknown, now: number): TeamRequest | null
   if (!from || (b.kind !== 'corner' && b.kind !== 'golden') || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
   return { from, kind: b.kind, map: b.map, x: b.x, y: b.y, note: String(b.note ?? '').slice(0, 80), at: now };
 }
+
+// --- Insights de los bots (POST /api/team con kind 'insight') ----------------------------------------
+
+export type InsightSummary = {
+  from: string; at: number; note: string;
+  dragon: { map: number; name: string; n: number; share: number; scope: string } | null;
+  hunt: { map: number; name: string; minutes: number; boxes: number; factor: number }[];
+  thieves: { name: string; n: number }[];
+  lethal: { map: number; name: string; cells: string[] }[];
+};
+export type BotInsight =
+  | { topic: 'pk' | 'stuck'; alert: Omit<Alert, 'id'> }
+  | { topic: 'data'; summary: InsightSummary };
+
+const clean = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/[\x00-\x1f]/g, ' ').trim().slice(0, max) : '');
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const fin = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+const list = (v: unknown, max: number): unknown[] => (Array.isArray(v) ? v.slice(0, max) : []);
+
+/**
+ * Valida un insight de un bot (`{from,kind:'insight',topic,note,data,at}`); null si no es válido.
+ * pk/stuck → una alerta del feed; data → el resumen (dragón probable, cacería por mapa, ladrones, celdas letales)
+ * con todo acotado y copiado campo por campo (nada del bot pasa tal cual). `data` malo o ausente → resumen vacío.
+ */
+export function parseBotInsight(body: unknown, now: number): BotInsight | null {
+  if (!isObj(body) || body.kind !== 'insight') return null;
+  const from = typeof body.from === 'string' ? body.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 10) : '';
+  const note = clean(body.note, 120);
+  if (!from) return null;
+  if (body.topic === 'pk' || body.topic === 'stuck') {
+    if (!note) return null;
+    return { topic: body.topic, alert: { at: now, kind: body.topic, tone: body.topic === 'pk' ? 'bad' : 'warn', char: from, text: note } };
+  }
+  if (body.topic !== 'data') return null;
+  const d = isObj(body.data) ? body.data : {};
+  const dr = isObj(d.dragon) ? d.dragon : null;
+  const summary: InsightSummary = {
+    from, at: now, note,
+    dragon: dr && fin(dr.map, 0, 255) ? { map: dr.map, name: clean(dr.name, 24) || `mapa ${dr.map}`, n: fin(dr.n, 0, 1e6) ? dr.n : 0, share: fin(dr.share, 0, 1) ? dr.share : 0, scope: clean(dr.scope, 12) } : null,
+    hunt: [], thieves: [], lethal: [],
+  };
+  for (const h of list(d.hunt, 12)) {
+    if (isObj(h) && fin(h.map, 0, 255)) summary.hunt.push({ map: h.map, name: clean(h.name, 24) || `mapa ${h.map}`, minutes: fin(h.minutes, 0, 1e7) ? h.minutes : 0, boxes: fin(h.boxes, 0, 1e7) ? h.boxes : 0, factor: fin(h.factor, 0, 10) ? h.factor : 1 });
+  }
+  for (const t of list(d.thieves, 5)) {
+    const name = isObj(t) ? clean(t.name, 16) : '';
+    if (name && isObj(t) && fin(t.n, 0, 1e6)) summary.thieves.push({ name, n: t.n });
+  }
+  for (const l of list(d.lethal, 8)) {
+    if (!isObj(l) || !fin(l.map, 0, 255)) continue;
+    const cells = list(l.cells, 12).filter((c): c is string => typeof c === 'string' && /^\d{1,3},\d{1,3}$/.test(c));
+    summary.lethal.push({ map: l.map, name: clean(l.name, 24) || `mapa ${l.map}`, cells });
+  }
+  return { topic: 'data', summary };
+}
