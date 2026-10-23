@@ -7,6 +7,7 @@ import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { step, sendPickup } from './actions';
 import { itemInfo } from './panel-logic';
+import { snipeAction, snipeOn } from './snipe';
 import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
@@ -15,7 +16,7 @@ import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
-type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean; level?: number };
+type ScopedDrop = { seenAt?: number; id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean; level?: number };
 /** Juez opcional del equipo que cae (item-score.ts `makeDropJudge`). Vacío por defecto: nada cambia hasta que alguien lo conecte. */
 export const lootPolicy: { judge?: DropJudge } = {};
 export const drops = new Map<number, ScopedDrop>();
@@ -54,7 +55,7 @@ function parseDropsPacket(raw: any): ScopedDrop[] {
 export function watchDrops(): () => void {
   const onDrop = (raw: any) => {
     try {
-      for (const d of parseDropsPacket(raw)) drops.set(d.id, d);
+      for (const d of parseDropsPacket(raw)) drops.set(d.id, { ...d, seenAt: Date.now() });
     } catch (e) {
       log(`AVISO: no pude parsear un drop, lo ignoro: ${(e as Error).message}`);
     }
@@ -77,8 +78,18 @@ export function watchDrops(): () => void {
     const line = parseServerMessage(toBytes(raw));
     const lt = lootState.looting;
     if (!line || !lt || lt.pickAt == null || !/doesn't belong to you/i.test(line.text)) return;
-    foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
     const d = drops.get(lt.id) ?? lt.drop;
+    // Caja ajena reciente: se queda esperando adyacente para pedirla a los 10 s (snipe.ts); no se suelta.
+    const sd = drops.get(lt.id);
+    if (snipeOn() && sd && isBox(sd) && sd.seenAt != null && Date.now() - sd.seenAt <= SNIPE_HOLD_MAX_MS) {
+      if (!snipeIds.has(lt.id)) {
+        snipeIds.add(lt.id);
+        trackEvent('loot_foreign', `${sd.group}/${sd.num}`, sd.group, sd.num, { x: sd.x, y: sd.y, snipe: 1 });
+        decide(`Caja ajena (Id=${lt.id}): me quedo al lado y la pido pasados los 10 s.`);
+      }
+      return;
+    }
+    foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
     if (d) trackEvent('loot_foreign', `${d.group}/${d.num}`, d.group, d.num, { x: d.x, y: d.y });
     log(`El drop Id=${lt.id} es de otro: lo dejo y vuelvo a probar en ${FOREIGN_RETRY_MS / 1000} s si sigue ahí.`);
     lootState.looting = null;
@@ -112,6 +123,10 @@ const isBox = (d: { group: number; num: number }) => d.group === 14 && d.num ===
 // hasta FOREIGN_RETRY_MS después (por si queda libre). Insistir 20 s en plena invasión era perder dorados.
 const FOREIGN_RETRY_MS = 10_000;
 const foreignUntil = new Map<number, number>();
+// Cajas ajenas a esperar adyacente (snipe.ts) y el último pedido de cada una.
+const SNIPE_HOLD_MAX_MS = 14_000;
+const snipeIds = new Set<number>();
+const snipePickAt = new Map<number, number>();
 // Joyas, excelentes y equipo solo con lugar en el inventario (casillas libres de las 64): que siempre
 // entren las cajas, el zen y las pociones.
 const LOOT_GEAR_MIN_FREE = 12;
@@ -152,6 +167,7 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   }
   const radius = fresh && fightNear ? 1 : LOOT_RADIUS;
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
+  for (const id of snipeIds) if (!drops.has(id)) { snipeIds.delete(id); snipePickAt.delete(id); }
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
   const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
   const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
@@ -170,6 +186,22 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   if (lt.pickAt == null) {
     lootState.count++;
     log(`Levanto ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`);
+  }
+  if (snipeIds.has(d.id)) {
+    // Caja ajena: quieto y adyacente sin pedirla antes de los 9,5 s; pedirla en la ventana; pasados los 14 s, soltarla.
+    const act = snipeAction(now - (d.seenAt ?? now), snipePickAt.has(d.id) ? now - snipePickAt.get(d.id)! : null, Math.random());
+    if (act === 'giveup') {
+      snipeIds.delete(d.id);
+      snipePickAt.delete(d.id);
+      foreignUntil.set(d.id, now + FOREIGN_RETRY_MS);
+      lootState.looting = null;
+    } else if (act === 'pick') {
+      snipePickAt.set(d.id, now);
+      lt.pickAt = now;
+      sendPickup(d.id);
+    }
+    await sleep(100);
+    return true;
   }
   if (lt.pickAt == null || now - lt.pickAt >= PICKUP_RETRY_MS) {
     lt.pickAt = now;

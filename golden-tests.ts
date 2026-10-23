@@ -7,6 +7,7 @@ import { nextZone } from './zones';
 import { DRAGON_RUSH_MS, DragonFight, GOLDEN_RULE, GoldenRule, dragonRush, stickyGolden } from './golden';
 
 import { Finisher } from './finisher';
+import { SNIPE_FROM_MS, SNIPE_MIN_GAP_MS, SNIPE_TO_MS, snipeAction } from './snipe';
 import { AliveHistory, CROWD_DIVISOR, CROWD_MAX_DROP, dragonBonusFactor, pickHuntMap } from './panel-logic';
 import type { Invasion } from './panel-protocol';
 
@@ -142,6 +143,21 @@ const me = { x: 100, y: 100 };
   const mk = (now: number, dragonAt: number | undefined) => pickHuntMap({ invasion: inv(10, 29, 0), level: 400, dragonMap: 2, dragonAt, now });
   ok('pickHuntMap: bonus fresco → Devias; vencido a los 5 min → Lorencia (29 vivos)', (mk(10_000, 0) as any).hunt.map === 2 && (mk(300_000, 0) as any).hunt.map === 0);
   ok('pickHuntMap: sin dragonAt → como siempre', (mk(300_000, undefined) as any).hunt.map === 2);
+}
+{
+  // Reloj simulado: una caja ajena cae en t=0 y se simula un bucle de 100 ms.
+  const picks: number[] = [];
+  let last: number | null = null;
+  let gaveUp = -1;
+  for (let t = 1000; t <= 20_000 && gaveUp < 0; t += 100) {
+    const a = snipeAction(t, last == null ? null : t - last, (t / 100) % 10 / 10);
+    if (a === 'pick') { picks.push(t); last = t; }
+    if (a === 'giveup') gaveUp = t;
+  }
+  ok('snipe: ni un pedido antes de los 9,5 s', picks.length > 0 && picks[0] >= SNIPE_FROM_MS && picks[0] <= SNIPE_FROM_MS + 100, picks);
+  ok('snipe: separación >= 0,6 s entre pedidos (nunca más rápido que lo de siempre)', picks.every((p, i) => i === 0 || p - picks[i - 1] >= SNIPE_MIN_GAP_MS), picks);
+  ok('snipe: pedidos dentro de la ventana y se suelta a los 14 s', picks.at(-1)! <= SNIPE_TO_MS && gaveUp > SNIPE_TO_MS && gaveUp <= SNIPE_TO_MS + 100, { picks, gaveUp });
+  ok('snipe: varios pedidos en la ventana', picks.length >= 5, picks);
 }
 console.log(fails === 0 ? '\nTODOS LOS TESTS DE DORADOS PASARON' : `\n${fails} TEST(S) DE DORADOS FALLARON`);
 process.exit(fails ? 1 : 0);
