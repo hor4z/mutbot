@@ -644,20 +644,9 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
     if (m.phase === 'gather') return out;
   }
 
-  // El padrino se adapta al más débil: mientras algún protegido no pueda entrar al mapa siguiente de su ruta (Arena 2
-  // pide nivel 100), se queda cazando en el mejor mapa al que los protegidos sí entran. Con todos al nivel, vuelve a su ruta.
-  if (m.phase === 'follow' && P && wards.length) {
-    const minWard = Math.min(...wards.map((w) => w.level));
-    if (minWard >= FOLLOW_MISSION.ROUTE_FREE_LEVEL) m.pinWarp = undefined;
-    if (minWard < FOLLOW_MISSION.ROUTE_FREE_LEVEL) {
-      const opt = nurtureOptions(P.level, wards.map((w) => w.level))[0];
-      if (opt) {
-        m.pinWarp = opt.warp;
-        out.orders.set(pad, { kind: 'warp', warp: opt.warp, map: opt.map, delayMs: 0 });
-        note(P.char, `me quedo en ${opt.name} hasta que ${wards.find((w) => w.level === minWard)!.char} llegue al ${FOLLOW_MISSION.ROUTE_FREE_LEVEL}`);
-      }
-    }
-  }
+  // El padrino NO se adapta ni se fija en ningún mapa: hace su recorrido normal y el protegido lo sigue (idea del usuario:
+  // "cuando el fuerte pega la sombra va detrás"). Si el protegido no puede entrar a un mapa, espera en zona segura.
+  m.pinWarp = undefined;
 
   if (m.phase === 'retreat') {
     // El padrino sigue con lo suyo; los protegidos van a Lorencia (o se quedan quietos si no pueden).
