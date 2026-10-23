@@ -190,7 +190,6 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       if (!L) {
         if (o.kind === 'follow' && o.tight) {
           // Campaña de crianza: no lo veo, voy hacia donde la estación dice que está (sin pelear salvo defensa propia).
-          if (recentlyHit(ctx)) return false;
           // Lejos del padrino en el mismo mapa: en vez de caminar cientos de tiles, warp a la entrada más cercana a él
           // (Devias tiene 3: ahorra 100+ tiles por 2-2,5 mil zen). Una vez cada 3 min y solo si ahorra >= 60 tiles.
           if (o.at && dist(world, o.at) > 70 && !bot.pendingWarp && Date.now() - lastShortcutAt > 180_000) {
@@ -207,6 +206,7 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
               return false;
             }
           }
+          if (recentlyHit(ctx)) return false;
           if (o.at && dist(world, o.at) > 4) { bot.doing = 'escuadra: voy con el padrino'; await walkTowards(ctx, o.at.x, o.at.y); return true; }
           bot.doing = 'escuadra: espero al padrino';
           await sleep(humanPace(900));
