@@ -26,6 +26,7 @@ import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
 import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
 import { goldFeedHints } from './gold-feed';
+import { FightHeat, parseFight } from './fight-heat';
 import monstersData from './data/monsters.json';
 import { SweepPlanner, zonePrior } from './sweep';
 import { canFight, monsterCombat } from './power';
@@ -206,6 +207,14 @@ function hookAggro() {
   }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
     EventBus.on(ev, (raw: any) => {
+      const f = parseFight(toBytes(raw));
+      if (!f || f.attacker === (bot.playerId & 0x7fff)) return;
+      const a = world.players.get(f.attacker);
+      if (a && !isMate(a.name ?? '')) fightHeat.record(f.attacker, a.x, a.y, Date.now());
+    });
+  }
+  for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
+    EventBus.on(ev, (raw: any) => {
       const id = attackerOf(toBytes(raw), bot.playerId & 0x7fff);
       if (id == null) return;
       const now = Date.now();
@@ -215,6 +224,10 @@ function hookAggro() {
     });
   }
 }
+
+// Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
+const fightHeat = new FightHeat();
+let lastHeatLog = 0;
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
 export async function autonomousLoop(deadline: number): Promise<LoopResult> {
@@ -1051,6 +1064,18 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           if (fed.has(hint.key)) continue;
           fed.add(hint.key);
           spots.set(hint.key, { x: hint.x, y: hint.y, type: 0, at: hint.at });
+        }
+      }
+      // Varios jugadores peleando juntos a la vista (un dorado o un dragón que se están matando): se va para allá
+      // si no hay un dorado propio a la vista (fight-heat.ts).
+      if (!gold && !rush && world.map === hunting.hunt.map) {
+        const hs = fightHeat.hotspot(now);
+        if (hs && chebyshev(world.x, world.y, hs.x, hs.y) > 5) {
+          spots.set(-2_000_000 - (((hs.x >> 3) << 8) | (hs.y >> 3)), { x: hs.x, y: hs.y, type: 0, at: now });
+          if (now - lastHeatLog > 20_000) {
+            lastHeatLog = now;
+            decide(`Pelea de ${hs.attackers} jugadores en (${hs.x},${hs.y}): voy a mirar.`);
+          }
         }
       }
       if (gold && ctx.target !== gold.id) {
