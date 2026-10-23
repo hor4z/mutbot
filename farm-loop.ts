@@ -46,7 +46,7 @@ import { decide, journal, panelLog } from './journal';
 import { LEARN, routeTier, type Spot } from './learning';
 import { bagRoom, lootState, drops, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
-import { squadActive, squadStep } from './squad-client';
+import { squadActive, squadShadow, squadStep } from './squad-client';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
@@ -500,8 +500,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = Date.now();
     const sinceIn = Date.now() - Math.max(bot.inGameAt, bot.lastArrivalAt);
-    const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(Date.now(), BLIND_RECONNECT_MS) === 0;
-    if (noExp || (Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS)) {
+    const shadow = squadShadow();
+    const noExp = !shadow && farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(Date.now(), BLIND_RECONNECT_MS) === 0;
+    if (noExp || (!shadow && Date.now() - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS)) {
       bot.blind = true;
       decide(noExp
         ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto (sesión trabada).`
@@ -515,7 +516,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     for (const { payload } of goldReporter.update(world.map, [...world.npcs.values()].filter(isGolden).map((n) => ({ id: n.id, x: n.x, y: n.y, name: monsterName(n.type) })), Date.now())) publishGold(payload);
     // Vigía de trabas (watchdog.ts): sin exp, kills, movimiento ni objetivo nuevo por 4/8/12 min → diagnóstico y
     // remedio seguro (cada uno deja traza en Decisiones y en la base, evento `stuck`).
-    {
+    if (!shadow) {
       const nowW = Date.now();
       const hpPct = world.maxHp > 0 ? (world.hp / world.maxHp) * 100 : 100;
       const potions = [...world.inventory.values()].filter((it) => it.group === 14 && it.num >= 1 && it.num <= 3).length;

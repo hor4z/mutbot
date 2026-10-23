@@ -74,6 +74,12 @@ export function startSquadPolling() {
 }
 
 /** Escuadra con orden vigente (no `release`). */
+/** ¿Soy la sombra de alguien (seguir, esperar, retirada)? Entonces el vigía y la reconexión por "sin exp" no corren: parado cerca del padrino no hay exp ni objetivos y no es una traba. */
+export function squadShadow(): boolean {
+  const a = current;
+  return !!a && Date.now() <= a.expiresAt && (a.order.kind === 'follow' || a.order.kind === 'hold' || a.order.kind === 'idle' || a.order.kind === 'retreat');
+}
+
 export function squadActive(): boolean {
   return !!current && Date.now() <= current.expiresAt && current.order.kind !== 'release';
 }
