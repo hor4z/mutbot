@@ -266,6 +266,8 @@ export type Mission = {
   readyAt?: number;
   /** campaña: desde cuándo el padrino espera a su sombra (no farmea hasta tenerla al lado) */
   waitSince?: number;
+  /** campaña: protegidos que se retiraron a curarse (con poca vida) y desde cuándo */
+  resting?: Record<string, number>;
   /** campaña: el warp (spot) donde el padrino espera al más débil; los protegidos viajan a ESE mismo spot para caer pegados */
   pinWarp?: number;
   maxMs: number;
@@ -328,6 +330,9 @@ export const MISSION = {
  * Todo SUPUESTO sin medir en vivo (docs/escuadras.md).
  */
 export const FOLLOW_MISSION = {
+  /** Un protegido con menos de esto de vida se retira a Lorencia a recuperarse; vuelve con >= REST_BACK_PCT. */
+  REST_PCT: 35,
+  REST_BACK_PCT: 80,
   /** El padrino no farmea hasta tener a todos sus protegidos en su mapa y a <= esto. */
   TOGETHER_TILES: 14,
   /** Tope de la espera: si la sombra no llega (muerta, desconectada), el padrino sigue solo. */
@@ -693,8 +698,22 @@ function stepFollow(squad: Squad, m: Mission, snap: Snapshot, act: MemberSnap[],
   m.map = p.map;
   // Si el padrino espera en un spot fijado, los protegidos viajan a ESE spot (misma entrada: caen pegados, sin caminar).
   const target = (m.pinWarp != null ? squadMapByWarp(m.pinWarp) : null) ?? warpForMap(p.map);
+  m.resting ??= {};
   for (const w of wards) {
     const k = key(w.char);
+    // Poca vida (sin pociones): se retira a Lorencia (zona segura) y vuelve cuando se recupera.
+    if (w.hpPct > 0) {
+      if (w.hpPct < FOLLOW_MISSION.REST_PCT && !m.resting[k]) { m.resting[k] = now; out.events.push(`${w.char}: poca vida (${w.hpPct} %), se retira a Lorencia a recuperarse`); }
+      else if (w.hpPct >= FOLLOW_MISSION.REST_BACK_PCT && m.resting[k]) { delete m.resting[k]; out.events.push(`${w.char}: recuperado (${w.hpPct} %), vuelve con el padrino`); }
+    }
+    if (m.resting[k]) {
+      const town = squadMapByWarp(2)!;
+      if (w.map !== town.map && w.level >= town.reqLevel) {
+        m.warpDelays[k] ??= Math.round(MISSION.WARP_STAGGER_MS[0] + rand() * 3000);
+        out.orders.set(k, { kind: 'warp', warp: town.warp, map: town.map, delayMs: m.warpDelays[k] });
+      } else out.orders.set(k, { kind: 'idle', why: 'me recupero en Lorencia' });
+      continue;
+    }
     if (w.map === p.map) {
       m.lastShared = { map: p.map, x: p.x, y: p.y };
       delete m.warpDelays[k];
