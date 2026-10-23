@@ -300,6 +300,14 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   if (sibling) return { ok: false, msg: `la cuenta ${s.cfg.user} ya está jugando con ${sibling.cfg.char}: desconectalo primero` };
   const pass = db.passFor(s.cfg.char);
   if (!pass) return { ok: false, msg: `no tengo la clave de ${s.cfg.char} en la base` };
+  // Puerto del panel: si otro bot que ya corre (adoptado tras reiniciar la estación) usa el mismo, se toma el primero libre.
+  const busy = new Set([...slots.values()].filter((x) => x !== s && x.pid != null).flatMap((x) => [x.port, x.wsPort ?? -1]));
+  if (busy.has(s.port)) {
+    const all = new Set([...slots.values()].flatMap((x) => [x.port, x.wsPort ?? -1]));
+    let port = BOT_PORT_BASE;
+    while (all.has(port)) port++;
+    s.port = port;
+  }
   // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba
   // "fantasma" (sin muertes ni exp). Se espera RECONNECT_GAP_MS desde la desconexión y se conecta solo.
   const waitMs = s.stoppedAt + RECONNECT_GAP_MS - Date.now();
