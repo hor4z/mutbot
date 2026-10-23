@@ -30,6 +30,7 @@ import { drops } from './loot';
 import { EventBus } from './net/eventBus';
 import { PARTY_MATES } from './config';
 import { parsePositionFix } from './protocol097';
+import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
@@ -207,6 +208,8 @@ export function onMapArrival() {
 // Es lo que permite que el bot decida solo (pocarse, subir stats, etc.).
 // Se engancha una sola vez: los handlers del EventBus sobreviven a la reconexión.
 // ---------------------------------------------------------------------------
+// Vida de 16 bits que se da vuelta (health.ts): world.hp/maxHp quedan con la vida real estimada.
+const hpTracker = new HpTracker();
 export function trackWorld() {
   EventBus.on('CharacterLevelUpdate', (raw: any) => {
     const p = new CharacterLevelUpdatePacket(raw);
@@ -218,7 +221,13 @@ export function trackWorld() {
 
   EventBus.on('CurrentHealthAndShield', (raw: any) => {
     const p = new CurrentHealthAndShieldPacket(raw);
-    world.hp = p.Health;
+    const before = hpTracker.events;
+    world.hp = hpTracker.feed(p.Health, world.maxHp);
+    world.maxHp = hpTracker.maxFor(world.maxHp);
+    if (hpTracker.events !== before) {
+      log(`HP: la lectura de 16 bits se dio vuelta (${hpTracker.wraps ? 'pasó' : 'volvió abajo'} de 65.535): vida real ≈ ${world.hp}, máximo ≈ ${world.maxHp}.`);
+      trackEvent('hp_wrap', `${p.Health}`, world.hp, world.maxHp);
+    }
   });
 
   EventBus.on('CurrentManaAndAbility', (raw: any) => {
@@ -550,6 +559,7 @@ export async function selectCharacter(charListBytes: any) {
 
   const infoBytes = await waitFor('CharacterInformation');
   const info = parseCharacterInformation097(infoBytes);
+  hpTracker.reset();
   Object.assign(world, {
     x: info.x,
     y: info.y,

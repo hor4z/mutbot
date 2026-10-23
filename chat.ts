@@ -7,8 +7,10 @@ import { sendToGS } from './connection';
 import { EventBus } from './net/eventBus';
 import type { PanelCommand } from './panel-protocol';
 import { CHAT_MAX, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, type ChatLine } from './protocol097';
+import { decide } from './journal';
 import { dragonMapFromServerMessage, redDragonMapFromServerMessage } from './panel-logic';
-import { bot } from './state';
+import { SAY_COMMANDS } from './panel-protocol';
+import { bot, pkGuard } from './state';
 import { trackEvent } from './telemetry';
 import { log, toBytes } from './util';
 
@@ -36,11 +38,27 @@ export function watchChat() {
     // a leerlos (el mapa del Golden Dragon llega así a las :50).
     log(`Server: ${line.text}`);
     if (!/ entered the game\.$/.test(line.text)) trackEvent('server_msg', line.text);
+    // PK: el aviso abre el episodio de auto-recuperación (recovery.ts); el "cleaned" lo cierra.
+    const pk = pkGuard.onServerMessage(line.text, Date.now());
+    if (pk?.kind === 'pk-cleared') decide('PK limpio: el server confirmó /pkclear.');
     const dm = dragonMapFromServerMessage(line.text);
     if (dm != null) bot.dragonMap = { map: dm, at: Date.now() };
     const rm = redDragonMapFromServerMessage(line.text);
     if (rm != null) bot.redDragon = { map: rm, at: Date.now() };
   });
+}
+
+/**
+ * Comando del server que el bot manda SOLO (hoy `/pkclear`, ver recovery.ts): solo los de SAY_COMMANDS y
+ * respetando el gap de CHAT_SEND_GAP_MS con el chat del panel. false si todavía no toca (se reintenta).
+ */
+export function sendServerCommand(text: string, now = Date.now()): boolean {
+  if (!SAY_COMMANDS.includes(text) || !bot.inGameAt || now - lastSentAt < CHAT_SEND_GAP_MS) return false;
+  lastSentAt = now;
+  const bytes = buildPublicChat(bot.charName, text);
+  sendToGS(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  log(`Chat (automático): ${text}`);
+  return true;
 }
 
 /** Orden `say` del panel (ya validada por isPanelCommand). */

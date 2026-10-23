@@ -59,6 +59,21 @@ export function goldenZones(map: number, now = Date.now()): Zone[] {
   return goldCache.byMap.get(map) ?? [];
 }
 
+// Pesos por celda del recorrido (HuntExplorer.useTerrain): dónde se vieron dorados, para recorrer primero esas
+// celdas. Los dragones pesan 3×. Se recalcula solo cuando cambia la caché (la misma identidad mientras no).
+const weightMemo = new Map<number, { dragonAt: number; goldAt: number; w: Map<string, number> }>();
+export function zoneWeights(map: number, cell = 25, now = Date.now()): ReadonlyMap<string, number> {
+  const dz = dragonZones(map, now), gz = goldenZones(map, now);
+  const memo = weightMemo.get(map);
+  if (memo && memo.dragonAt === cache.at && memo.goldAt === goldCache.at) return memo.w;
+  const w = new Map<string, number>();
+  const add = (z: Zone, k: number) => { const key = `${Math.floor(z.x / cell)},${Math.floor(z.y / cell)}`; w.set(key, (w.get(key) ?? 0) + z.n * k); };
+  for (const z of gz) add(z, 1);
+  for (const z of dz) add(z, 3);
+  weightMemo.set(map, { dragonAt: cache.at, goldAt: goldCache.at, w });
+  return w;
+}
+
 /** Mapas con zonas conocidas (al menos `min`): ahí la cacería sabe a dónde ir. */
 export const KNOWN_ZONES_MIN = 3;
 export function mapsWithZones(maps: readonly number[], now = Date.now()): Set<number> {
