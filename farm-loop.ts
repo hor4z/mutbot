@@ -24,12 +24,13 @@ import { cornerStep, newCornerState, type CornerState } from './corner-step';
 import { EARLY, dist, leashedTarget } from './early';
 import { EarlyPlanner } from './early-step';
 import { DEFENSE, Defense } from './defense';
-import { GoldenRule, stickyGolden } from './golden';
+import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
+import monstersData from './data/monsters.json';
 import { canFight, monsterCombat } from './power';
 import { farmMiddleware, statPower } from './farm-middleware';
 import { ObserverTracker } from './observer';
 import { equipStep } from './equip';
-import { attackerOf, buildPartyInvite, ownAreaSkill, ownTargetedSkill } from './protocol097';
+import { attackerOf, buildPartyInvite, ownAreaSkill, ownTargetedSkill, parseHitDamage } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
 import { WARP_SPOTS, pinActive } from './route';
 import { readVault, runEquip } from './vault';
@@ -284,10 +285,25 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     lastHp = hp;
   };
 
+  // Datos de cada pelea con un dragón (golden.ts, DragonFight): evento `dragon_fight`.
+  const dragonFight = new DragonFight((t) => (monstersData as { Numb: number; HP: number }[]).find((m) => m.Numb === t)?.HP ?? null);
+  const trackFight = (rec: ReturnType<DragonFight['lost']>) => {
+    if (rec) trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map });
+  };
+  // ObjectHit (0x15 de 10 bytes): el daño que se ve sobre el dragón de la pelea (de cualquiera).
+  const onHitDamage = (raw: any) => {
+    const h = parseHitDamage(toBytes(raw));
+    if (h) dragonFight.damage(h.id, h.damage);
+  };
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
     const dead = world.npcs.get(p.KilledId & 0x7fff);
+    if (dead && DRAGON_TYPES.has(dead.type)) {
+      const kid0 = p.KillerId & 0x7fff;
+      const mine0 = kid0 === bot.playerId;
+      trackFight(dragonFight.killed(p.KilledId & 0x7fff, Date.now(), mine0 ? bot.charName : world.players.get(kid0)?.name ?? null, mine0));
+    }
     world.npcs.delete(p.KilledId & 0x7fff);
     ctx.npcs.delete(p.KilledId & 0x7fff);
     if ((p.KilledId & 0x7fff) === bot.playerId) {
@@ -348,6 +364,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
   };
   EventBus.on('ObjectGotKilled', onKilled);
+  EventBus.on('ObjectMoved', onHitDamage);
   EventBus.on('ExperienceGained', onExp);
   EventBus.on('CurrentHealthAndShield', onHp);
   const stopWatchingDrops = watchDrops();
@@ -946,6 +963,25 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // 8) Elegir / mantener objetivo: campamento (camp.ts) + exp/s (farming.ts).
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
     const hunting = bot.hunting;
+    // Dragones primero (golden.ts, dragonRush): en la ventana del aviso, sin dragón a la vista y con zona
+    // conocida a donde ir, ni dorados comunes nuevos ni recordados: directo a las zonas de dragones.
+    let rush = false;
+    if (hunting && world.map === hunting.hunt.map && bot.dragonMap) {
+      const dz = dragonZones(world.map);
+      const visited = hunting.zonesVisited;
+      rush = dragonRush({ now: Date.now(), announceAt: bot.dragonMap.at, huntMap: hunting.hunt.map, dragonMap: bot.dragonMap.map,
+        dragonVisible: [...ctx.npcs.values()].some((n) => DRAGON_TYPES.has(n.type)), hasZone: dz.some((z) => !visited?.has(`${z.x},${z.y}`)) });
+    }
+    {
+      // Datos de la pelea con el dragón más cercano a la vista (no cambia nada de lo que se hace).
+      let dr: ScopedNpc | null = null;
+      for (const n of ctx.npcs.values()) if (DRAGON_TYPES.has(n.type) && (!dr || chebyshev(world.x, world.y, n.x, n.y) < chebyshev(world.x, world.y, dr.x, dr.y))) dr = n;
+      const nowF = Date.now();
+      if (dr) {
+        trackFight(dragonFight.see(dr, nowF, bot.dragonMap && nowF - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.at : null));
+        dragonFight.players([...world.players.values()].filter((q) => !isMate(q.name ?? '')).map((q) => q.name));
+      } else if (dragonFight.expired(nowF)) trackFight(dragonFight.lost());
+    }
     if (hunting?.scout) {
       // Explorador: no pelea. Solo se defiende de lo que le pegó hace poco, a <= 2 tiles y que puede vencer.
       const nowS = Date.now();
@@ -967,7 +1003,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // Cacería: un dorado siempre manda sobre los comunes, pero con correa (stickyGolden): no se suelta
       // el que ya tiene el golpe salvo por un dragón. A los comunes, nunca.
       const now = Date.now();
-      const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t));
+      let gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t));
+      // En la carrera por el dragón solo se sigue con el común que ya tiene el golpe.
+      if (rush && gold && !DRAGON_TYPES.has(gold.type) && gold.id !== ctx.target) gold = null;
       const gd = gold ? chebyshev(world.x, world.y, gold.x, gold.y) : Infinity;
       // El dragón que se le está pegando sale un instante de la vista: no repartir el daño con un Goblin
       // cercano (lo vio el usuario, 2026-10-23); ir a donde estaba hasta DRAGON_MEMORY_MS.
@@ -1091,9 +1129,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
           ctx.lastCastAt = Date.now();
           ctx.skillsUsed++;
+          if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, ctx.lastCastAt);
           await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
+          if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, Date.now());
           await sleep(humanPace(ATTACK_PACE_MS));
         } else {
           await sleep(humanPace(SKILL_PACE_MS)); // sin maná para el skill: esperar en vez de pegar de lejos
@@ -1101,11 +1141,22 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         continue;
       }
       attackTarget = null; // fuera de alcance: el reloj de "no muere" vuelve a empezar al llegar
-      if (stuckCount >= 8) {
+      // Cazando un dorado: caminar con el camino del terreno (path.ts), no en línea recta contra la
+      // pared (2026-10-23: a 10 tiles de dos dragones y no llegó en 60 s); un dragón no se da por
+      // inalcanzable tan pronto (cae a comunes y pierde la caja).
+      const huntDr = !!bot.hunting && DRAGON_TYPES.has(t.type);
+      if (stuckCount >= (huntDr ? 24 : 8)) {
         log(`Objetivo ${target} inalcanzable, lo abandono.`);
         unreachable.add(target);
         ctx.target = null;
         stuckCount = 0;
+        continue;
+      }
+      if (bot.hunting && isGolden(t)) {
+        const bx = world.x;
+        const by = world.y;
+        await walkTowards(ctx, t.x, t.y);
+        stuckCount = world.x === bx && world.y === by ? stuckCount + 1 : 0;
         continue;
       }
       // Girar con lo que esté a <= 3 mientras se acerca (no frena la caminata).
@@ -1147,7 +1198,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       // se olvida. Si no hay ninguno, recorrer celdas.
       const spots = bot.hunting.spots;
       let mem: { id: number; x: number; y: number } | null = null;
-      if (!bot.hunting.scout && spots && world.map === bot.hunting.hunt.map) {
+      if (!bot.hunting.scout && spots && world.map === bot.hunting.hunt.map && !rush) {
         let md = Infinity;
         for (const [id, sp] of spots) {
           const d = chebyshev(world.x, world.y, sp.x, sp.y);
@@ -1263,6 +1314,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   }
 
   EventBus.off('ObjectGotKilled', onKilled);
+  EventBus.off('ObjectMoved', onHitDamage);
   EventBus.off('ExperienceGained', onExp);
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();

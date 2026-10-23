@@ -15,7 +15,7 @@ import {
   OpenNpcDialogPacket, NpcWindowResponsePacket, StoreItemListPacket,
   MoneyDropped075Packet,
 } from './packets';
-import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, ownAreaSkill, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, decodeItemDetail, ownTargetedSkill, isExcellentItemData, isObjectMovedPacket, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
+import { Backoff, CHAT_MAX, attackerOf, parsePositionFix, RECONNECT, buildPartyDecline, buildPartyInvite, buildPublicChat, ownAreaSkill, buildWhisper, parseChatMessage, parseServerMessage, decodeItem5, decodeItemDetail, ownTargetedSkill, isExcellentItemData, isObjectMovedPacket, parseHitDamage, parseInventory, parseItemAdded, parseItemDropRemoved, parseItemsDropped, parsePartyRequest } from './protocol097';
 import {
   TalkToNpcRequestPacket, SellItemToNpcRequestPacket, BuyItemFromNpcRequestPacket,
   CloseNpcRequestPacket,
@@ -200,6 +200,8 @@ ok('close req: len=3', closeReq.buffer.byteLength === 3,
   // 0x15: 8 bytes = movimiento; 10 bytes = daño de un golpe en 0.97d (no mover al monstruo).
   ok('0x15 de 8 bytes es ObjectMoved', isObjectMovedPacket(Uint8Array.from([0xc1, 8, 0x15, 0x03, 0x8e, 20, 40, 0])));
   ok('0x15 de 10 bytes es el daño (no movimiento)', !isObjectMovedPacket(Uint8Array.from([0xc1, 10, 0x15, 0x03, 0x8e, 0x14, 0x28, 0, 0, 0])));
+  ok('parseHitDamage: id y daño BE de un 0x15 de 10 bytes', (() => { const h = parseHitDamage(Uint8Array.from([0xc1, 10, 0x15, 0x03, 0x8e, 0x01, 0x28, 0, 0, 0])); return h?.id === 0x38e && h.damage === 296; })());
+  ok('parseHitDamage: el de 8 bytes (movimiento) no es daño', parseHitDamage(Uint8Array.from([0xc1, 8, 0x15, 0x03, 0x8e, 20, 40, 0])) === null);
   ok('ItemDropRemoved truncado: no lee fuera', parseItemDropRemoved(Uint8Array.from([0xc2, 0, 6, 0x21, 5, 0])).length === 0);
   const item = new Uint8Array(12);
   ok('ítem común: no excelente', !isExcellentItemData(item));
