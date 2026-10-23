@@ -14,11 +14,13 @@ import {
   Trophy,
   UserPlus,
   Dices,
+  Shield,
   ChevronLeft,
   KeyRound,
 } from "lucide-react";
 import type { CharClassKey, Routine, StationRequest } from "../../estacion-logic";
 import { Action, Badge, Choice, compact, fmt } from "./components";
+import { Squads } from "./Squads";
 import knight from "../../assets/ui/knight-alpha.webp";
 export type Character = {
   key: string;
@@ -607,6 +609,8 @@ export function Station() {
   const [selected, setSelected] = useState("");
   const [tab, setTab] = useState(() => read("estacion:tab", "panel"));
   const [open, setOpen] = useState(false);
+  // Vista de escuadras (Squads.tsx): reemplaza el contenido mientras está abierta.
+  const [squadsOpen, setSquadsOpen] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -707,6 +711,10 @@ export function Station() {
             </button>
           ))}
         </div>
+        <button className={`button manage-trigger ${squadsOpen ? "primary" : ""}`} onClick={() => setSquadsOpen(!squadsOpen)} aria-pressed={squadsOpen}>
+          <Shield size={16} />
+          <span>Escuadras</span>
+        </button>
         <Dialog.Root open={open} onOpenChange={setOpen}>
           <Dialog.Trigger className="button manage-trigger">
             <Users size={16} />
@@ -796,7 +804,11 @@ export function Station() {
           {error}
         </div>
       )}
-      {!c ? (
+      {squadsOpen ? (
+        <div className="station-content">
+          <Squads />
+        </div>
+      ) : !c ? (
         <div className="station-content">
           {acc ? (
             <CharacterPicker account={acc} onBack={() => setAccount("")} onPick={pick} act={act} />

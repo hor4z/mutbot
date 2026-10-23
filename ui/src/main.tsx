@@ -6,7 +6,8 @@ import "@fontsource/geist/latin-700.css";
 import "@fontsource/geist-mono/latin-400.css";
 import { Station } from "./Station";
 import { Panel } from "./Panel";
+import { SquadsDemo } from "./Squads";
 import "./style.css";
 createRoot(document.getElementById("root")!).render(
-  document.body.dataset.surface === "panel" ? <Panel /> : <Station />,
+  document.body.dataset.surface === "panel" ? <Panel /> : new URLSearchParams(location.search).has("demo") ? <SquadsDemo /> : <Station />,
 );

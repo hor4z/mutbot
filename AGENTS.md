@@ -25,7 +25,7 @@ Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
 
 ```bash
 bun install
-bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion
+bun run test        # tests offline (no tocan el server): packet, learning, explore, farming, camp, corner, early, golden, defense, panel, estacion, party, formation, squad
 bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
@@ -81,6 +81,10 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
 | `ui/` | La interfaz (React + Vite, radar Three.js). **`panel.html` y `estacion.html` se generan** con `bun run ui:build`: editar `ui/src`, no los HTML. Ver `ui/README.md`. |
 | `radar-assets.ts` | Sirve los archivos del radar (`/radar-assets/...`, solo lectura, nombres de la lista; CORS solo para la estación y los puertos de los bots). Los archivos (`assets/radar/`, 91 MB del cliente) no van al repo: `bun run ui:maps`. |
+| `squad.ts` | Escuadras (lógica pura, la usa la estación): roles por clase, misiones explorar/cazar dorados/crianza como máquinas de estados, abortos, órdenes firmadas (HMAC), `SquadBook` y el contrato `squad-*`. Tests en `squad-tests.ts`. |
+| `party.ts` / `formation.ts` | A quién se acepta en party y quién invita a quién (con espera), lista de la party; seguir al líder con correa y sin amontonarse. Tests en `party-tests.ts` y `formation-tests.ts`. |
+| `squad-client.ts` | El bot obedece a la estación: consulta `/api/squad`, verifica la firma y ejecuta (viaje, ir a, seguir, cobrar, retirada, invitar, buffs). Sin `MUBOT_SQUAD_KEY` no hace nada. |
+| `squad-gear.ts` / `squad-accounts.ts` | Alas por clase y su valor; plan de cuentas con ritmo humano (solo si el usuario lo dispara). |
 | `ws-server.ts` | Server del panel de cada bot detrás de `--ws-port` (solo 127.0.0.1). |
 | `panel.html` / `panel-protocol.ts` / `panel-logic.ts` | El panel del bot, su contrato y la lógica pura (0x91, 0xFD, tickets, ciclos, cacería, señales de dorados). |
 | `*-tests.ts` | Tests offline de cada módulo (sin red, reloj simulado, dir temporal). |
@@ -614,6 +618,31 @@ Lo que hacía rápido al agente del navegador, enganchado en `farm-loop.ts`:
 - **Rival del top cerca** (`rivals.ts`: top 20 del ranking de la base, refresco cada 10 min): a ≤ 10 tiles se anuncia en Decisiones (cada 5 min); el mago le disputa con Decay el grupo a **cualquier rival** a ≤ 10 de Horaz (o de ella si no lo ve) (`contestTarget`, sin atacarlo; **nunca** apunta a monstruos a ≤ 4 + radio del giro de Horaz, para no sacarle kills a él; usuario: "que Melu moleste donde pegue él o cualquiera que esté cerca de Horaz") y el prioritario, sin nada a tiro, ocupa el lugar que ese rival dejó en la esquina (15 s a 3 min después de irse, ej. reseteando). Nunca se ataca ni se persigue al rival.
 - **Cazador automático** (`autoHuntChoice` / `pickHuntMap`, `panel-logic.ts`; `--no-auto-hunt` lo apaga): con la invasión dorada activa (0xFD de hace < 2 min) y nivel 380 o más, sale a cazar solo al mejor mapa: vivos (tope 30) × valor de sus cajas (Noria 1, Lorencia y Devias 2, Atlans 3,5, Tarkan 4), más un bonus para el mapa del Golden Dragon, que el server avisa a las :50 con `[Devias] Golden invasion!` (`dragonMapFromServerMessage`, `bot.dragonMap`). Sigue en el mapa hasta que quede en **0** (usuario: "hasta que no quede ninguno, prioridad máxima"); se va antes solo si pasan 2 min sin ver un dorado y otro mapa tiene más vivos (`huntDryOut`). También corta con la invasión terminada o a los 15 min. Cada corte queda en la base (`hunt_end`: mapa, dorados vistos, minutos), y **encadena** el siguiente mapa que no haya hecho (el 2026-10-23 Devias se vació en 3 min con Noria en 38). Un mapa sin zonas conocidas (`mapsWithZones`, `zones.ts`: celdas donde se vio cualquier dorado, de `golden_seen`) vale ×0,25, salvo el del dragón: sin zonas recorre a ciegas y da vueltas (Atlans). Cazando va primero a las zonas de dragones y después a las de cualquier dorado; si el dragón al que le pega sale de la vista, va 6 s a donde estaba en vez de repartir el daño con otro dorado. Una caja de otro ("doesn't belong to you") se suelta ya y se reintenta a los 10 s. Cazando no pelea con comunes ni tira el skill de área en el camino (frenan). A la base: `golden_kill` (cada dorado que muere a la vista y quién lo mató), `loot_ok` y `loot_foreign` (levantado de verdad o de otro). Entre :30 y :05 no resetea (llegar a la invasión en nivel 400). Contra los dorados, correa (`stickyGolden`, `golden.ts`): no suelta al que le pega salvo por un dragón; y el skill más fuerte a un objetivo (`goldenSkill`, `combat.ts`: Death Stab 43, si no Rageful Blow 42, respetando el nivel mínimo 160/170 del Blade Knight). El caballero mantiene Swell Life (48) cada ~55 s. Los avisos del server van al log (`Server: …`) y a la base (`server_msg`); "The item is still falling" y "This item doesn't belong to you" son los 2 s de espera y la caja de otro (la del que más daño hizo).
 - **Reparto de puntos** (`capStats`): tope de 65535 por stat; lo que no entra va a agilidad y después a vitalidad. Con todo en el tope no se reparte.
+
+## Escuadras (grupos de hasta 5 con misiones)
+
+Diseño, hechos con fuente y supuestos: **[docs/escuadras.md](docs/escuadras.md)**. Resumen:
+
+- **Solo la estación manda.** Genera una clave (`~/.mubot/squad.key`), se la pasa por entorno a los bots que lanza
+  (`MUBOT_SQUAD_KEY`) y les sirve una asignación firmada por personaje en `GET /api/squad?char=` (sin `Origin`, loopback,
+  vigencia 20 s). Un bot sin clave (lanzado antes, como Hume hoy) **no obedece**; la tarjeta lo marca. Con escuadra
+  vigente, el bot acepta party **solo** de miembros de la lista firmada (`world.ts` → `squadPartyDecision`).
+- **Nada arranca solo.** `POST /api/do` (mismo `Origin`/JSON de siempre) con `squad-create`, `squad-mission` (exige
+  `confirm: true`), `squad-abort`, `squad-disband` y `squad-accounts` (`plan` / `start` / `stop`); `parseStationRequest`
+  los valida estricto. Al terminar una misión los bots reciben `release` y vuelven a su rutina; no se encadenan.
+- **Enganche mínimo:** `farm-loop.ts` (una línea tras la orden `warp` pendiente: `squadStep`), `world.ts` (decisión de party
+  y lista), `headless-bot.ts` (`startSquadPolling`), `estacion.ts` (bloque "Escuadras": libro, clave, `/api/squad`,
+  `/api/squads`, tick cada 2 s, plan de cuentas) y `ui/src/Squads.tsx` (botón "Escuadras" en la barra; `?demo` abre la
+  tarjeta con datos de mentira, sin tocar la estación).
+- **Misiones:** explorar (celdas repartidas, uno al frente, converge al hallazgo), cazar dorados (todos sobre el mismo
+  `focus`, tanque/daño/apoyo), crianza (padrino con su rutina y protegidos que cobran a salvo). Retirada por muertes,
+  vida baja, jugador hostil (sin fuente todavía), miembro perdido o tiempo.
+- **Crianza con Hume de padrino:** solo cuando el usuario la ordena, y solo si Hume corre con la clave.
+- **Ritmos humanos intactos:** el viaje sale escalonado (2-22 s al azar por miembro), el seguimiento reacciona con
+  retraso y varía su lugar, todo el movimiento va por `walkTowards`/`humanPace` y las cuentas nuevas salen cada 12-40 min
+  (máx. 2 por hora). Nada de esto busca esquivar el anti-cheat ni la moderación.
+- **Sin verificar en vivo:** PartyList, salir de la party, buffs sobre aliados, y todo el comportamiento contra el server
+  (los tests son offline con reloj simulado).
 
 ## Datos y aprendizaje (ClickHouse local)
 
