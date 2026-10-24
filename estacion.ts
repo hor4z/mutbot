@@ -17,6 +17,8 @@
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
+import { statPower } from './util';
+import { altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
@@ -458,18 +460,36 @@ function keepAlive() {
 }
 setInterval(keepAlive, 10_000);
 
-// Orquestador: el más fuerte de los conectados (resets × 1000 + nivel) es el líder; los demás con una ventaja de al menos
-// SHADOW_MARGIN lo siguen como sombra por todos los mapas, salvo los que el usuario apagó (`shadowOff`). Cada segundo la estación
+// Altas que llegan por el worker (workers/edge): MUBOT_ALTA_URL en .env.alta; claves en ~/.mubot/alta/ (scripts/alta-keys.ts).
+let altaUrl = '';
+try {
+  altaUrl = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8')).MUBOT_ALTA_URL ?? '';
+  if (altaUrl) startAltaSync({
+    url: altaUrl,
+    addChar: (u, p, c) => {
+      const why = db.addChar(u, p, c);
+      addAlert({ at: Date.now(), kind: 'status', tone: why ? 'warn' : 'good', char: c, text: why ? `No se pudo agregar a ${c}: ${why}` : `${c} agregado a la estación (cuenta ${u}): ya está en la lista` });
+      return why;
+    },
+    onAdded: refreshSlots,
+    say,
+  });
+} catch { /* sin .env.alta: no hay altas remotas */ }
+
+// Orquestador: el más fuerte de los conectados (suma de stats, util.statPower) es el líder; los que tienen menos de la mitad de su
+// fuerza lo siguen como sombra por todos los mapas (son demasiado débiles para farmear solos), salvo los que el usuario apagó
+// (`shadowOff`). Ni el nivel ni los resets cuentan (nivel 100 con 200 resets no es nivel 100 con 0): con fuerza parecida conviene
+// cooperar (cada uno en su spot o juntos en party) y no quedarse de acompañante. Cada segundo la estación
 // manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
-const SHADOW_MARGIN = 60;
+const SHADOW_POWER_RATIO = 0.5;
 const shadowOff = new Set<string>();
 const shadowOf = new Map<string, string>();
 function orchestrate() {
   const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
-  const power = (s: Slot) => (s.state!.char.resets ?? 0) * 1000 + s.state!.char.level;
+  const power = (s: Slot) => statPower(s.state!.char.stats);
   const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
-  for (const s of on) if (leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(leader) - power(s) >= SHADOW_MARGIN) shadowOf.set(s.cfg.key, leader.cfg.char);
+  for (const s of on) if (leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
   // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
   for (const s of on) {
     const mine = [...shadowOf].filter(([, l]) => l === s.cfg.char).map(([k]) => slots.get(k)!.cfg.char);
@@ -584,6 +604,31 @@ Bun.serve({
       if (r.action === 'connect') { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
       if (r.action === 'disconnect') { wanted.delete(s.cfg.key); saveWanted(); }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
+      return json(res, res.ok ? 200 : 409);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/alta') {
+      // Alta desde el panel: se cifra acá y pasa por el worker (la clave nunca llega al navegador del worker ni se guarda en claro).
+      const origin = req.headers.get('origin');
+      if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
+      if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
+      if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
+      const body = await req.text();
+      if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; create?: unknown };
+      try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
+      if (typeof raw.user !== 'string' || typeof raw.pass !== 'string' || typeof raw.char !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
+      const input = { user: raw.user, pass: raw.pass, char: raw.char };
+      const bad = altaProblem(input);
+      if (bad) return json({ ok: false, msg: bad }, 409);
+      // create: primero se crea la cuenta en el juego (por el worker); si ya existía, se desmarca y solo se da de alta.
+      if (raw.create === true) {
+        const made = await registerAccount(altaUrl, input);
+        if (!made.ok) return json(made, 409);
+        say(`cuenta ${input.user} creada en el juego`);
+        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: input.char, text: `Cuenta ${input.user} creada en el juego. Falta crear el personaje ${input.char} en el cliente.` });
+      }
+      const res = await submitAlta(altaUrl, input);
+      if (res.ok && raw.create === true) res.msg = `Cuenta creada. Falta crear el personaje ${input.char} en el cliente del juego (con la clase que quieras): la estación ya la tiene en la lista.`;
       return json(res, res.ok ? 200 : 409);
     }
     return new Response('No.', { status: 405 });

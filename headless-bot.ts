@@ -161,6 +161,7 @@ async function main() {
   while (true) {
     const t0 = Date.now();
     let alreadyConnected = false;
+    let whyOff = '';
     try {
       sessions++;
       const r = await session(deadline);
@@ -186,6 +187,10 @@ async function main() {
         process.exit(EXIT_IN_USE);
       }
       log(`Sesión #${sessions} terminó con error: ${(e as Error).message}`);
+      // Lo que ve el panel mientras espera para reintentar (la estación lo muestra en la tarjeta).
+      whyOff = e instanceof LoginError
+        ? e.result === LoginResponseLoginResultEnum.ServerIsFull ? 'Servidor lleno' : `Login rechazado (${LoginResponseLoginResultEnum[e.result] ?? e.result})`
+        : 'Sin conexión con el servidor';
     }
     first = false;
     closeSockets();
@@ -195,6 +200,7 @@ async function main() {
     bot.blind = false;
     if (deadline && Date.now() + wait >= deadline) break;
     log(`Reconecto en ${Math.round(wait / 1000)} s (sesión #${sessions} duró ${Math.round((Date.now() - t0) / 1000)} s).`);
+    if (whyOff) bot.doing = `${whyOff}: reintento en ${Math.round(wait / 1000)} s`;
     await sleep(wait);
   }
 

@@ -20,7 +20,7 @@ interfaz (ui/): lista + mapas en vivo + mensajes        ClickHouse (db/): histor
 | `farm-loop.ts` | **El cerebro.** Un tick = una decisión. Ver sección 2. |
 | `hunt.ts` | Cacería de dorados: arrancar con la invasión (0xFD) o un aviso, viajar, elegir dorado, recorrer el mapa, encadenar. |
 | `corner.ts` | La esquina de Arena 2 (mejor spot conocido, ~300-550M exp/min): viajar, camino, objetivo dentro del radio. |
-| `help.ts` | Party: el más fuerte invita al compañero cercano. |
+| `help.ts` | Party: invita el más fuerte (por stats); si pasan 40 s sin party invita también el más débil (los roles se invierten con los resets). Reintenta rápido (15 s x4) y acepta resolviendo el nombre al responder. |
 | `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
 | `route.ts` + `learning.ts` | Ruta fija por tramo de nivel (`maybeChangeSpot`), warps, lo aprendido por personaje (`~/.mubot/learning.json`). |
 | `farm-middleware.ts` + `power.ts` | Modelo de poder: ¿puede este personaje con este monstruo / mapa? Decide si es "limitado" y qué mapa le sirve. |
@@ -62,8 +62,8 @@ En orden; cada paso puede cortar el tick con `continue`:
 - **Canal directo entre bots (`bus.ts`, UDP en loopback):** cada bot escucha en su puerto (`puerto de su panel + 300`) y manda a los
   demás su posición 4 veces por segundo y, al instante, cada dorado que ve. Sin servidor en el medio ni consulta periódica
   (latencia de milisegundos). La estación escucha en el 9090 solo para mostrar los avisos en Mensajes.
-- **Orquestador (en `estacion.ts`, cada segundo):** el más fuerte de los conectados (resets × 1000 + nivel) es el **líder**; los que
-  le llevan al menos 60 de poder son su **sombra**, salvo los que el usuario apague (casilla "Sombra de X"). Manda a cada uno por
+- **Orquestador (en `estacion.ts`, cada segundo):** el más fuerte de los conectados (suma de stats: fuerza+agilidad+vida+energía) es el **líder**; los que
+  tienen menos de la mitad de su fuerza (el nivel y los resets no cuentan) son su **sombra**; con una fuerza parecida cooperan, salvo los que el usuario apague (casilla "Sombra de X"). Manda a cada uno por
   el canal `{l: a quién sigue, s: quiénes lo siguen}`. El bot obedece mientras la orden llegue (3 s); si deja de llegar, vuelve a
   decidir solo.
 - **La sombra (`place.ts`):** sigue al líder por todos los mapas, pero solo si él está en la esquina (nivel >= 100) o cazando. Va a

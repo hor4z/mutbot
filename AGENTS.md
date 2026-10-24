@@ -52,8 +52,9 @@ la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cue
 |---|---|
 | `headless-bot.ts` | Entrada del bot: flags (cabecera), panel, `main`/`session` con reconexión y backoff, señales. |
 | `farm-loop.ts` | El loop: ciego/trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda > reset > ruta > loot > objetivo > pelear. |
-| `help.ts` | Party: el más fuerte invita al compañero cercano. |
+| `help.ts` | Party: invita el más fuerte (por stats); si pasan 40 s sin party invita también el más débil (los roles se invierten con los resets). Reintenta rápido (15 s x4) y acepta resolviendo el nombre al responder. |
 | `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
+| `alta-sync.ts` | Altas por el worker: la estación trae cada minuto las cuentas cifradas de `workers/edge`, las descifra y las suma a la base; también cifra/envía las del panel y crea la cuenta en el juego por el worker. |
 | `state.ts` / `config.ts` | Estado compartido (`world`, `bot`, `learned`) y flags/ritmos humanos. |
 | `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
 | `combat.ts` / `loot.ts` / `progress.ts` | Skills y pociones, drops, reparto de puntos y `/reset`. |
@@ -395,6 +396,21 @@ el estado real del server, que es más confiable que cualquier reimplementación
 packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
 camino corto. No se usa ahora porque no acepta control externo: las decisiones
 quedan fijas en el C#.
+## Worker de Cloudflare (`workers/edge`, monorepo con Bun workspaces)
+
+El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un worker de Cloudflare. `bun run tsc` chequea los dos.
+- **Alta de cuentas:** el panel ("+ Agregar cuenta") manda usuario, personaje y clave a la estación (`POST /api/alta`, solo con el Origin
+  de la propia estación); ella los cifra con la clave pública del worker (RSA-OAEP) y los deja en su cola (KV). Con "Crear la cuenta en
+  el juego" marcado, primero le pide al worker que registre la cuenta (`/api/register` del servidor; ahí el worker ve la clave en claro
+  por TLS, no la guarda; tope de 5 por hora). Después la estación toma el alta, la descifra con su clave privada
+  (`~/.mubot/alta/private.jwk`) y hace `db.addChar`. El personaje con su clase se crea una vez en el cliente del juego: el bot no crea personajes.
+- **Proxy WebSocket:** `wss://<worker>/p/<PROXY_TOKEN>/ws?host=&port=` reenvía solo a `ALLOWED_HOSTS`. Los bots no lo usan por defecto
+  (`MUBOT_PROXY` lo activa).
+- **Secretos:** `bun run alta:keys` genera claves y tokens en `~/.mubot/alta/` (0600, no los imprime); `MUBOT_ALTA_URL` va en `.env.alta`
+  (git lo ignora). Pasos de despliegue en `workers/edge/README.md`.
+- **Límite del servidor:** deja 2 conexiones a la vez (`ServerIsFull` al tercero). El panel muestra el motivo en la tarjeta ("Servidor
+  lleno: reintento en N s") y no dibuja el mapa de un personaje que todavía no entró al juego.
+
 ## Datos y aprendizaje (ClickHouse local)
 
 - `bun run db:up` levanta ClickHouse en Docker (`db/docker-compose.yml`): solo en `127.0.0.1:8123`, datos

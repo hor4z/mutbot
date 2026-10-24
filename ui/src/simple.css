@@ -55,3 +55,16 @@
 .simple-msg.bad time { color: #ff6b6b; opacity: 1; }
 
 .simple-shadow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; opacity: .85; cursor: pointer; }
+
+.simple-add { border: 1px dashed rgba(255,255,255,.25); background: transparent; color: inherit; border-radius: 10px; padding: 9px 12px; font-size: 13px; cursor: pointer; }
+.simple-add:hover { background: rgba(255,255,255,.05); }
+.simple-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0,0,0,.6); padding: 16px; }
+.simple-modal-box { width: min(380px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 12px; background: #1a1922; border: 1px solid rgba(255,255,255,.12); }
+.simple-modal-box h2 { margin: 0; font-size: 15px; opacity: 1; }
+.simple-modal-box small { opacity: .65; font-size: 12px; line-height: 1.35; }
+.simple-modal-box label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; opacity: .9; }
+.simple-modal-box input { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: inherit; font: inherit; }
+.simple-ok { background: rgba(76,209,138,.15); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.simple-modal-box label.simple-check { flex-direction: row; align-items: center; gap: 8px; }
+.simple-modal-box label.simple-check input { width: auto; }
+.simple-wait { color: #e6b450; white-space: normal; }

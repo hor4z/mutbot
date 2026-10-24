@@ -89,6 +89,17 @@ async function post(body: StationRequest): Promise<Result> {
   }
 }
 
+/** POST /api/alta: la estación cifra los datos y los manda por el worker. */
+export async function postAlta(a: { user: string; char: string; pass: string; create: boolean }): Promise<Result> {
+  try {
+    const r = await fetch("/api/alta", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(a) });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok && j.ok !== false, msg: j.msg ?? (r.ok ? "Listo." : `La estación rechazó el alta (${r.status}).`) };
+  } catch {
+    return { ok: false, msg: "La estación no contesta." };
+  }
+}
+
 export type Actions = Record<"connect" | "disconnect" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;
 };
