@@ -31,5 +31,3 @@
 .maponly { height: 100vh; }
 .maponly .radar { height: 100%; }
 @media (max-width: 800px) { .simple { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
-/* Mapa solo: sin controles, capas, brújula ni leyenda; queda el mapa, el título y lo que hace. */
-.maponly .hud-map-controls, .maponly .hud-toolbar, .maponly .hud-compass, .maponly .hud-legend, .maponly .hud-mini { display: none !important; }
