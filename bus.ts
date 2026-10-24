@@ -15,7 +15,7 @@ const STATE_EVERY_MS = 250;
 
 const members = new Map<string, TeamMember>();
 // Orden de la estación (orquestador): a quién seguir. Vale mientras llegue; si deja de llegar, el bot vuelve a decidir solo.
-let directive: { leader: string; at: number } | null = null;
+let directive: { leader: string; shadows: string[]; at: number } | null = null;
 const DIRECTIVE_FRESH_MS = 3000;
 const STATION_PORT = Number(process.env.MUBOT_BUS_STATION) || 9090;
 let notices: GoldNotice[] = [];
@@ -31,7 +31,9 @@ function onPacket(buf: Uint8Array, fromPort: number) {
   try { m = JSON.parse(Buffer.from(buf).toString('utf8')); } catch { return; }
   // Las órdenes solo valen si salen del puerto de la estación (loopback: ningún otro programa del usuario las manda).
   if (m.t === 'o' && fromPort === STATION_PORT) {
-    directive = typeof m.l === 'string' && name(m.l) ? { leader: m.l, at: Date.now() } : null;
+    // l = a quién sigo (o null); s = quiénes me siguen a mí.
+    const shadows = Array.isArray(m.s) ? m.s.filter(name) : [];
+    directive = { leader: typeof m.l === 'string' && name(m.l) ? m.l : '', shadows, at: Date.now() };
     return;
   }
   if (!name(m.c) || m.c.toLowerCase() === bot.charName.toLowerCase()) return;
@@ -89,6 +91,13 @@ export function drainGold(): GoldNotice[] {
 
 /** El compañero al que la estación me mandó seguir (si la orden es reciente y lo veo), o null. */
 export function directedLeader(): TeamMember | null {
-  if (!directive || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return null;
+  if (!directive?.leader || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return null;
   return teammates().find((m) => m.char.toLowerCase() === directive!.leader.toLowerCase()) ?? null;
+}
+
+/** Los compañeros que la estación mandó a seguirme (los que veo). */
+export function myShadows(): TeamMember[] {
+  if (!directive || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return [];
+  const names = new Set(directive.shadows.map((s) => s.toLowerCase()));
+  return teammates().filter((m) => names.has(m.char.toLowerCase()));
 }

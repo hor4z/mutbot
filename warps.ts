@@ -16,9 +16,9 @@ export const WARPS: readonly Warp[] = [
   { index: 7, name: 'Devias 4', reqLevel: 20, map: 2, arrival: { x: 70, y: 179 } },
   { index: 11, name: 'Atlans', reqLevel: 70, map: 7 },
   { index: 21, name: 'Tarkan', reqLevel: 140, map: 8 },
-  { index: 24, name: 'Arena 2', reqLevel: 100, map: 83 },
-  { index: 25, name: 'Arena 3', reqLevel: 200, map: 84 },
-  { index: 26, name: 'Arena 4', reqLevel: 300, map: 85 },
+  { index: 24, name: 'Arena 2', reqLevel: 100, map: 83, arrival: { x: 61, y: 114 } },
+  { index: 25, name: 'Arena 3', reqLevel: 200, map: 84, arrival: { x: 61, y: 114 } },
+  { index: 26, name: 'Arena 4', reqLevel: 300, map: 85, arrival: { x: 61, y: 114 } },
   { index: 27, name: 'Aida', reqLevel: 140, map: 33 },
   { index: 28, name: 'Aida 2', reqLevel: 170, map: 33 },
 ];

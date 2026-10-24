@@ -405,6 +405,55 @@ const BUS_STATION_PORT = 9090;
 const busPort = (s: Slot) => s.port + 300;
 const goldShown = new Map<string, number>();
 
+// --- Que sigan vivos (de noche, sin nadie mirando) --------------------------------------------------------------
+// `wanted` = los personajes que el usuario conectó (y los que ya corrían al arrancar la estación). Si uno cae, se reconecta con
+// espera creciente (30 s, 1 min, 2 min... hasta 10 min); si lleva 10 min sin sumar exp ni moverse, se reinicia. Un desconectado a
+// mano deja de ser deseado. Cuentas bloqueadas, "abierta en otro lado" y fallos de login no se reintentan.
+const WANTED_FILE = join(homedir(), '.mubot', 'wanted.json');
+const wanted = new Set<string>((() => { try { return JSON.parse(readFileSync(WANTED_FILE, 'utf8')) as string[]; } catch { return []; } })());
+const saveWanted = () => { try { writeFileSync(WANTED_FILE, JSON.stringify([...wanted])); } catch { /* sin disco: no es grave */ } };
+const retry = new Map<string, { at: number; n: number; okSince: number }>();
+const lastProgress = new Map<string, { sig: string; at: number }>();
+const FROZEN_RESTART_MS = 10 * 60_000;
+function keepAlive() {
+  const now = Date.now();
+  for (const s of slots.values()) {
+    const k = s.cfg.key;
+    if (s.pid != null && s.status === 'on' && !wanted.has(k)) { wanted.add(k); saveWanted(); }
+    if (!wanted.has(k)) continue;
+    const r = retry.get(k) ?? { at: 0, n: 0, okSince: 0 };
+    if (s.pid == null) {
+      lastProgress.delete(k);
+      r.okSince = 0;
+      retry.set(k, r);
+      if (s.status === 'failed' || s.status === 'in-use' || s.cfg.status === 'blocked' || s.connectTimer) continue;
+      if (now - r.at < Math.min(10 * 60_000, 30_000 * 2 ** r.n)) continue;
+      r.at = now;
+      r.n++;
+      say(`${s.cfg.char} no está conectado y lo quiero vivo: reconecto (intento ${r.n})`);
+      addAlert({ at: now, kind: 'status', tone: 'warn', char: s.cfg.char, text: `${s.cfg.char} se había caído: lo reconecto (intento ${r.n})` });
+      connect(s, { kind: 'farm' });
+      continue;
+    }
+    if (s.status !== 'on' || !s.state) continue;
+    // Sano 10 min seguidos: se perdona el historial de caídas.
+    if (!r.okSince) r.okSince = now;
+    if (now - r.okSince > 10 * 60_000) r.n = 0;
+    retry.set(k, r);
+    if (s.state.mode === 'paused' || s.state.mode === 'connecting') { lastProgress.delete(k); continue; }
+    const sig = `${s.state.session?.exp ?? 0}|${s.state.where.map}|${s.state.where.x}|${s.state.where.y}`;
+    const p = lastProgress.get(k);
+    if (!p || p.sig !== sig) { lastProgress.set(k, { sig, at: now }); continue; }
+    if (now - p.at > FROZEN_RESTART_MS) {
+      say(`${s.cfg.char} lleva ${FROZEN_RESTART_MS / 60_000} min sin sumar exp ni moverse: lo reinicio`);
+      addAlert({ at: now, kind: 'stuck', tone: 'bad', char: s.cfg.char, text: `${s.cfg.char} estaba congelado ${FROZEN_RESTART_MS / 60_000} min: lo reinicio` });
+      lastProgress.delete(k);
+      disconnect(s);
+    }
+  }
+}
+setInterval(keepAlive, 10_000);
+
 // Orquestador: el más fuerte de los conectados (resets × 1000 + nivel) es el líder; los demás con una ventaja de al menos
 // SHADOW_MARGIN lo siguen como sombra por todos los mapas, salvo los que el usuario apagó (`shadowOff`). Cada segundo la estación
 // manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
@@ -419,7 +468,8 @@ function orchestrate() {
   for (const s of on) {
     const follows = leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(leader) - power(s) >= SHADOW_MARGIN;
     if (follows) shadowOf.set(s.cfg.key, leader!.cfg.char);
-    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: follows ? leader!.cfg.char : null })), busPort(s), '127.0.0.1');
+    const mine = [...shadowOf].filter(([, l]) => l === s.cfg.char).map(([k]) => slots.get(k)!.cfg.char);
+    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: follows ? leader!.cfg.char : null, s: mine })), busPort(s), '127.0.0.1');
   }
 }
 
@@ -527,6 +577,8 @@ Bun.serve({
         if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
         return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
       }
+      if (r.action === 'connect') { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
+      if (r.action === 'disconnect') { wanted.delete(s.cfg.key); saveWanted(); }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
       return json(res, res.ok ? 200 : 409);
     }

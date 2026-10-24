@@ -13,11 +13,11 @@ import { CORNER } from './corner';
 import { canFarmMonster, type Fighter } from './power';
 import { classFamily } from './farming';
 import { bot, world } from './state';
-import { directedLeader } from './bus';
+import { directedLeader, myShadows } from './bus';
 import { dist, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
-export type Place = { kind: 'corner' | 'shadow' | 'tier'; warp: Warp; anchor: Pos; radius: number; name: string };
+export type Place = { kind: 'corner' | 'shadow' | 'fetch' | 'tier'; warp: Warp; anchor: Pos; radius: number; name: string };
 
 /** Spots seguros por nivel (de menor a mayor): ancla = donde se juntan los monstruos que se mataron siempre ahí. */
 const TIERS: { minLevel: number; warp: number; anchor: Pos; radius: number }[] = [
@@ -27,6 +27,13 @@ const TIERS: { minLevel: number; warp: number; anchor: Pos; radius: number }[] =
 
 /** Cuánto se separa del líder al seguirlo (tiles). */
 const SHADOW_RADIUS = 6;
+/** Las Arenas: el monstruo que hay que poder matar para cruzarlas solo (Deathvim Knight 63, Phantom Knight 72, Gaint Drakan 75). */
+const CROSS_GATE: Record<number, number> = { 83: 63, 84: 72, 85: 75 };
+/** Con el líder a menos de esto en el mismo mapa, el débil va con él (está protegido); más lejos, en una Arena, espera en la entrada. */
+const WITH_RADIUS = 40;
+/** El líder baja a buscar a su sombra como mucho una vez cada tanto (le cuesta exp: no está en la esquina). */
+const FETCH_COOLDOWN_MS = 8 * 60_000;
+let fetchedAt = 0;
 
 export const fighterNow = (): Fighter => ({ family: classFamily(world.classId) ?? 'knight', stats: world.stats, maxHp: world.maxHp });
 
@@ -42,13 +49,28 @@ export function choosePlace(): Place | null {
   const strong = isStrong();
   if (strong == null) return null;
   const level = world.level;
-  // Orden del orquestador: seguir al líder por donde vaya. El warp es el de su mapa más cercano a él al que llego por nivel.
-  const leader = directedLeader();
+  // El líder baja a buscar a su sombra, que espera en la entrada de una Arena porque no puede cruzarla sola.
+  const waiting = myShadows().find((m) => m.map === world.map && CROSS_GATE[m.map] != null && dist(m, { x: world.x, y: world.y }) > WITH_RADIUS);
+  if (waiting && Date.now() - fetchedAt > FETCH_COOLDOWN_MS) {
+    if (dist(waiting, { x: world.x, y: world.y }) <= 12) fetchedAt = Date.now();
+    else return { kind: 'fetch', warp: WARPS.find((w) => w.map === world.map) ?? warp(CORNER.warp), anchor: { x: waiting.x, y: waiting.y }, radius: 6, name: `${waiting.char} en la entrada` };
+  }
+  // Orden del orquestador: seguir al líder por donde vaya. El warp es la entrada de su mapa más cercana a él a la que llego por nivel.
+  // Solo vale seguirlo si va a un lugar que rinde: la esquina o una cacería (cuando recién resetea y está bajo, cada uno a lo suyo).
+  const lead = directedLeader();
+  const leader = lead && (lead.level >= CORNER.minLevel || lead.mode === 'hunt') ? lead : null;
   if (leader) {
     const entries = WARPS.filter((w) => w.map === leader.map && w.reqLevel <= level);
     const wp = [...entries].sort((a, b) => dist(a.arrival ?? leader, leader) - dist(b.arrival ?? leader, leader))[0]
       ?? (world.map === leader.map ? { index: -1, name: `mapa ${leader.map}`, reqLevel: 0, map: leader.map } : null);
-    if (wp) return { kind: 'shadow', warp: wp, anchor: { x: leader.x, y: leader.y }, radius: SHADOW_RADIUS, name: `${leader.char} (${wp.name})` };
+    if (wp) {
+      const gate = CROSS_GATE[leader.map];
+      const apart = world.map !== leader.map || dist(leader, { x: world.x, y: world.y }) > WITH_RADIUS;
+      // Una Arena que no puedo cruzar sola y el líder lejos: espero en la entrada a que me recoja.
+      if (gate != null && apart && !canFarmMonster(fighterNow(), gate, world.skills.has(41)) && wp.arrival)
+        return { kind: 'shadow', warp: wp, anchor: wp.arrival, radius: 5, name: `la entrada de ${wp.name} (espero a ${leader.char})` };
+      return { kind: 'shadow', warp: wp, anchor: { x: leader.x, y: leader.y }, radius: SHADOW_RADIUS, name: `${leader.char} (${wp.name})` };
+    }
   }
   if (strong && level >= CORNER.minLevel) return { kind: 'corner', warp: warp(CORNER.warp), anchor: CORNER.home, radius: CORNER.radius + CORNER.fill, name: 'la esquina de Arena 2' };
   const t = [...TIERS].reverse().find((x) => level >= x.minLevel)!;
