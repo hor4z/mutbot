@@ -204,6 +204,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const now = Date.now();
     totalExpGained += added;
     ctx.expTotal += added;
+    expLog.add(added, now); // la exp por segundo que mira todo lo demás (rendimiento, campamentos, ciego)
     const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
     if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
     if (ev.info && ev.info.map === world.map) explorer.onExp(world.map, ev.info.x, ev.info.y, added, now);
