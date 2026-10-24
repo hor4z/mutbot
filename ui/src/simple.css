@@ -14,11 +14,8 @@
 .simple-row button.stop { background: #3a3745; color: #e8e6ee; }
 .simple-row button:disabled { opacity: .5; cursor: default; }
 .simple-msgs { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
-.simple-msg { padding: 5px 8px; border-radius: 6px; background: rgba(255,255,255,.04); }
+.simple-msg { padding: 4px 2px; font-size: 12.5px; line-height: 1.35; }
 .simple-msg time { opacity: .5; font-variant-numeric: tabular-nums; margin-right: 4px; }
-.simple-msg.good { border-left: 3px solid #4cd18a; }
-.simple-msg.warn { border-left: 3px solid #e6b450; }
-.simple-msg.bad { border-left: 3px solid #ff6b6b; }
 .simple-maps { min-width: 0; display: grid; gap: 1px; background: rgba(255,255,255,.08); }
 .simple-maps.n0, .simple-maps.n1 { grid-template-columns: 1fr; }
 .simple-maps.n2 { grid-template-columns: 1fr 1fr; }
@@ -51,3 +48,8 @@
 /* El mapa ocupa todo el alto de su marco. */
 .maponly .hud-map { height: 100vh; display: flex; flex-direction: column; border: 0; border-radius: 0; }
 .maponly .hud-stage { flex: 1 1 auto; height: auto; min-height: 0; }
+
+/* El tono del mensaje se marca con el color de la hora, sin borde. */
+.simple-msg.good time { color: #4cd18a; opacity: 1; }
+.simple-msg.warn time { color: #e6b450; opacity: 1; }
+.simple-msg.bad time { color: #ff6b6b; opacity: 1; }
