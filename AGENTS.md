@@ -46,15 +46,14 @@ la sesión vieja del propio bot). Lo pasa la estación.
 La explicación completa (partes, flujo de un tick, cómo se coopera, cómo mejorar un bot) está en **`docs/arquitectura.md`**. Resumen:
 
 El bot es un loop corto (`farm-loop.ts`, ~500 líneas) sobre módulos de protocolo y de decisión pura. Cada bot es un proceso;
-la estación (`estacion.ts`) los lanza y los muestra. Los bots no tienen jefe: farmean por su cuenta y se ayudan por `team.ts`.
+la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cuenta; se hablan directo por UDP (`bus.ts`) y la estación los orquesta (sombra, recogida, mantenerlos vivos).
 
 | Archivo | Qué es |
 |---|---|
 | `headless-bot.ts` | Entrada del bot: flags (cabecera), panel, `main`/`session` con reconexión y backoff, señales. |
 | `farm-loop.ts` | El loop: ciego/trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda > reset > ruta > loot > objetivo > pelear. |
-| `help.ts` | Cooperación: el débil pide ayuda (`team.ts`), el fuerte va, invita a party y pelea a su lado; un dorado avisado atrae al libre. |
-| `intent.ts` | Dueños del spot fijo (`panel` > `help` > `town`) y `requestWarp` (un solo warp pendiente). |
-| `team.ts` | Canal con la estación: dónde está cada compañero y los pedidos (`help`, `golden`). |
+| `help.ts` | Party: el más fuerte invita al compañero cercano. |
+| `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
 | `state.ts` / `config.ts` | Estado compartido (`world`, `bot`, `learned`) y flags/ritmos humanos. |
 | `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
 | `combat.ts` / `loot.ts` / `progress.ts` | Skills y pociones, drops, reparto de puntos y `/reset`. |

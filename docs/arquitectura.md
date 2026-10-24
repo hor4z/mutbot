@@ -92,7 +92,7 @@ En orden; cada paso puede cortar el tick con `continue`:
 | Que un personaje frágil no muera | `farm-middleware.ts` / `power.ts` (qué mapas aguanta) y `progress.ts` (reparto de puntos) |
 | Pelear más rápido | `combat.ts`, y el bloque "pelear" de `farm-loop.ts` |
 | Menos trabas | `loop-ctx.ts` (`walkTowards`), `path.ts`, corte de 15 s en `farm-loop.ts` |
-| Nueva forma de cooperar | `help.ts` / `team.ts` (+ el feed en `estacion.ts`) |
+| Nueva forma de cooperar | `bus.ts` / `help.ts` / `place.ts` y el orquestador en `estacion.ts` |
 | Medir si algo mejoró | ClickHouse: `ticks.exp_min_1m` por mapa, `events` (`golden_kill`, `death`, `walk_stuck`) y `scripts/watch.ts` |
 
 ## 6. Qué se quitó (sigue en el tag `pre-cerebro` y en git)
