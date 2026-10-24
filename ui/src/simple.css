@@ -38,3 +38,16 @@
 .simple-hp i { display: block; height: 100%; background: #4cd18a; }
 .simple-inv { font-size: 12.5px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.05); margin-bottom: 4px; }
 .simple-inv.on { background: rgba(230,180,80,.18); border: 1px solid rgba(230,180,80,.5); }
+
+/* Tarjeta en columna: nada se corta y los botones van abajo, uno al lado del otro. */
+.simple-row { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 6px; }
+.simple-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.simple-head small { opacity: .75; font-size: 12.5px; }
+.simple-row > small { opacity: .7; font-size: 12px; }
+.simple-doing { opacity: .7; font-size: 12px; white-space: normal; overflow: visible; text-overflow: clip; }
+.simple-hp { margin-top: 2px; }
+.simple-btns { flex-direction: row; gap: 8px; margin-top: 2px; }
+.simple-btns button { flex: 1; }
+/* El mapa ocupa todo el alto de su marco. */
+.maponly .hud-map { height: 100vh; display: flex; flex-direction: column; border: 0; border-radius: 0; }
+.maponly .hud-stage { flex: 1 1 auto; height: auto; min-height: 0; }

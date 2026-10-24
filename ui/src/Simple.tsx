@@ -43,18 +43,18 @@ function Shell() {
           const st = stateOf(c);
           return (
             <div key={c.key} className="simple-row">
-              <div className="simple-info">
+              <div className="simple-head">
                 <strong>{c.char}</strong>
                 <span className={`simple-dot ${st.tone}`} title={st.text} />
                 <small>{c.game ? `Nv. ${c.game.level} · ${c.game.map} · ${fmtExp(c.game.expPerMin)}` : st.text}</small>
-                {c.game && <small className="simple-doing">{c.game.doing}</small>}
-                {c.game && (
-                  <>
-                    <div className="simple-hp" title={`Vida ${c.game.hp[0]} / ${c.game.hp[1]}`}><i style={{ width: `${c.game.hp[1] > 0 ? Math.max(0, Math.min(100, (100 * c.game.hp[0]) / c.game.hp[1])) : 0}%` }} /></div>
-                    <small>{c.game.resets != null ? `${c.game.resets} resets · ` : ""}{c.game.session ? `${c.game.session.kills} kills · ${c.game.session.deaths} muertes` : ""}</small>
-                  </>
-                )}
               </div>
+              {c.game && (
+                <>
+                  <div className="simple-hp" title={`Vida ${c.game.hp[0]} / ${c.game.hp[1]}`}><i style={{ width: `${c.game.hp[1] > 0 ? Math.max(0, Math.min(100, (100 * c.game.hp[0]) / c.game.hp[1])) : 0}%` }} /></div>
+                  <small>{c.game.resets != null ? `${c.game.resets} resets · ` : ""}{c.game.session ? `${c.game.session.kills} kills · ${c.game.session.deaths} muertes` : ""}</small>
+                  <small className="simple-doing">{c.game.doing}</small>
+                </>
+              )}
               <div className="simple-btns">
                 {isOnline(c) && (
                   <button className="pause" disabled={st.tone === "wait"} onClick={() => void (isPaused(c) ? actions.resume(c) : actions.pause(c))}>
