@@ -13,7 +13,7 @@ import { CORNER } from './corner';
 import { canFarmMonster, type Fighter } from './power';
 import { classFamily } from './farming';
 import { bot, world } from './state';
-import { directedLeader, myShadows } from './bus';
+import { directedLeader, myShadows, setWaiting } from './bus';
 import { isSafeZone, walkableFor } from './terrain';
 import { trackEvent } from './telemetry';
 import { dist, type Pos } from './util';
@@ -88,11 +88,12 @@ export function isStrong(): boolean | null {
 
 /** El lugar de este personaje ahora, o null si todavía no se puede decidir (faltan stats y vida). */
 export function choosePlace(): Place | null {
+  setWaiting(false);
   const strong = isStrong();
   if (strong == null) return null;
   const level = world.level;
   // El líder baja a buscar a su sombra, que espera en la entrada de una Arena porque no puede cruzarla sola.
-  const waiting = myShadows().find((m) => m.map === world.map && CROSS_GATE[m.map] != null && dist(m, { x: world.x, y: world.y }) > WITH_RADIUS);
+  const waiting = myShadows().find((m) => m.waiting && m.map === world.map && CROSS_GATE[m.map] != null && dist(m, { x: world.x, y: world.y }) > WITH_RADIUS);
   if (waiting && Date.now() - fetchedAt > FETCH_COOLDOWN_MS) {
     if (dist(waiting, { x: world.x, y: world.y }) <= 12) {
       fetchedAt = Date.now();
@@ -115,8 +116,10 @@ export function choosePlace(): Place | null {
       const gate = CROSS_GATE[leader.map];
       const apart = world.map !== leader.map || dist(leader, { x: world.x, y: world.y }) > WITH_RADIUS;
       // Una Arena que no puedo cruzar sola y el líder lejos: espero en la entrada a que me recoja.
-      if (gate != null && apart && !canFarmMonster(fighterNow(), gate, world.skills.has(41)) && wp.arrival)
+      if (gate != null && apart && !canFarmMonster(fighterNow(), gate, world.skills.has(41)) && wp.arrival) {
+        setWaiting(world.map === leader.map);
         return { kind: 'shadow', warp: wp, anchor: wp.arrival, radius: 5, name: `la entrada de ${wp.name} (espero a ${leader.char})` };
+      }
       return { kind: 'shadow', warp: wp, anchor: shadowSpotNear({ x: leader.x, y: leader.y }), radius: SHADOW_RADIUS, name: `${leader.char} (${wp.name})` };
     }
   }
