@@ -410,8 +410,23 @@ function team() {
 const addAlert = (a: Omit<Alert, 'id'>) => pushAlert(alerts, a);
 
 /** Mira a todos los personajes y anota lo que cambió (muertes, bloqueos, bolsa llena, trabados) y las invasiones. */
+// Hasta qué decisión de cada bot ya pasó a los mensajes.
+const notesSeen = new Map<string, number>();
+const noteTone = (t: string): 'good' | 'bad' | 'warn' | 'info' =>
+  /Me mató|Muerte|Trabado|no pude/i.test(t) ? 'bad' : /Dorado|Cazador|Cacería|Aviso|avisa|voy a ayudarlo|vio /i.test(t) ? 'good' : 'info';
+
 function trackAlerts() {
   const now = Date.now();
+  // Las decisiones de cada bot (dorado a la vista, cacería, trabas, muertes...) como mensajes.
+  for (const s of slots.values()) {
+    const seen = notesSeen.get(s.cfg.key) ?? 0;
+    for (const n of s.state?.notes ?? []) {
+      if (n.at <= seen) continue;
+      notesSeen.set(s.cfg.key, n.at);
+      if (!seen) continue; // la primera vez que se ve un bot no se vuelca su historial viejo
+      addAlert({ at: n.at, kind: 'status', tone: noteTone(n.text), char: s.cfg.char, text: `${s.cfg.char}: ${n.text}` });
+    }
+  }
   const snaps = [...slots.values()].map((s) => ({
     key: s.cfg.key, char: s.cfg.char, status: s.status, account: s.cfg.status,
     mode: s.state?.mode ?? null, doing: s.state?.doing ?? null, map: s.state?.where.mapName ?? null,

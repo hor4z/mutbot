@@ -4,7 +4,7 @@
  * También las señales de dorados a la estación.
  */
 import { SKILL_TABLE, pickAttackSkill } from './combat';
-import { journal, panelLog } from './journal';
+import { journal, panelLog, recentNotes } from './journal';
 import { drops, lootState } from './loot';
 import {
   chooseHuntMap, mapName } from './panel-logic';
@@ -133,6 +133,7 @@ export function buildPanelState(now: number): PanelState {
     camp: bot.goalPoint,
     entities: buildPanelEntities(),
     zones: dragonZones(world.map),
+    notes: recentNotes(),
     session: (() => {
       const v = loopView?.();
       const skill = pickAttackSkill();
