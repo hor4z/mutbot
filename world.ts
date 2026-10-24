@@ -22,10 +22,7 @@ import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './co
 import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
 import { journal } from './journal';
 import { classFamily, isFreshChar } from './farming';
-import { farmMiddleware, statPower } from './farm-middleware';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
-import { scheduleEventPolls } from './events';
-import { isMonsterType, isTownNpcType } from './explore';
 import { drops } from './loot';
 import { EventBus } from './net/eventBus';
 import { PARTY_MATES } from './config';
@@ -33,7 +30,7 @@ import { parsePositionFix } from './protocol097';
 import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
-import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
+import { MONSTER_TYPE_NUMBERS, bot, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
 import { trackEvent } from './telemetry';
 
@@ -184,23 +181,14 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number;
   return out;
 }
 
-// Llegada a un mapa (entrada al mundo o MapChanged): punto de llegada (correa de Devias) y primer
-// campamento (camp.ts).
+// NPC amistosos del pueblo (vendedores, guardias): tipos 200-299; los monstruos propios del server, desde 300.
+const isTownNpcType = (type: number) => type >= 200 && type <= 299;
+const isMonsterType = (type: number, known: ReadonlySet<number>) => !isTownNpcType(type) && (known.has(type) || type >= 300);
+
+// Llegada a un mapa (entrada al mundo o MapChanged).
 export function onMapArrival() {
   bot.lastArrivalAt = Date.now();
-  const f = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
-  const prof = farmMiddleware.profile(f, world.level, world.skills.has(41), bot.lastArrivalAt);
-  const localOnly = world.map >= 83 && world.map <= 85 && !prof.corner;
-  learned.camps.setPower(statPower(f), prof.spot != null);
-  // Telemetría de Hume: en Arena 4 el corredor (84,48) rindió bien y las
-  // muertes de personajes frágiles se concentraron cerca de (85,14–22).
-  // El campamento aprendido del propio personaje siempre tiene prioridad.
-  const preferred = world.map === 85 && world.maxHp > 0 && world.maxHp < 5_000 && !localOnly
-    ? { x: 84, y: 48 } : undefined;
-  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level, localOnly, preferred);
-  const lz = learned.camps.leashFor(world.map);
-  log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
-  for (const e of learned.camps.events) log(`Campamento: ${e}.`);
+  log(`Llegada en (${world.x},${world.y}) map=${world.map}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +290,6 @@ export function trackWorld() {
     if (npc) {
       npc.x = p.TargetX;
       npc.y = p.TargetY;
-      expTracker.see(id, { type: npc.type, x: npc.x, y: npc.y, map: world.map });
     }
     const pl = world.players.get(id);
     if (pl) {
@@ -398,7 +385,6 @@ export function trackWorld() {
       npcs.set(id, { id, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
       // El tipo de cada id visto: cuando llega ExperienceGained el monstruo ya
       // salió del scope (ver farming.ts, ExpSplitTracker).
-      expTracker.see(id, { type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY, map: world.map });
       if (isNew) log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
     }
   };
@@ -583,7 +569,6 @@ export async function selectCharacter(charListBytes: any) {
   bot.inGameAt = Date.now();
   bot.charName = target.Name;
   // El panel pregunta las aperturas de eventos (0x91) apenas entra al mundo.
-  scheduleEventPolls(bot.inGameAt);
   onMapArrival();
   return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
 }

@@ -20,5 +20,3 @@ export function watchLiveness() {
   };
 }
 
-/** ms desde el último packet del server (null si todavía no llegó ninguno). */
-export const silentMs = (now = Date.now()): number | null => (lastAt ? now - lastAt : null);

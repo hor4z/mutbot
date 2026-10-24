@@ -4,18 +4,14 @@
  * También las señales de dorados a la estación.
  */
 import { SKILL_TABLE, pickAttackSkill } from './combat';
-import { eventTimers } from './events';
-import { pin } from './intent';
 import { journal, panelLog } from './journal';
 import { drops, lootState } from './loot';
 import {
-  EVENT_KEYS, GOLD_URL, HuntExplorer, chooseHuntMap, countTickets, mapName, resetsPerDay, toPanelCycle,
-  validateWarp, type GoldGone, type GoldSighting, itemInfo } from './panel-logic';
-import type { BotMode, EventTimer, PanelCommand, PanelState } from './panel-protocol';
+  chooseHuntMap, mapName } from './panel-logic';
+import type { BotMode, PanelCommand, PanelState } from './panel-protocol';
 import { startHunt, stopHunt } from './hunt';
-import { WARP_SPOTS } from './route';
 import { isFreshChar } from './farming';
-import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
+import { GOLDEN_TYPES, bot, expLog, isMate, monsterName, world } from './state';
 import { chebyshev } from './util';
 import { dragonZones } from './zones';
 import type { CommandResult } from './ws-server';
@@ -26,21 +22,6 @@ export function currentMode(): BotMode {
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
   if (bot.paused) return 'paused';
   return bot.hunting ? 'hunt' : 'farm';
-}
-
-// Señales de dorados a la estación (GOLD_URL): cada dorado que ve, con posición; POST con timeout
-// corto y sin reintentos (si la estación no está, se ignora).
-export function publishGold(p: GoldSighting | GoldGone) {
-  try {
-    void fetch(GOLD_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(p),
-      signal: AbortSignal.timeout(1500),
-    }).catch(() => {});
-  } catch {
-    // fetch tiró sincrónico: tampoco importa.
-  }
 }
 
 async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
@@ -55,22 +36,10 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       bot.paused = false;
       return { ok: true, msg: bot.hunting ? `sigo cazando en ${bot.hunting.hunt.name}` : 'sigo con el farmeo normal' };
     case 'farm': {
-      const was = [pin.current() && `spot fijo (${pin.current()!.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
+      const was = [bot.paused && 'pausa levantada'].filter(Boolean);
       if (bot.hunting) stopHunt('orden del panel');
-      pin.clearAll('orden farm del panel');
-      bot.pendingWarp = null;
       bot.paused = false;
       return { ok: true, msg: `farmeo normal por la ruta${was.length ? ` (${was.join(', ')})` : ''}` };
-    }
-    case 'warp': {
-      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      const v = validateWarp(c.warp, world.level, WARP_SPOTS);
-      if (!v.ok) return { ok: false, msg: v.msg };
-      bot.paused = false;
-      bot.pendingWarp = v.spot;
-      pin.set('panel', v.spot, 'orden warp');
-      return { ok: true, msg: `voy a ${v.spot.name} (warp ${v.spot.index}); queda fijo hasta la orden farm` };
     }
     case 'hunt': {
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
@@ -139,13 +108,6 @@ function buildPanelEntities(): NonNullable<PanelState['entities']> {
 }
 
 export function buildPanelState(now: number): PanelState {
-  const cycleLog = learned.cycleLog;
-  const cycles = cycleLog.done.slice(-20).map((c) => toPanelCycle(c));
-  const items = [...world.inventory.values()]
-    .sort((a, b) => a.slot - b.slot)
-    .map((it) => ({ slot: it.slot, group: it.group, num: it.num, level: it.level ?? 0, excellent: !!it.excellent, ...itemInfo(it.group, it.num) }));
-  const equipment = items.filter((it) => it.slot >= 0 && it.slot <= 11);
-  const inventory = items.filter((it) => it.slot >= 12 && it.slot < 76);
   return {
     at: now,
     mode: currentMode(),
@@ -153,7 +115,7 @@ export function buildPanelState(now: number): PanelState {
     char: {
       name: bot.charName,
       level: world.level,
-      resets: world.resets ?? (learned.char.resets || null),
+      resets: world.resets ?? null,
       ...(world.classId != null ? { classId: world.classId } : {}),
       hp: [world.hp, world.maxHp],
       mp: [world.mana, world.maxMana],
@@ -161,20 +123,13 @@ export function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null, pinned: !!pin.current() },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
-    cycle: toPanelCycle(cycleLog.cur, true),
-    cycles,
-    resetsPerDay: resetsPerDay(cycles),
-    events: EVENT_KEYS.map((k) => eventTimers.get(k)).filter((t): t is EventTimer => !!t),
     invasion: bot.invasion,
-    tickets: countTickets(world.inventory.values()),
     nearby: {
       monsters: [...world.npcs.values()].filter((n) => chebyshev(n.x, n.y, world.x, world.y) <= 10).length,
       players: world.players.size,
     },
-    equipment,
-    inventory,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: bot.goalPoint,
     entities: buildPanelEntities(),

@@ -14,9 +14,9 @@
 import monstersData from './data/monsters.json';
 import type { StatValues } from './farming';
 
-export type ClassFamily = 'knight' | 'wizard' | 'elf' | 'gladiator';
+type ClassFamily = 'knight' | 'wizard' | 'elf' | 'gladiator';
 export type Fighter = { family: ClassFamily; stats: StatValues; maxHp: number };
-export type MonsterCombat = { hp: number; minDmg: number; maxDmg: number; def: number; attackDelayMs: number; level: number };
+type MonsterCombat = { hp: number; minDmg: number; maxDmg: number; def: number; attackDelayMs: number; level: number };
 
 type Row = { Numb: number; HP: number; MinDmg: number; MaxDmg: number; Def: number; Regen: number; Level: number };
 const COMBAT = new Map<number, MonsterCombat>(
@@ -24,13 +24,12 @@ const COMBAT = new Map<number, MonsterCombat>(
     hp: m.HP, minDmg: m.MinDmg ?? 0, maxDmg: m.MaxDmg ?? 0, def: m.Def ?? 0, attackDelayMs: m.Regen > 0 ? m.Regen : 1600, level: m.Level,
   }]),
 );
-export const monsterCombat = (type: number): MonsterCombat | undefined => COMBAT.get(type);
 
 /** Lo que se acepta: matarlo en <= `maxKillSec` perdiendo <= `maxHpLoss` de la vida. */
 // attackSec: un golpe cada 0,5 s (ATTACK_PACE_MS de config.ts; acá fijo para que sea puro).
-export const FIGHT_LIMITS: { maxKillSec: number; maxHpLoss: number; hitChance: number; attackSec: number } = { maxKillSec: 6, maxHpLoss: 0.35, hitChance: 0.7, attackSec: 0.5 };
+const FIGHT_LIMITS: { maxKillSec: number; maxHpLoss: number; hitChance: number; attackSec: number } = { maxKillSec: 6, maxHpLoss: 0.35, hitChance: 0.7, attackSec: 0.5 };
 
-export function damageRange(f: Fighter): [number, number] {
+function damageRange(f: Fighter): [number, number] {
   const { str, agi, ene } = f.stats;
   switch (f.family) {
     case 'knight': return [str / 8, str / 4];
@@ -40,17 +39,17 @@ export function damageRange(f: Fighter): [number, number] {
   }
 }
 
-export function defenseOf(f: Fighter): number {
+function defenseOf(f: Fighter): number {
   const a = f.stats.agi;
   return f.family === 'knight' ? a / 3 : f.family === 'elf' ? a / 10 : a / 4;
 }
 
 const hit = (dmg: number, def: number) => Math.max(dmg - def, dmg * 0.1, 1);
 
-export type FightEstimate = { killSec: number; hpLoss: number; ok: boolean };
+type FightEstimate = { killSec: number; hpLoss: number; ok: boolean };
 
 /** Segundos para matarlo y fracción de la vida que se pierde en ese tiempo. */
-export function estimateFight(f: Fighter, m: MonsterCombat, limits: typeof FIGHT_LIMITS = FIGHT_LIMITS): FightEstimate {
+function estimateFight(f: Fighter, m: MonsterCombat, limits: typeof FIGHT_LIMITS = FIGHT_LIMITS): FightEstimate {
   const [lo, hi] = damageRange(f);
   const perHit = (hit(lo, m.def) + hit(hi, m.def)) / 2;
   const killSec = Math.ceil(m.hp / perHit) * limits.attackSec;
@@ -66,18 +65,10 @@ export function canFight(f: Fighter, type: number, limits: typeof FIGHT_LIMITS =
   return !!m && estimateFight(f, m, limits).ok;
 }
 
-// La ruta por nivel presupone los stats de Horaz. Un personaje que llegó al nivel 300
-// con pocos resets puede seguir necesitando Devias. Estos son los monstruos comunes de
-// cada Arena; se exige poder sobrevivir y matarlos en un tiempo razonable. El modelo
-// ignora arma y skills, por eso el plazo de ruta es más amplio que el del arranque.
-export const FARM_ROUTE_LIMITS = { ...FIGHT_LIMITS, maxKillSec: 22, maxHpLoss: 0.5 };
-const ARENA_GATES = [
-  { level: 100, type: 63 }, // Arena 2: Deathvim Knight
-  { level: 200, type: 72 }, // Arena 3: Phantom Knight
-  { level: 300, type: 75 }, // Arena 4: Gaint Drakan
-] as const;
+// El modelo ignora arma y skills, por eso el plazo de farmeo es más amplio que el de pelear una vez.
+const FARM_ROUTE_LIMITS = { ...FIGHT_LIMITS, maxKillSec: 22, maxHpLoss: 0.5 };
 
-/** Nivel de ruta alcanzable por poder; el nivel real sigue intacto para reset y requisitos de warp. */
+/** ¿Puede farmear a este monstruo seguido (plazo más amplio que el de pelear)? Con skill de área (Twisting Slash) se descuenta 3×. */
 export function canFarmMonster(f: Fighter, type: number, twistingSlash = false): boolean {
   const m = COMBAT.get(type);
   if (!m) return false;
@@ -87,22 +78,4 @@ export function canFarmMonster(f: Fighter, type: number, twistingSlash = false):
   // se castea más lento. El rendimiento definitivo se mide con la exp real.
   const power = twistingSlash ? 3 : 1;
   return e.killSec / power <= FARM_ROUTE_LIMITS.maxKillSec && e.hpLoss / power <= FARM_ROUTE_LIMITS.maxHpLoss;
-}
-
-export function farmRouteLevel(f: Fighter, level: number, twistingSlash = false): number {
-  if (f.maxHp <= 0 || Object.values(f.stats).every((v) => v === 0)) return level;
-  for (const gate of ARENA_GATES) {
-    if (level >= gate.level && !canFarmMonster(f, gate.type, twistingSlash)) return gate.level - 1;
-  }
-  return level;
-}
-
-/** Prueba acotada de Arena 4: el modelo de golpe normal subestima Twisting Slash.
- * Solo se habilita si el Drakan estimado cae en <= 35 s y consume <= 60 % de HP;
- * la exp y las muertes reales deciden si se queda. */
-export function canProbeArena4(f: Fighter, twistingSlash = false): boolean {
-  const m = COMBAT.get(75);
-  if (!m || !twistingSlash) return false;
-  const e = estimateFight(f, m);
-  return e.killSec / 3 <= 35 && e.hpLoss / 3 <= 0.6;
 }

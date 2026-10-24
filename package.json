@@ -7,7 +7,6 @@
     "proxy": "bun run proxy.ts",
     "db:up": "docker compose --env-file .env.db -f db/docker-compose.yml up -d",
     "db:init": "bun --env-file=.env.db scripts/db.ts init",
-    "aprender": "bun --env-file=.env.db scripts/aprender.ts",
     "tsc": "tsc --noEmit",
     "extract": "bun run extract-packets.ts",
     "estacion": "bun run estacion.ts",

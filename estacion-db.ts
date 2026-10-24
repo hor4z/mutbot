@@ -23,8 +23,8 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isCharClass, isRoleAssign, type CharClassKey, type CharConfig, type GameServer, type RoleAssign, type Routine } from './estacion-logic';
-import { validCharName } from './names';
+import { isCharClass, type CharClassKey, type CharConfig, type GameServer, type Routine } from './estacion-logic';
+import { validCharName } from './util';
 
 /** Personajes por cuenta en el 0.97d. */
 export const MAX_CHARS_PER_ACCOUNT = 5;
@@ -66,7 +66,7 @@ const MIGRATIONS = [
   `ALTER TABLE characters ADD COLUMN role TEXT;`,
 ];
 
-export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null; role: RoleAssign | null };
+export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null};
 
 export class EstacionDb {
   readonly db: Database;
@@ -110,13 +110,13 @@ export class EstacionDb {
   chars(): DbChar[] {
     type Row = { name: string; username: string; class: string | null; env_file: string | null; status: 'active' | 'blocked'; last_routine: string | null; role: string | null };
     return this.db.query<Row, [number]>(
-      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine, c.role
+      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine
          FROM characters c JOIN accounts a ON a.id = c.account_id
         WHERE a.server_id = ? ORDER BY c.name`,
     ).all(this.serverId).map((r) => ({
       key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name,
       ...(isCharClass(r.class) ? { cls: r.class } : {}),
-      status: r.status, lastRoutine: parseRoutine(r.last_routine), role: parseRole(r.role),
+      status: r.status, lastRoutine: parseRoutine(r.last_routine),
     }));
   }
 
@@ -180,10 +180,6 @@ export class EstacionDb {
     this.db.query("UPDATE characters SET last_routine = ?, updated_at = datetime('now') WHERE name = ?").run(JSON.stringify(r), char);
   }
 
-  setRole(char: string, r: RoleAssign) {
-    this.db.query("UPDATE characters SET role = ?, updated_at = datetime('now') WHERE name = ?").run(JSON.stringify(r), char);
-  }
-
   close() {
     this.db.close();
   }
@@ -199,12 +195,3 @@ function parseRoutine(s: string | null): Routine | null {
   }
 }
 
-function parseRole(s: string | null): RoleAssign | null {
-  if (!s) return null;
-  try {
-    const r = JSON.parse(s);
-    return isRoleAssign(r) ? r : null;
-  } catch {
-    return null;
-  }
-}

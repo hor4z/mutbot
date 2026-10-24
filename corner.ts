@@ -43,14 +43,3 @@ export function nextRoutePoint(p: Pos, idx: number | null): { idx: number; x: nu
   return { idx: k, x: R[k][0], y: R[k][1] };
 }
 
-/** El monstruo más cercano a mí dentro del radio de pelea de la esquina, o null. */
-export function cornerTarget<M extends Pos & { id: number }>(me: Pos, monsters: Iterable<M>): M | null {
-  let best: M | null = null;
-  let bd = Infinity;
-  for (const m of monsters) {
-    if (dist(m, CORNER.home) > CORNER.radius + CORNER.fill) continue;
-    const d = dist(m, me);
-    if (d < bd) { bd = d; best = m; }
-  }
-  return best;
-}

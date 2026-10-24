@@ -7,11 +7,14 @@ import { findPath, smoothPath } from './path';
 import { learnedFreeFor, walkableFor } from './terrain';
 import { SKILL_PACE_MS, WALK_PACE_MS } from './config';
 import { sendAreaSkill, step } from './actions';
-import { CAMP, castCandidate } from './camp';
 import { AREA_SKILLS, SKILL_MIN_MANA, pickAttackSkill } from './combat';
-import type { TimeKind } from './farming';
 import { bot, world, type ScopedNpc } from './state';
 import { directionTowards, humanPace, sleep } from './util';
+
+/** Fase del tick (para los datos). */
+export type TimeKind = 'fight' | 'walk' | 'wait' | 'other';
+/** Skill de área con CUALQUIER monstruo a <= esto (Twisting Slash gira alrededor del personaje). */
+const CAST_RANGE = 3;
 
 export type LoopCtx = {
   // Monstruos atacables: los de world.npcs que NO están en zona segura (se recalcula cada tick).
@@ -73,10 +76,23 @@ export function castOnTheWay(ctx: LoopCtx): boolean {
   if (!skill || !AREA_SKILLS.has(skill.number)) return false;
   if (world.maxMana > 0 && world.mana / world.maxMana < SKILL_MIN_MANA) return false;
   const t = ctx.target != null ? ctx.npcs.get(ctx.target) ?? null : null;
-  const c = castCandidate({ x: world.x, y: world.y }, ctx.npcs.values(), t, CAMP.CAST_RANGE);
+  const c = castCandidate({ x: world.x, y: world.y }, ctx.npcs.values(), t);
   if (!c) return false;
   sendAreaSkill(skill.index, c.x, c.y, directionTowards(world.x, world.y, c.x, c.y), c.id);
   ctx.lastCastAt = now;
   ctx.skillsUsed++;
   return true;
+}
+
+/** El monstruo a tirarle el skill de área: el objetivo si está cerca; si no, el más cercano dentro del rango. */
+function castCandidate<C extends { x: number; y: number }>(me: { x: number; y: number }, monsters: Iterable<C>, target: C | null): C | null {
+  const cheb = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  if (target && cheb(me, target) <= CAST_RANGE) return target;
+  let best: C | null = null;
+  let bd = Infinity;
+  for (const m of monsters) {
+    const d = cheb(me, m);
+    if (d <= CAST_RANGE && d < bd) { bd = d; best = m; }
+  }
+  return best;
 }

@@ -63,20 +63,4 @@ export function newRequests(): TeamRequest[] {
   return out;
 }
 
-/**
- * Aviso a la estación de lo que el bot descubrió (insights.ts, recovery.ts, watchdog.ts), para que otros bots y la
- * interfaz lo usen. Mensaje NUEVO sobre el mismo canal (POST MUBOT_TEAM_URL): `kind: 'insight'`. Una estación que no
- * lo conoce lo rechaza con 400 (parseTeamRequest) y el bot lo ignora: no rompe nada. Tope de 1 KB por mensaje.
- */
-export type InsightMessage = { from: string; kind: 'insight'; topic: 'data' | 'pk' | 'stuck'; note: string; data: unknown; at: number };
 const insightAt = new Map<string, number>();
-export function postInsight(note: string, data: unknown, topic: InsightMessage['topic'] = 'data', everyMs = 10 * 60_000): boolean {
-  const now = Date.now();
-  if (now - (insightAt.get(topic) ?? 0) < everyMs) return false;
-  insightAt.set(topic, now);
-  const msg = (d: unknown): InsightMessage => ({ from: bot.charName, kind: 'insight', topic, note: note.slice(0, 120), data: d, at: now });
-  let body = JSON.stringify(msg(data));
-  if (body.length > 1000) body = JSON.stringify(msg(null));
-  void fetch(TEAM_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(2000) }).catch(() => {});
-  return true;
-}

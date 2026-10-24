@@ -47,3 +47,6 @@ export function directionTowards(fromX: number, fromY: number, toX: number, toY:
 
 export type Pos = { x: number; y: number };
 export const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** ¿Nombre de personaje que el server acepta? (4-10 letras o números, como el cliente web) */
+export const validCharName = (name: string) => /^[A-Za-z0-9]{4,10}$/.test(name);

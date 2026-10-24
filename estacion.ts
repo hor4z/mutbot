@@ -17,15 +17,13 @@ import { serveRadarAsset } from './radar-assets';
  */
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
 import { isFreshChar } from './farming';
-import { coolNames } from './names';
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, GAME_ORIGIN, RECENT_STOP_MS, applyGoldSignal, freshGolds, type GoldSignal, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   CHAR_CLASSES, parseEnvFile, type NewCharRequest,
-  type Alert, type RoleAssign, newAlertMemory, diffAlerts, pushAlert, bagUsage, parseBotAlert,
-  parseBotInsight, type InsightSummary, roleFromRoutine, roleRoutine, roleLabel,
+  type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
 import { originAllowed } from './ws-server';
@@ -76,8 +74,6 @@ const say = (...a: unknown[]) => console.log('[estación]', ...a);
 // Alertas de la flota (ring buffer, la más nueva primero) y su memoria para detectar cambios.
 const alerts: Alert[] = [];
 const alertMem = newAlertMemory();
-// Último resumen de datos (insights.ts) que mandó cada bot; vence a las 2 h, como en el bot.
-const insights = new Map<string, InsightSummary>();
 const INSIGHT_TTL_MS = 2 * 60 * 60_000;
 let invasionActive = false;
 
@@ -261,20 +257,6 @@ setInterval(() => {
     }).catch(() => {});
 }, 10 * 60_000);
 
-// Ranking a la base cada hora (tabla ranking): ritmo de resets de los rivales.
-async function saveRanking() {
-  const env = dbEnv();
-  if (!env.MUBOT_DB_URL) return;
-  const data = (await ranking()) as { resets?: { name: string; classNumber: number; totalResets: number; grandResets?: number; level: number }[] };
-  if (!Array.isArray(data?.resets)) return;
-  const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
-  const body = data.resets.slice(0, 100).map((r, i) => JSON.stringify({ ts, name: r.name, class: r.classNumber, resets: r.totalResets, grand_resets: r.grandResets ?? 0, level: r.level, pos: i + 1 })).join('\n');
-  await fetch(`${env.MUBOT_DB_URL}/?database=mubot&query=${encodeURIComponent('INSERT INTO ranking FORMAT JSONEachRow')}`, {
-    method: 'POST', body, headers: { 'X-ClickHouse-User': env.MUBOT_DB_USER ?? 'mubot', 'X-ClickHouse-Key': env.MUBOT_DB_PASSWORD ?? '' },
-  }).catch(() => {});
-}
-setTimeout(() => void saveRanking(), 30_000);
-setInterval(() => void saveRanking(), 60 * 60_000);
 
 /** MUBOT_DB_* de .env.db (ClickHouse local, ver db/docker-compose.yml); vacío si no hay archivo. */
 function dbEnv(): Record<string, string> {
@@ -321,7 +303,6 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   // Sin MUBOT_* heredados: la estación pudo cargar el .env de otro personaje.
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
-  env.MUBOT_GOLD_URL = `http://127.0.0.1:${PORT}/api/gold`;
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
   env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
@@ -468,23 +449,18 @@ async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string 
   return { ok: s.routine === r, msg: s.msg };
 }
 
-async function applyRole(s: Slot, role: RoleAssign): Promise<{ ok: boolean; msg: string }> {
-  const res = await routine(s, roleRoutine(role));
-  return { ok: res.ok, msg: res.ok ? `${s.cfg.char}: ${roleLabel(role)}` : res.msg };
-}
-
 // --- HTTP -----------------------------------------------------------------------------------
 function view() {
   return [...slots.values()].map((s) => {
     const st = s.state;
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine,
-      role: s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine), roleSaved: !!s.cfg.role, stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
+      stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
         map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
-        zen: st.char.zen, bag: bagUsage(st.inventory), nearby: st.nearby, resetsPerDay: st.resetsPerDay,
+        zen: st.char.zen, nearby: st.nearby,
         session: st.session ? { since: st.session.since, kills: st.session.kills, deaths: st.session.deaths, exp: st.session.exp } : null,
       },
     };
@@ -508,29 +484,6 @@ function tail(path: string, lines: number, maxBytes = 64 * 1024): string {
   }
 }
 
-// Señales de dorados (POST /api/gold): de los bots (sin Origin) o del juego en el navegador.
-const golds = new Map<string, GoldSignal>();
-const GOLD_CORS = {
-  'access-control-allow-origin': GAME_ORIGIN,
-  'access-control-allow-private-network': 'true',
-  'access-control-allow-methods': 'GET, POST',
-  'access-control-allow-headers': 'content-type',
-};
-
-// Ranking: la API del server del juego (la que usa el cliente web para /ranking), con caché de 1 min.
-const RANKING_URL = process.env.MUBOT_RANKING_URL ?? `https://${new URL(SERVER.proxy).host}/api/ranking`;
-let rankingCache: { at: number; data: unknown } | null = null;
-async function ranking(): Promise<unknown> {
-  if (rankingCache && Date.now() - rankingCache.at < 60_000) return rankingCache.data;
-  try {
-    const r = await fetch(RANKING_URL, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    rankingCache = { at: Date.now(), data: await r.json() };
-    return rankingCache.data;
-  } catch (e) {
-    return rankingCache?.data ?? { error: `no pude leer el ranking: ${(e as Error).message}` };
-  }
-}
 
 // Equipo: pedidos de ayuda vigentes (uno por personaje y tipo, vencen a los 2 min).
 const teamRequests = new Map<string, TeamRequest>();
@@ -540,7 +493,6 @@ function team() {
   const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
     char: s.cfg.char, level: s.state!.char.level, resets: s.state!.char.resets ?? undefined, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
     fresh: isFreshChar(s.state!.char.resets, s.state!.char.stats),
-    role: (s.cfg.role ?? roleFromRoutine(s.cfg.lastRoutine)).role,
   }));
   return { members, requests: [...teamRequests.values()] };
 }
@@ -554,7 +506,7 @@ function trackAlerts() {
     key: s.cfg.key, char: s.cfg.char, status: s.status, account: s.cfg.status,
     mode: s.state?.mode ?? null, doing: s.state?.doing ?? null, map: s.state?.where.mapName ?? null,
     x: s.state?.where.x ?? null, y: s.state?.where.y ?? null, level: s.state?.char.level || null,
-    deaths: s.state?.session?.deaths ?? null, bag: bagUsage(s.state?.inventory),
+    deaths: s.state?.session?.deaths ?? null,
   }));
   for (const a of diffAlerts(alertMem, snaps, now)) addAlert(a);
   const inv = invasion();
@@ -563,20 +515,6 @@ function trackAlerts() {
   invasionActive = active;
 }
 
-/** Insights vigentes, el más nuevo primero. */
-function freshInsights(now: number) {
-  for (const [k, i] of insights) if (now - i.at > INSIGHT_TTL_MS) insights.delete(k);
-  return [...insights.values()].sort((a, b) => b.at - a.at);
-}
-
-/** Aperturas de Devil Square / Blood Castle / Chaos Castle: la respuesta más reciente de cualquier bot por evento. */
-function events() {
-  const best = new Map<string, EventTimer>();
-  for (const s of slots.values()) for (const e of s.state?.events ?? []) if (!best.has(e.key) || e.at > best.get(e.key)!.at) best.set(e.key, e);
-  return [...best.values()];
-}
-
-/** Última invasión que reportó algún bot. */
 function invasion() {
   let best: NonNullable<PanelState['invasion']> | null = null;
   for (const s of slots.values()) {
@@ -604,17 +542,10 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
-      // Los avistamientos vigentes, también para el cazador del navegador (CORS del juego).
-      if (url.pathname === '/api/gold') return new Response(JSON.stringify(freshGolds(golds, Date.now())), { headers: { ...GOLD_CORS, 'content-type': 'application/json', 'cache-control': 'no-store' } });
-      // Ranking del server (top de resets y ELO de Arena), el mismo que muestra el cliente web.
-      if (url.pathname === '/api/ranking') return json(await ranking());
       // Equipo: dónde está cada personaje y los pedidos de ayuda vigentes (los bots lo consultan).
       if (url.pathname === '/api/team') return json(team());
-      // Nombres sugeridos para un personaje nuevo (sin repetir los que ya hay en la estación).
-      if (url.pathname === '/api/names') return json({ names: coolNames(8, [...slots.values()].map((s) => s.cfg.char)) });
       if (url.pathname === '/api/state') return json({
-        chars: view(), golds: freshGolds(golds, Date.now()).map((g) => ({ ...g, mapName: mapName(g.map) })),
-        alerts, invasion: invasion(), events: events(), insights: freshInsights(Date.now()), now: Date.now(),
+        chars: view(), alerts, invasion: invasion(), now: Date.now(),
       });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -627,13 +558,6 @@ Bun.serve({
       if (body.length > 1024) return json({ ok: false }, 413);
       let raw: unknown;
       try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
-      if ((raw as { kind?: unknown } | null)?.kind === 'insight') {
-        const ins = parseBotInsight(raw, Date.now());
-        if (!ins) return json({ ok: false, msg: 'insight inválido' }, 400);
-        if (ins.topic === 'data') insights.set(ins.summary.from.toLowerCase(), ins.summary);
-        else addAlert(ins.alert);
-        return json({ ok: true });
-      }
       const r = parseTeamRequest(raw, Date.now());
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       const prev = teamRequests.get(`${r.from}:${r.kind}`);
@@ -643,32 +567,6 @@ Bun.serve({
         addAlert({ at: r.at, kind: r.kind === 'golden' ? 'gold' : 'status', tone: r.kind === 'golden' ? 'good' : 'info', char: r.from, text: r.kind === 'golden' ? `${r.from} avisa: ${r.note}` : `${r.from} pide ayuda (${r.note})` });
       say(`${r.from} pide ayuda (${r.kind}): ${r.note}`);
       return json({ ok: true });
-    }
-    if (url.pathname === '/api/alert' && req.method === 'POST') {
-      // Avisos de los bots (PK, bolsa llena...): solo sin Origin, como /api/team.
-      if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
-      const body = await req.text();
-      if (body.length > 1024) return json({ ok: false }, 413);
-      let raw: unknown;
-      try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
-      const a = parseBotAlert(raw, Date.now());
-      if (!a) return json({ ok: false, msg: 'aviso inválido' }, 400);
-      addAlert(a);
-      return json({ ok: true });
-    }
-    if (url.pathname === '/api/gold') {
-      const origin = req.headers.get('origin');
-      if (origin && origin !== GAME_ORIGIN && !originAllowed(origin, PORT)) return new Response('origen no permitido', { status: 403 });
-      if (req.method === 'OPTIONS') return new Response(null, { headers: GOLD_CORS });
-      if (req.method !== 'POST') return new Response('No.', { status: 405 });
-      const body = await req.text();
-      if (body.length > 1024) return new Response('grande', { status: 413, headers: GOLD_CORS });
-      let raw: unknown;
-      try { raw = JSON.parse(body); } catch { return new Response('json', { status: 400, headers: GOLD_CORS }); }
-      const before = new Set(golds.keys());
-      const okGold = applyGoldSignal(golds, raw, Date.now());
-      if (okGold) for (const [k, g] of golds) if (!before.has(k)) addAlert({ at: g.at, kind: 'gold', tone: 'good', char: g.from, text: `Dorado${g.name ? ` ${g.name}` : ''} en ${mapName(g.map)} (${g.x}, ${g.y}), visto por ${g.from}` });
-      return okGold ? new Response('ok', { headers: GOLD_CORS }) : new Response('datos', { status: 400, headers: GOLD_CORS });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.
@@ -694,17 +592,6 @@ Bun.serve({
       }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
-      if (r.action === 'role') {
-        db.setRole(s.cfg.char, r.role);
-        refreshSlots();
-        const routine = roleRoutine(r.role);
-        if (s.pid == null || s.status === 'starting') {
-          if (s.pending) s.pending = routine;
-          return json({ ok: true, msg: `${s.cfg.char}: ${roleLabel(r.role)} (se aplica al conectar)` });
-        }
-        const res = await applyRole(s, r.role);
-        return json(res, res.ok ? 200 : 409);
-      }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
       return json(res, res.ok ? 200 : 409);
     }

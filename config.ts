@@ -25,8 +25,8 @@ for (let i = 0; i < argv.length; i++) {
 // Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
-  '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
-  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates', '--list-chars',
+  '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills',
+  '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates', '--list-chars',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -68,7 +68,6 @@ export const AUTO_SECONDS = parseInt(args.get('--auto-seconds') ?? '600');
 export const WS_PORT_ARG = args.get('--ws-port');
 // Diario de acciones en JSONL (journal.ts).
 export const DECISION_LOG_PATH = args.get('--decision-log') ?? '';
-export const LEARN_FILE = args.get('--learn-file') ?? join(homedir(), '.mubot', 'learning.json');
 
 // ---------------------------------------------------------------------------
 // Ritmos humanos, NO flood (ver SpeedHackDetectPlugIn: AttackSpeedBaseDelay
@@ -94,10 +93,6 @@ export type StatName = 'str' | 'agi' | 'vit' | 'ene';
 // IncreaseCharacterStatPoint.StatType usa exactamente esos mismos índices.
 export const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
 
-// --explore-dir 0..7 (ver DIR_DELTA; 1 = norte): en mapas sin salida conocida
-// (FIRST_EXITS de explore.ts) es la primera dirección que se prueba.
-export const EXPLORE_PREF = args.has('--explore-dir') ? parseInt(args.get('--explore-dir')!) % 8 : null;
-
 export const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
 export const MAX_STAT = parseInt(args.get('--max-stat') ?? '10000');
 // --build str:50,ene:33,vit:17 → reparto proporcional de los puntos libres.
@@ -111,7 +106,6 @@ export const BUILD_WEIGHTS: Array<[StatName, number]> = (BUILD_ARG ?? 'str:50,en
   .map((part) => part.trim().split(':'))
   .filter(([name]) => STAT_ORDER.includes(name as StatName))
   .map(([name, w]) => [name as StatName, w ? Number(w) : 1]);
-export const BUILD = BUILD_ARG ? BUILD_WEIGHTS.map(([name]) => name) : (['ene', 'str', 'vit'] as StatName[]);
 // Con menos puntos que esto no vale la pena frenar a repartir (3 comandos de
 // chat = ~7.5 s sin pelear). El agente web reparte de a 200.
 export const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '200');
@@ -131,9 +125,6 @@ export const ATTACK_SKILLS = (args.get('--skills') ?? '')
   .map((s) => parseInt(s.trim(), 10))
   .filter((n) => !Number.isNaN(n));
 export const ATTACK_SKILL_POOL = ATTACK_SKILLS.length ? ATTACK_SKILLS : DEFAULT_ATTACK_SKILLS;
-
-// --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
-export const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
 
 // Cazador automático de invasiones (panel-logic.ts, AUTO_HUNT): prendido salvo --no-auto-hunt.
 export const AUTO_HUNT_ON = !args.has('--no-auto-hunt');

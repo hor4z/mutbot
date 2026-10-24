@@ -7,7 +7,6 @@ import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { step, sendPickup } from './actions';
 import { itemInfo } from './panel-logic';
-import { snipeAction, snipeOn } from './snipe';
 import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
@@ -79,16 +78,6 @@ export function watchDrops(): () => void {
     const lt = lootState.looting;
     if (!line || !lt || lt.pickAt == null || !/doesn't belong to you/i.test(line.text)) return;
     const d = drops.get(lt.id) ?? lt.drop;
-    // Caja ajena reciente: se queda esperando adyacente para pedirla a los 10 s (snipe.ts); no se suelta.
-    const sd = drops.get(lt.id);
-    if (snipeOn() && sd && isBox(sd) && sd.seenAt != null && Date.now() - sd.seenAt <= SNIPE_HOLD_MAX_MS) {
-      if (!snipeIds.has(lt.id)) {
-        snipeIds.add(lt.id);
-        trackEvent('loot_foreign', `${sd.group}/${sd.num}`, sd.group, sd.num, { x: sd.x, y: sd.y, snipe: 1 });
-        decide(`Caja ajena (Id=${lt.id}): me quedo al lado y la pido pasados los 10 s.`);
-      }
-      return;
-    }
     foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
     if (d) trackEvent('loot_foreign', `${d.group}/${d.num}`, d.group, d.num, { x: d.x, y: d.y });
     log(`El drop Id=${lt.id} es de otro: lo dejo y vuelvo a probar en ${FOREIGN_RETRY_MS / 1000} s si sigue ahí.`);
@@ -167,7 +156,6 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   }
   const radius = fresh && fightNear ? 1 : LOOT_RADIUS;
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
-  for (const id of snipeIds) if (!drops.has(id)) { snipeIds.delete(id); snipePickAt.delete(id); }
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
   const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
   const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
@@ -186,22 +174,6 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   if (lt.pickAt == null) {
     lootState.count++;
     log(`Levanto ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`);
-  }
-  if (snipeIds.has(d.id)) {
-    // Caja ajena: quieto y adyacente sin pedirla antes de los 9,5 s; pedirla en la ventana; pasados los 14 s, soltarla.
-    const act = snipeAction(now - (d.seenAt ?? now), snipePickAt.has(d.id) ? now - snipePickAt.get(d.id)! : null, Math.random());
-    if (act === 'giveup') {
-      snipeIds.delete(d.id);
-      snipePickAt.delete(d.id);
-      foreignUntil.set(d.id, now + FOREIGN_RETRY_MS);
-      lootState.looting = null;
-    } else if (act === 'pick') {
-      snipePickAt.set(d.id, now);
-      lt.pickAt = now;
-      sendPickup(d.id);
-    }
-    await sleep(100);
-    return true;
   }
   if (lt.pickAt == null || now - lt.pickAt >= PICKUP_RETRY_MS) {
     lt.pickAt = now;

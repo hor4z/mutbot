@@ -7,8 +7,8 @@ import { requestCharacterList, waitFor } from './connection';
 import { sayChat } from './actions';
 import { capStats, planStats, classFamily, isFreshChar, planFreshStats } from './farming';
 import { journal } from './journal';
-import { LORENCIA_WARP, WARP_SPOTS, crowdedAt, persistLearning, warpAndWait } from './route';
-import { bot, learned, world } from './state';
+import { warp, warpAndWait } from './warps';
+import { bot, world } from './state';
 import { log, sleep } from './util';
 import { trackEvent } from './telemetry';
 import { selectCharacter } from './world';
@@ -130,7 +130,7 @@ async function doResetSteps(): Promise<boolean> {
   if (!list && world.map !== 0) {
     log('Reset: no lo aceptó acá; voy a Lorencia y reintento.');
     resetNeedsLorencia = true;
-    await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
+    await warpAndWait(warp(2)); // Lorencia
     await sleep(2000);
     list = await sayReset(8000);
   }
@@ -150,21 +150,6 @@ async function doResetSteps(): Promise<boolean> {
   world.npcs.clear();
   world.townNpcs.clear();
   bot.currentSpot = null;
-  // Ciclo nuevo. Los spots calientes (hotGrid) y lo aprendido por tipo de monstruo se conservan:
-  // dependen del mapa, no del nivel.
-  // La vara de cada mapa depende del nivel: se vuelve a medir. La memoria de
-  // campamentos se conserva (guarda el nivel al que se midió).
-  learned.camps.onReset();
-  crowdedAt.clear();
-  // Cierra el ciclo en el registro de tramos (solo cuenta si llegó al 400).
-  const closed = learned.cycleLog.reset(Date.now());
-  if (closed) {
-    log(`Ciclo cerrado: ${closed.min} min (${Math.round(1440 / (closed.min || 1))} resets/día a este ritmo).`);
-    trackEvent('cycle', '', closed.min ?? 0, 0, closed);
-  }
-  // Contador local de resets: el server no manda uno que sepamos parsear.
-  learned.char.resets++;
-  await persistLearning();
   await selectCharacter(list);
   await sleep(2500);
   await investStatPoints(true);

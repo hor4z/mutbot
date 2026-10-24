@@ -1,49 +1,41 @@
 /**
- * Loop autónomo, lo más simple posible. Un tick, en este orden (cada paso puede cortarlo con `continue`):
- *   reconectar si está ciego > corte de trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda a un compañero >
- *   baúl/equipo > reset > stats > cambio de spot (ruta fija) > loot > elegir objetivo (dorado a la vista, si no
- *   campamento) > pelear / caminar > sin objetivo: campamento o explorar.
- * Quién fija el spot lo dice `intent.ts`; cooperar con un compañero está en `help.ts`. Una corrida por conexión, a
- * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
+ * El loop de un bot. Un tick:
+ *   1. si algo anda mal (ciego, trabado, vida baja, pausa, PK), arreglarlo;  2. cacería de dorados si hay invasión;
+ *   3. resetear al nivel 400 y repartir puntos;  4. ir al lugar que le toca (place.ts) y quedarse;
+ *   5. loot;  6. pegarle a un dorado a la vista o, si no hay, a lo más cercano dentro del lugar.
+ * Cada paso puede cortar el tick con `continue`. Todo a ritmo mínimo seguro (config.ts): no se baja.
  */
 import { askHelp, newRequests, teammates } from './team';
 import { sendServerCommand } from './chat';
-import { insights } from './insights';
 import { PK_RECOVERY } from './recovery';
 import { track, trackEvent } from './telemetry';
 import { closeSockets } from './connection';
-import { ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
+import { ATTACK_PACE_MS, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
 import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
-import { CORNER, cornerTarget, inCorner, nextRoutePoint } from './corner';
+import { CORNER, inCorner, nextRoutePoint } from './corner';
 import { GoldenRule } from './golden';
-import { parseFight } from './fight-heat';
-import { canFight } from './power';
-import { farmMiddleware, statPower } from './farm-middleware';
-import { ownAreaSkill, ownTargetedSkill } from './protocol097';
-import { GOLDEN_TYPES, isMate } from './state';
+import { canFarmMonster, canFight } from './power';
 import { partyUp } from './help';
-import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
-import { pin } from './intent';
-import { toBytes } from './util';
-import { EXPLORE, Explorer } from './explore';
-import { classFamily, isFreshChar } from './farming';
+import { huntPick, huntStep, huntWander, onGoldenRequest } from './hunt';
 import { decide, journal, panelLog } from './journal';
-import { LEARN } from './learning';
 import { drops, lootState, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
+import { choosePlace, farFrom, fighterNow, isStrong, travelTo, type Place } from './place';
 import { doReset, investStatPointsInBackground } from './progress';
-import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, WARP_SPOTS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait } from './route';
-import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type ScopedNpc } from './state';
+import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, pkGuard, world, type ScopedNpc } from './state';
+import { warpAndWait } from './warps';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
 
 const SWELL_LIFE_MS = 55_000;
+// La muerte llega por dos lados (HP 0 y ObjectGotKilled): dentro de esta ventana es una sola.
+const LEARN_DEATH_DEBOUNCE_MS = 15_000;
 // Ningún monstruo a la vista durante esto = el server dejó de mandar el scope: reconectar.
 const BLIND_RECONNECT_MS = 3 * 60_000;
 // 15 s caminando sin moverse = traba (pared, objetivo inalcanzable): suelta el objetivo; si repite, vuelve a entrar al mapa.
@@ -55,20 +47,13 @@ let lastTickAt = 0;
 let lastStuckBreak = 0;
 let economyWatched = false;
 let lastDeathAt = -Infinity;
-let castSkill = 0;
-let aggroTarget: Map<number, number> | null = null;
-let aggroHooked = false;
 
 // Totales de todas las sesiones (el loop corre una vez por conexión).
 export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
 
-// Kills por tipo (curiosidad: tipos con < 3 kills medidos van primero).
-const typeKills: Record<number, number> = {};
-
 function dataTick(ctx: LoopCtx) {
   const now = Date.now();
   lastTickAt = now;
-  insights(now); // mantiene tibia la caché de la base (insights.ts); no espera ni depende de ella
   const near = (q: { x: number; y: number }, d: number) => Math.hypot(q.x - world.x, q.y - world.y) <= d;
   const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
   track('ticks', {
@@ -78,98 +63,58 @@ function dataTick(ctx: LoopCtx) {
     mode: currentMode(), phase: ctx.phase,
     mates_near: mates.filter((q) => near(q, 15)).length,
     monsters_near: [...ctx.npcs.values()].filter((m) => near(m, 8)).length,
-    in_party: bot.inParty ? 1 : 0, skill: castSkill, doing: bot.doing,
+    in_party: bot.inParty ? 1 : 0, doing: bot.doing,
     mate_spot: mates.some((q) => near(q, 8)) ? 1 : mates.length ? 2 : 0,
   }, now);
 }
 
-// Qué skill tiro de verdad (lo confirma el server) y qué monstruo me pega (paquetes 0x18/0x19).
-function hookAggro() {
-  if (aggroHooked) return;
-  aggroHooked = true;
-  let lastOwnSkill: number | null = null;
-  const own = (pick: (raw: Uint8Array) => number | null) => (raw: any) => {
-    const n = pick(toBytes(raw));
-    if (n == null || n === lastOwnSkill) return;
-    lastOwnSkill = n;
-    log(`Tiro ${SKILL_TABLE.get(n)?.name ?? 'skill ' + n} (${n}).`);
-    trackEvent('cast', SKILL_TABLE.get(n)?.name ?? '', n);
-    castSkill = n;
-  };
-  for (const ev of ['AreaSkillAnimation', 'AreaSkillAnimation075', 'AreaSkillAnimation095']) EventBus.on(ev, own((b) => ownAreaSkill(b, bot.playerId & 0x7fff)));
-  for (const ev of ['SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) EventBus.on(ev, own((b) => ownTargetedSkill(b, bot.playerId & 0x7fff)));
-  for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
-    EventBus.on(ev, (raw: any) => {
-      const f = parseFight(toBytes(raw));
-      if (!f) return;
-      // Un monstruo le pega a un compañero: cuenta como aggro nuestro para que lo mate el que está cerca.
-      const tgt = world.players.get(f.target);
-      if (f.attacker !== (bot.playerId & 0x7fff) && tgt?.name && isMate(tgt.name) && world.npcs.has(f.attacker)) aggroTarget?.set(f.attacker, Date.now());
-      if (f.target === (bot.playerId & 0x7fff) && world.npcs.has(f.attacker)) aggroTarget?.set(f.attacker, Date.now());
-    });
+/** Lo más cercano a mí dentro del lugar (ancla + radio), sin los marcados inalcanzables. */
+function nearestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) => boolean): ScopedNpc | null {
+  let best: ScopedNpc | null = null;
+  let bd = Infinity;
+  for (const m of npcs) {
+    if (skip(m.id) || chebyshev(m.x, m.y, place.anchor.x, place.anchor.y) > place.radius) continue;
+    const d = chebyshev(m.x, m.y, world.x, world.y);
+    if (d < bd) { bd = d; best = m; }
   }
+  return best;
 }
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
 export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
-  log(`Build=${BUILD.join('>')}${BUILD_ARG ? '' : ' (planStats)'} heal<=${HEAL_AT_PCT}% skills=[${ATTACK_SKILL_POOL.join(',')}] ruta fija por tramo`);
-
   const ctx = newLoopCtx();
-  const fighterNow = () => ({ family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp });
 
-  // Monstruos atacables: los de world.npcs que NO están en zona segura (en el pueblo no hay daño: 0 exp). Un
-  // personaje limitado (stats por detrás del nivel) solo ataca lo que su poder permite (farm-middleware.ts).
+  // Monstruos atacables: los de world.npcs fuera de zona segura. Un personaje que no aguanta la esquina solo ataca lo que
+  // su poder permite; los dorados los decide la regla de dorados.
   const refreshAttackable = () => {
     ctx.npcs = new Map();
     const f = fighterNow();
-    const limited = isFreshChar(world.resets, world.stats) || farmMiddleware.profile(f, world.level, world.skills.has(41), Date.now()).limited;
+    const strong = isStrong();
     for (const [id, n] of world.npcs) {
       if (isSafeZone(world.map, n.x, n.y)) continue;
-      if (limited && !isGolden(n) && !farmMiddleware.target(f, n.type, world.skills.has(41))) continue;
+      if (strong !== true && !isGolden(n) && !canFarmMonster(f, n.type, world.skills.has(41))) continue;
       ctx.npcs.set(id, n);
     }
   };
 
-  let totalExpGained = 0;
-  let kills = 0;
-  let potionsDrunk = 0;
-  let statPointsSpent = 0;
-  let resets = 0;
-  let deaths = 0;
-  let nextResetTry = 0;
-  let lastSave = Date.now();
-  let lastCycleCheck = 0;
-  let lastBarrierAt = 0;
-  let lastSwellAt = 0;
-  let targetSince = 0;
-  let targetType = -1;
-  let seededRoute = '';
+  let totalExpGained = 0, kills = 0, potionsDrunk = 0, statPointsSpent = 0, resets = 0, deaths = 0;
+  let nextResetTry = 0, lastBarrierAt = 0, lastSwellAt = 0, ticks = 0;
   let lastAnyNpcAt = Date.now();
   let attackTarget: number | null = null;
   let attackSince = 0;
-  let lastGoalTxt = '';
-  let explorerMap: number | null = null;
-  let ticks = 0;
   let routeIdx: number | null = null;
   const golden = new GoldenRule();
   const goldAnnounced = new Set<number>();
-  const explorer = new Explorer(EXPLORE_PREF, EXPLORE, hotGrid);
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro id); dentro de la ventana es una sola.
-  // El respawn es en el pueblo: se olvida el spot (canAdopt = false) y la ruta vuelve a warpear.
   const onDeath = (source: string) => {
-    if (Date.now() - lastDeathAt < LEARN.DEATH_DEBOUNCE_MS) return;
+    if (Date.now() - lastDeathAt < LEARN_DEATH_DEBOUNCE_MS) return;
     lastDeathAt = Date.now();
     deaths++;
     log(`Muerte #${deaths} (${source}) en ${bot.currentSpot?.name ?? 'spot desconocido'}.`);
-    if (farmMiddleware.profile(fighterNow(), world.level, world.skills.has(41), Date.now()).limited && farmMiddleware.death(world.map, Date.now()))
-      decide(`Muerte en ${mapName(world.map)}: no vuelvo a este mapa por 10 min.`);
-    bot.lastSpotIndex = bot.currentSpot?.index ?? bot.lastSpotIndex;
-    bot.currentSpot = null;
+    bot.currentSpot = null; // el respawn es en el pueblo: el lugar vuelve a decidir a dónde ir
     bot.canAdopt = false;
-    learned.camps.camp = null;
-    void persistLearning();
   };
   let lastHp = world.hp;
   const onHp = (raw: any) => {
@@ -180,9 +125,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const id = p.KilledId & 0x7fff;
-    const wasOurTarget = id === ctx.target;
     const dead = world.npcs.get(id);
-    // Dorado muerto a la vista y quién lo mató: "vistos contra matados" y quién se queda con los dragones.
+    // Dorado muerto a la vista y quién lo mató: "vistos contra matados".
     if (dead && GOLDEN_TYPES.has(dead.type)) {
       const kid = p.KillerId & 0x7fff;
       const mine = kid === bot.playerId;
@@ -197,26 +141,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       decide(`Me mató ${by}.`);
       trackEvent('death', by, kid, killer ? 1 : 0, { killer: killer?.name ?? null, npc: killer ? null : world.npcs.get(kid)?.type ?? null });
       onDeath('ObjectGotKilled');
-      return;
-    }
-    if ((p.KillerId & 0x7fff) === bot.playerId) {
-      kills++;
-      // Segundos de kill por tipo: desde que se eligió el objetivo hasta acá.
-      if (wasOurTarget) typeStats.recordKillSec(targetType, (Date.now() - targetSince) / 1000);
-    }
+    } else if ((p.KillerId & 0x7fff) === bot.playerId) kills++;
   };
-  // ExperienceGained: un kill de más de 65535 llega partido en ~60 packets con el mismo id: ExpSplitTracker los suma
-  // para la exp por tipo (farming.ts) y ExpLog los agrega por segundo.
+  // ExperienceGained: un kill de más de 65535 llega partido en ~60 packets; ExpLog los agrega por segundo.
   const onExp = (raw: any) => {
-    const p = new ExperienceGainedPacket(raw);
-    const added = p.AddedExperience;
-    const now = Date.now();
+    const added = new ExperienceGainedPacket(raw).AddedExperience;
     totalExpGained += added;
     ctx.expTotal += added;
-    expLog.add(added, now); // la exp por segundo que mira todo lo demás (rendimiento, campamentos, ciego)
-    const ev = expTracker.onExp(p.KilledObjectId & 0x7fff, added, now);
-    if (ev.info && !ev.continuation) typeKills[ev.info.type] = (typeKills[ev.info.type] ?? 0) + 1;
-    if (ev.info && ev.info.map === world.map) explorer.onExp(world.map, ev.info.x, ev.info.y, added, now);
+    expLog.add(added, Date.now());
   };
   EventBus.on('ObjectGotKilled', onKilled);
   EventBus.on('ExperienceGained', onExp);
@@ -238,39 +170,29 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   };
   setLoopView(() => ({ kills, deaths, casts: ctx.skillsUsed, exp: totalExpGained, target: ctx.target }));
   if (!sessionStart.level) sessionStart.level = world.level;
-  hookAggro();
-  aggroTarget = ctx.aggro;
-  const logCampEvents = () => {
-    for (const e of learned.camps.events) log(`Campamento: ${e}.`);
-    learned.camps.events = [];
-  };
-  const pickTarget = (n: { id: number; type: number }) => {
-    ctx.target = n.id;
-    targetType = n.type;
-    targetSince = Date.now();
-  };
+  const pickTarget = (n: { id: number }) => { ctx.target = n.id; };
 
   while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked) {
     refreshAttackable();
     const nowT = Date.now();
     if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = nowT;
 
-    // Ciego: el server a veces deja de mandar el scope de monstruos, o la sesión queda "fantasma" (monstruos pero
-    // ninguna exp). Reconectar lo arregla.
+    // --- 1. Que no esté roto ---------------------------------------------------------------------------------------
+    // Ciego: el server a veces deja de mandar el scope, o la sesión queda "fantasma" (monstruos pero ninguna exp).
     const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0;
     const sinceIn = nowT - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
     if (noExp || nowT - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
-      bot.blind = true;
       decide(noExp ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto.` : `Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto.`);
       journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
+      bot.blind = true;
       bot.kicked = true;
       closeSockets();
       break;
     }
     if (bot.inGameAt > 0 && nowT - lastTickAt >= TICK_MS) dataTick(ctx);
 
-    // Corte de trabas: 15 s caminando sin moverse → suelta objetivo y campamento; si repite enseguida, vuelve a entrar al mapa.
+    // Corte de trabas: 15 s caminando sin moverse → suelta el objetivo; si repite enseguida, vuelve a entrar al mapa.
     if (ctx.stuckSince && nowT - ctx.stuckSince > STUCK_BREAK_MS) {
       ctx.stuckStrikes = nowT - lastStuckBreak < 90_000 ? ctx.stuckStrikes + 1 : 1;
       lastStuckBreak = nowT;
@@ -281,21 +203,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.walkStuck = 0;
       ctx.stuckSince = 0;
       if (bot.hunting) { bot.hunting.explorer.reset(); bot.hunting.zonesVisited = new Set(); }
-      else if (learned.camps.camp) learned.camps.leave(nowT, world.level, 'trabado caminando', true, expLog);
-      if (ctx.stuckStrikes >= 2 && bot.currentSpot && !bot.pendingWarp) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
+      if (ctx.stuckStrikes >= 2 && bot.currentSpot) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
       continue;
     }
     ticks++;
-
-    // Registro de tramos por ciclo (nivel 20/50/100/.../400) y lo aprendido, cada ~2 min.
-    if (nowT - lastCycleCheck >= 2000) {
-      lastCycleCheck = nowT;
-      if (learned.cycleLog.observe(world.level, nowT).length) void persistLearning();
-    }
-    if (nowT - lastSave >= SAVE_EVERY_MS) {
-      lastSave = nowT;
-      await persistLearning();
-    }
 
     // Buffs propios: mago Soul Barrier (16) cada ~50 s; caballero Swell Life (48) cada ~55 s.
     if (isMage() && world.skills.has(16) && nowT - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && nowT - ctx.lastCastAt > SKILL_PACE_MS) {
@@ -309,7 +220,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(humanPace(SKILL_PACE_MS));
     }
 
-    // Sobrevivir tiene prioridad absoluta.
     if (checkSurvival()) {
       potionsDrunk++;
       await sleep(200);
@@ -339,91 +249,62 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         trackEvent('pk_clear', act.giveUp, -1);
       }
     }
-    // Warp pedido (panel, ayuda a un compañero).
-    if (bot.pendingWarp) {
-      const sp = bot.pendingWarp;
-      bot.pendingWarp = null;
-      bot.doing = `viajando a ${sp.name}`;
-      journal('travel', `warp a ${sp.name} (${pin.owner() ?? 'ruta'})`, { warp: sp.index });
-      if (!(await warpAndWait(sp))) panelLog(`El warp a ${sp.name} no respondió; lo reintento.`);
-      ctx.target = null;
-      continue;
-    }
-    const profile = farmMiddleware.profile(fighterNow(), world.level, world.skills.has(41), nowT);
-    learned.camps.setPower(statPower(fighterNow()), profile.spot != null);
-    const seedKey = `${world.resets}:${Math.floor(world.level / 80)}`;
-    if (profile.spot != null && world.resets != null && seededRoute !== seedKey) {
-      seededRoute = seedKey;
-      void seedRouteFromDb(world.resets, world.level, statPower(fighterNow()));
-    }
-    const weak = isFreshChar(world.resets, world.stats) || profile.limited;
-    const me = weak ? fighterNow() : null;
 
-    // Compañeros: party con el cercano más débil (help.ts) y avisos de dorados (hunt.ts).
+    // --- 2. Compañeros y cacería de dorados ------------------------------------------------------------------------
     partyUp();
-    for (const r of newRequests()) if (r.kind === 'golden') onGoldenRequest(r, weak);
-    // Cacería de dorados (hunt.ts): arrancar con la invasión o un aviso, cortar, viajar al mapa.
-    if (await huntStep(ctx, weak)) continue;
+    const strong = isStrong();
+    for (const r of newRequests()) onGoldenRequest(r, strong === false);
+    if (strong != null && (await huntStep(ctx, strong === false))) continue;
 
-    // Reset al llegar al nivel, salvo cazando o con un dorado en juego.
+    // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
     const goldHold = !!bot.hunting || golden.holding(nowT);
-    // La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, para quien la aguanta, salvo cazando o con el spot fijado.
-    const cornerOn = !goldHold && !pin.current() && profile.corner && world.level >= CORNER.minLevel && world.level < RESET_LEVEL;
     if (!goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;
-        log(`Reset hecho (${learned.char.resets}).`);
+        log(`Reset hecho (${world.resets ?? '?'}).`);
       } else nextResetTry = Date.now() + 2 * 60_000;
       continue;
     }
-    // Invertir puntos de atributo cuando junte un lote, en segundo plano (sigue peleando).
     investStatPointsInBackground((n) => { statPointsSpent += n; });
 
-    // Medición neta de la exp (incluye la caminata desde el warp): un mapa que no rinde se deja 10 min.
-    if (weak && !cornerOn && !pin.current() && bot.currentSpot && !goldHold) {
-      const why = farmMiddleware.observe({ spot: bot.currentSpot.index, map: world.map, level: world.level,
-        now: nowT, arrivalAt: bot.lastArrivalAt, rate: expLog.rateSince(bot.lastArrivalAt, nowT), f: fighterNow(), twistingSlash: world.skills.has(41) });
-      if (why) {
-        decide(`Rendimiento: ${why}.`);
-        if (await maybeChangeSpot()) { ctx.target = null; continue; }
-      }
-    }
-    // Ruta fija por tramo: cada 10 ticks (o sin spot) revisa si toca cambiar de mapa.
-    if (!goldHold && !cornerOn && (ticks % 10 === 0 || !bot.currentSpot)) {
-      if (await maybeChangeSpot()) { ctx.target = null; continue; }
-    }
-
-    // Viajar a la esquina y caminar el camino hasta ella.
-    if (cornerOn && !inCorner({ x: world.x, y: world.y })) {
-      ctx.target = null;
-      if (world.map !== CORNER.map) {
-        routeIdx = null;
-        if (nowT - bot.lastWarpAt < WARP_COOLDOWN_MS) { bot.doing = 'esperando para ir a la esquina de Arena 2'; await sleep(500); continue; }
-        bot.doing = `viajando a la esquina de Arena 2 (nivel ${world.level})`;
-        journal('travel', `warp a Arena 2 para la esquina (nivel ${world.level})`, { warp: CORNER.warp, reason: 'corner' });
-        await warpAndWait(WARP_SPOTS.find((sp) => sp.index === CORNER.warp)!);
+    // --- 4. Ir al lugar --------------------------------------------------------------------------------------------
+    const place = bot.hunting ? null : choosePlace();
+    if (!bot.hunting && !place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
+    if (place) {
+      if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
+      // La esquina tiene un camino desde la llegada (directo cortaba por los monstruos); el resto, en línea al ancla.
+      if (place.kind === 'corner' && !inCorner({ x: world.x, y: world.y })) {
+        ctx.target = null;
+        const next = nextRoutePoint({ x: world.x, y: world.y }, routeIdx);
+        routeIdx = next.idx;
+        bot.doing = `camino a ${place.name} (${next.x},${next.y})`;
+        ctx.phase = 'walk';
+        castOnTheWay(ctx);
+        await walkTowards(ctx, next.x, next.y);
         continue;
       }
-      const next = nextRoutePoint({ x: world.x, y: world.y }, routeIdx);
-      routeIdx = next.idx;
-      bot.doing = `camino a la esquina (${next.x},${next.y})`;
-      ctx.phase = 'walk';
-      castOnTheWay(ctx);
-      await walkTowards(ctx, next.x, next.y);
-      continue;
+      if (place.kind !== 'corner' && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+        bot.doing = `yendo a ${place.name}`;
+        bot.goalPoint = [place.anchor.x, place.anchor.y];
+        ctx.phase = 'walk';
+        castOnTheWay(ctx);
+        await walkTowards(ctx, place.anchor.x, place.anchor.y);
+        continue;
+      }
     }
 
-    // Loot valioso, salvo con un objetivo a distancia de golpe.
-    const targetInMeleeRange = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;
-    if (!targetInMeleeRange && (await lootStep(false, false))) {
+    // --- 5. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
+    const targetInMelee = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;
+    if (!targetInMelee && (await lootStep(false, false))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;
     }
 
-    // Elegir / mantener objetivo: un dorado a la vista manda (dragones primero); si no, campamento (camp.ts) por exp/s.
+    // --- 6. Objetivo: un dorado manda; si no, lo más cercano del lugar ---------------------------------------------
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
+    const me = strong === true ? null : fighterNow();
     let gold: ScopedNpc | null = null;
     if (bot.hunting) {
       const hp = await huntPick(ctx, unreachable, (t) => !me || canFight(me, t));
@@ -436,29 +317,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       if (!goldAnnounced.has(gold.id)) {
         goldAnnounced.add(gold.id);
         decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
-        // Avisar a los compañeros: si pueden, vienen (help.ts).
+        // Avisar a los compañeros: si pueden, vienen (hunt.ts).
         if (teammates().length && askHelp('golden', world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`))
           decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       pickTarget(gold);
-    } else if (ctx.target == null && !bot.hunting && cornerOn) {
-      const t = cornerTarget({ x: world.x, y: world.y }, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)));
+    } else if (ctx.target == null && place) {
+      const t = nearestIn(place, ctx.npcs.values(), unreachable.has);
       if (t) pickTarget(t);
-    } else if (ctx.target == null && !bot.hunting) {
-      const pick = learned.camps.pick({
-        now: nowT, map: world.map, me: { x: world.x, y: world.y }, level: world.level,
-        monsters: [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)),
-        players: [], stats: typeStats, exp: expLog, typeKills,
-      });
-      logCampEvents();
-      if (pick) pickTarget(pick);
     }
-    if (explorerMap !== world.map) {
-      explorerMap = world.map;
-      explorer.enterMap(world.map, world.x, world.y, nowT);
-    }
-    if (ctx.npcs.size) explorer.sawMonster(nowT);
 
+    // --- 7. Pelear / acercarse / esperar ---------------------------------------------------------------------------
     if (ctx.target != null) {
       const target = ctx.target;
       const t = ctx.npcs.get(target)!;
@@ -496,70 +365,35 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         continue;
       }
       attackTarget = null;
-      // Acercarse por el camino del terreno, girando con lo que esté a <= 3 (no frena la caminata). Si no avanza,
-      // el corte de trabas de arriba lo suelta a los 15 s.
+      // Acercarse por el camino del terreno, girando con lo que esté a <= 3. Si no avanza, el corte de trabas lo suelta.
       castOnTheWay(ctx);
       await walkTowards(ctx, t.x, t.y);
       continue;
     }
 
-    // Sin objetivo en la esquina: esperar adentro, en el punto de espera.
-    if (cornerOn) {
-      bot.goalPoint = [CORNER.wait.x, CORNER.wait.y];
-      if (chebyshev(world.x, world.y, CORNER.wait.x, CORNER.wait.y) > 2) { bot.doing = 'esperando en la esquina'; ctx.phase = 'walk'; await walkTowards(ctx, CORNER.wait.x, CORNER.wait.y); }
-      else { bot.doing = 'esperando monstruos en la esquina'; ctx.phase = 'wait'; await sleep(400); }
-      continue;
-    }
-    // Sin objetivo. Cazando: al dorado recordado, a una zona o recorrer el mapa.
-    if (bot.hunting && (await huntWander(ctx))) continue;
-    // a) Mapa vacío 90 s: otra entrada del tramo.
-    if (explorer.isDry(nowT)) {
-      log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${bot.currentSpot?.name ?? `map ${world.map}`}: busco otro spot.`);
-      if (bot.currentSpot) dryAt.set(bot.currentSpot.index, nowT);
-      if (!(await maybeChangeSpot({ mapDead: true }))) explorer.resetDry(Date.now());
-      continue;
-    }
-    // b) Campamento (actual, memoria) o volver a la correa.
-    const cg = learned.camps.goal(nowT, world.map, { x: world.x, y: world.y }, world.level, expLog);
-    logCampEvents();
-    if (cg) {
-      const txt = `${cg.kind} (${cg.x},${cg.y})`;
-      if (txt !== lastGoalTxt) {
-        lastGoalTxt = txt;
-        log(`Voy a ${txt} desde (${world.x},${world.y}) map=${world.map}.`);
-      }
-      bot.goalPoint = [cg.x, cg.y];
-      if (chebyshev(world.x, world.y, cg.x, cg.y) <= 2) {
-        bot.doing = `acampando en ${mapName(world.map)} (${cg.x},${cg.y})`;
+    // Sin objetivo. Cazando: al dorado recordado, a una zona o recorrer el mapa. Si no: esperar en el ancla del lugar.
+    if (bot.hunting) {
+      if (await huntWander(ctx)) continue;
+    } else if (place) {
+      bot.goalPoint = [place.anchor.x, place.anchor.y];
+      if (chebyshev(world.x, world.y, place.anchor.x, place.anchor.y) > 2) {
+        bot.doing = `volviendo a ${place.name}`;
+        ctx.phase = 'walk';
+        await walkTowards(ctx, place.anchor.x, place.anchor.y);
+      } else {
+        bot.doing = `esperando monstruos en ${place.name}`;
         ctx.phase = 'wait';
-        await sleep(500);
-        continue;
+        await sleep(400);
       }
-      ctx.phase = 'walk';
-      bot.doing = `yendo al ${cg.kind === 'camp' ? 'campamento' : 'punto de llegada'} (${cg.x},${cg.y}) en ${mapName(world.map)}`;
-      castOnTheWay(ctx);
-      await walkTowards(ctx, cg.x, cg.y);
       continue;
     }
-    // c) Explorar: spots calientes y, sin ellos, las salidas del pueblo.
-    explorer.setLeash(learned.camps.leashFor(world.map));
-    const act = explorer.tick(world.map, world.x, world.y, nowT);
-    ctx.phase = act.action === 'wait' ? 'wait' : 'walk';
-    bot.goalPoint = [act.goal.x, act.goal.y];
-    bot.doing = `explorando ${mapName(world.map)}: ${act.goal.kind === 'hot' ? 'spot caliente' : 'salida'} (${act.goal.x},${act.goal.y})`;
-    if (act.action === 'wait') {
-      await sleep(500);
-      continue;
-    }
-    castOnTheWay(ctx);
-    await walkTowards(ctx, act.x, act.y);
+    await sleep(300);
   }
 
   EventBus.off('ObjectGotKilled', onKilled);
   EventBus.off('ExperienceGained', onExp);
   EventBus.off('CurrentHealthAndShield', onHp);
   stopWatchingDrops();
-  await persistLearning();
   drops.clear();
   lootState.looting = null;
   log(`\nFin del loop: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${ctx.skillsUsed} skill(s), ${resets} reset(s), ${deaths} muerte(s).`);

@@ -1,17 +1,14 @@
 /**
  * Estado compartido del bot. Un proceso = un personaje (la estación lanza uno por personaje), así
  * que son singletons de módulo. Lo que varios módulos escriben vive en objetos explícitos (`world`,
- * `bot`, `learned`): los `let` de un módulo ES no se pueden asignar desde otro.
+ * `bot`): los `let` de un módulo ES no se pueden asignar desde otro.
  *
  *   world    lo que el bot cree de sí mismo y de su alrededor, según los packets S2C
  *   bot      decisiones y estado para el panel (spot, modo, cacería, órdenes pendientes...)
- *   learned  lo aprendido que se guarda en learning.json (se reemplaza al cargarlo)
  */
-import { CampManager, Hunger } from './camp';
 import { CHAR_NAME, type StatName } from './config';
-import { HotSpotGrid } from './explore';
-import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats } from './farming';
-import type { CharLearning, Spot } from './learning';
+import { ExpLog } from './farming';
+import type { Warp } from './warps';
 import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
 import type { Invasion } from './panel-protocol';
 import { PkRecovery } from './recovery';
@@ -79,8 +76,6 @@ const NAME_FIXES = new Map<number, string>([[44, 'Dragón Rojo']]);
 export const monsterName = (type: number) => NAME_FIXES.get(type) ?? MONSTER_NAMES.get(type) ?? `tipo ${type}`;
 // Nivel por TypeNumber (farmeo inicial: solo monstruos acordes al personaje). Custom >= 300: sin dato.
 const MONSTER_LEVELS = new Map<number, number>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Level]));
-export const monsterLevel = (type: number): number | undefined => MONSTER_LEVELS.get(type);
-
 // ---------------------------------------------------------------------------
 // Estado del mundo (lo que el bot cree de sí mismo) — se actualiza con los
 // packets S2C (world.ts). Es la única fuente de verdad del loop autónomo.
@@ -134,7 +129,7 @@ export const bot = {
   charName: CHAR_NAME,
   // El bot no compra ni vende (pedido del usuario): solo lleva el zen para el panel.
   lastMoney: 0,
-  currentSpot: null as Spot | null,
+  currentSpot: null as Warp | null,
   // Se puede adoptar el mapa actual como spot sin warpear (al entrar al mundo);
   // tras una muerte no (respawnea en el pueblo: hay que volver a warpear).
   canAdopt: true,
@@ -147,8 +142,6 @@ export const bot = {
   paused: false,
   // Cacería de dorados (hunt.ts). null = farmeo normal.
   hunting: null as HuntState | null,
-  // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
-  pendingWarp: null as Spot | null,
   resetting: false,
   // El loop descarta su objetivo en el próximo tick (cambio de modo).
   retarget: false,
@@ -168,27 +161,8 @@ export const bot = {
   redDragon: null as { map: number; at: number } | null,
 };
 
-// ---------------------------------------------------------------------------
-// Farmeo por exp/segundo (farming.ts): lo aprendido por tipo de monstruo, el
-// registro id → tipo para atribuir la exp, y la grilla de spots calientes
-// (explore.ts). Viven a nivel módulo: sobreviven a los resets, y se guardan
-// en el mismo learning.json para sobrevivir a un reinicio del bot.
-// ---------------------------------------------------------------------------
-export const typeStats = new MonsterTypeStats((type) => MONSTER_MAX_HP.get(type) ?? null);
-export const expTracker = new ExpSplitTracker(typeStats);
-export const hotGrid = new HotSpotGrid();
-// Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de
-// exp/min por ventana (informe, campamentos, hambre) salen de acá.
+// Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de exp/min salen de acá.
 export const expLog = new ExpLog(Date.now());
-
-// Campamentos (camp.ts): correa, memoria, vara por mapa. Hambre por tramo.
-// Registro de tramos por ciclo. Se recrean al cargar learning.json (route.ts).
-export const learned = {
-  char: { resets: 0 } as CharLearning,
-  camps: new CampManager(),
-  hunger: new Hunger(),
-  cycleLog: new CycleLog(Date.now()),
-};
 
 // Auto-recuperación del PK (recovery.ts): la alimentan el chat (avisos del server) y los warps (route.ts);
 // el loop manda /pkclear cuando toca.

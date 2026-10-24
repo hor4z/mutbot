@@ -25,7 +25,6 @@
  *   --skills 41,42       skills de ataque, en orden de preferencia
  *   --spots 2,6,24       limita la ruta a esos warps
  *   --explore-dir 1      primera dirección a explorar desde el pueblo en mapas sin salida conocida
- *   --learn-file p.json  dónde guarda lo aprendido (default ~/.mubot/learning.json)
  *   --no-auto-hunt       sin el cazador automático de invasiones doradas
  *   --party-mates        acepta party de un compañero (por defecto se rechaza toda party)
  *
@@ -41,7 +40,7 @@
  *   actions.ts      packets de salida (paso, golpe, skills, warp, chat, keepalives)
  *   combat.ts       elección de skill, alcance, pociones
  *   loot.ts         drops en scope y levantar lo valioso
- *   route.ts        warps, ruta fija por tramo, learning.json
+ *   place.ts        dónde estar (esquina, acompañar, spot por nivel); warps.ts los viajes
  *   progress.ts     reparto de puntos y /reset
  *   events.ts       0x91 (aperturas), 0xFD (invasión), CharacterResets
  *   journal.ts      diario de acciones y log al panel
@@ -58,15 +57,13 @@ import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, LIST_CHARS, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
-import { EVENT_POLL_TICK_MS, pollEvents, trackPanelPackets } from './events';
+import { trackPanelPackets } from './events';
 import { autonomousLoop, type LoopResult } from './farm-loop';
 import { drops, lootState } from './loot';
 import { LoginResponseLoginResultEnum } from './packets';
 import { buildPanelState, handlePanelCommand, noteModeChange, updateTrail } from './panel';
 import { Backoff } from './protocol097';
 import { watchLiveness } from './liveness';
-import { loadLearningState } from './route';
-import { pin } from './intent';
 import { bot, world } from './state';
 import { log, sleep } from './util';
 import { CreateCharacterError, listCharacters, loginAndSelectCharacter, trackWorld } from './world';
@@ -103,12 +100,8 @@ function clearScope() {
   bot.inGameAt = 0;
   bot.doing = 'conectando';
   bot.goalPoint = null;
-  // Lo transitorio no sobrevive a la reconexión: un warp pendiente, los pins de la escuadra y de la espera, y una
-  // cacería vieja (sus 'since' y reintentos ya no valen). El spot fijado por el panel sí queda: lo pidió una persona.
-  bot.pendingWarp = null;
-  pin.clear('town', 'reconexión');
+  // Una cacería vieja no sobrevive a la reconexión (su 'since' y sus reintentos ya no valen).
   if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null; // una cacería vieja ya no vale
-  pin.clear('town', 'reconexión');
 }
 
 async function session(deadline: number): Promise<LoopResult> {
@@ -177,12 +170,7 @@ async function main() {
       noteModeChange();
       bot.statusServer?.broadcastPanelState(buildPanelState(now));
     }, 1000);
-    setInterval(pollEvents, EVENT_POLL_TICK_MS);
   }
-
-  // Lo aprendido (memoria de campamentos, ciclos, tipos) antes de entrar: la
-  // llegada al mundo ya usa la memoria de campamentos.
-  await loadLearningState();
 
   // Keepalives como el cliente web (ver sendPing/sendEcho en actions.ts). sendToGS no
   // manda nada si el socket está cerrado.

@@ -7,20 +7,17 @@
  * (a dónde ir sin objetivo) y `onGoldenRequest` (aviso de un compañero).
  */
 import { askHelp, type TeamRequest } from './team';
-import { avoidCells, huntFactor, insights, predictDragonMap } from './insights';
 import { trackEvent } from './telemetry';
 import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES, stickyGolden } from './golden';
 import { decide, journal, panelLog } from './journal';
 import { type LoopCtx, walkTowards, castOnTheWay } from './loop-ctx';
-import { AUTO_HUNT, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, aliveHistory, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, shouldStopHunt } from './panel-logic';
-import { WARP_COOLDOWN_MS, warpAndWait } from './route';
+import { AUTO_HUNT, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, shouldStopHunt } from './panel-logic';
+import { WARP_COOLDOWN_MS, warpAndWait, type Warp } from './warps';
 import { AUTO_HUNT_ON } from './config';
 import { GOLDEN_TYPES, bot, isGolden, monsterName, world, type ScopedNpc } from './state';
 import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, log } from './util';
-import type { Spot } from './learning';
-import { pin } from './intent';
 
 // Nivel mínimo para salir a cazar: el chequeo de poder (`weak`, stats por detrás del nivel) ya frena al recién reseteado.
 const HUNT_MIN_LEVEL = 300;
@@ -42,14 +39,6 @@ let lastDragon: { id: number; x: number; y: number; at: number } | null = null;
 
 const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
 
-/** Datos de la base para elegir mapa: multiplicador por mapa y el mapa probable del dragón. Sin base: neutros. */
-function huntData(now: number) {
-  const ins = insights(now);
-  const d = new Date(now);
-  const m = d.getUTCMinutes();
-  const hourUtc = m >= 50 ? d.getUTCHours() : m < 5 ? (d.getUTCHours() + 23) % 24 : (d.getUTCHours() + 1) % 24;
-  return { factor: (map: number) => huntFactor(ins, map, now) * aliveHistory.factor(map, now), dragonAt: bot.dragonMap?.at ?? null, now, predictedDragon: predictDragonMap(ins, hourUtc, now)?.map ?? null };
-}
 
 const knownMaps = (now: number) => mapsWithZones(HUNT_MAPS.map((x) => x.map), now);
 const newHunt = (hunt: (typeof HUNT_MAPS)[number], now: number, extra: Partial<NonNullable<typeof bot.hunting>> = {}) =>
@@ -70,8 +59,6 @@ export function stopHunt(reason: string) {
 /** Orden manual (panel): cazar en `map` (o el mejor). */
 export function startHunt(hunt: (typeof HUNT_MAPS)[number], now = Date.now()) {
   bot.hunting = newHunt(hunt, now);
-  pin.clearAll('cacería');
-  bot.pendingWarp = null;
   bot.retarget = true;
 }
 
@@ -95,7 +82,7 @@ export function onGoldenRequest(r: TeamRequest, weak: boolean) {
 export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
   const now = Date.now();
   if (!bot.hunting) {
-    if (!AUTO_HUNT_ON || bot.paused || bot.resetting || world.level < minLevelFor(weak) || pin.owner() === 'panel') return false;
+    if (!AUTO_HUNT_ON || bot.paused || bot.resetting || world.level < minLevelFor(weak)) return false;
     // Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
     if (!weak && bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
       lastRedAt = bot.redDragon.at;
@@ -109,7 +96,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
       }
     }
     // Invasión dorada con vivos en un mapa al alcance → a cazar, una vez por invasión.
-    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, minLevel: minLevelFor(weak), lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
+    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, now, minLevel: minLevelFor(weak), lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now) });
     if (ch?.ok) {
       lastAutoHuntKey = invasionKey(bot.invasion!);
       bot.hunting = newHunt(ch.hunt, now, { auto: true });
@@ -128,7 +115,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
       (h.auto && world.map === h.hunt.map
         ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since,
-            next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now), ...huntData(now) }) })
+            next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now) }) })
         : null);
   if (stop) {
     trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((now - h.since) / 60_000).toFixed(1), red: !!h.red });
@@ -136,7 +123,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     ctx.target = null;
     if (h.auto && !h.red) {
       const done = new Set([...(h.done ?? []), h.hunt.map]);
-      const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
+      const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now) });
       if (next.ok) {
         bot.hunting = newHunt(next.hunt, now, { auto: true, done });
         decide(`Cazador: sigo en ${next.hunt.name} (${next.alive} vivos).`);
@@ -153,7 +140,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     h.warpTries++;
     h.nextWarpAt = now + WARP_COOLDOWN_MS;
     bot.doing = `viajando a ${h.hunt.name} a cazar dorados`;
-    const spot: Spot = { index: h.hunt.warp, name: `cacería ${h.hunt.name}`, reqLevel: h.hunt.reqLevel, zen: 0, map: h.hunt.map };
+    const spot: Warp = { index: h.hunt.warp, name: `cacería ${h.hunt.name}`, reqLevel: h.hunt.reqLevel, map: h.hunt.map };
     journal('travel', `warp a ${h.hunt.name} para cazar dorados`, { warp: h.hunt.warp, map: h.hunt.map, reason: 'hunt' });
     await warpAndWait(spot);
     return true;
@@ -237,7 +224,7 @@ export async function huntWander(ctx: LoopCtx): Promise<boolean> {
   // Recorrer el mapa en celdas de 25 tiles: la sin visitar más cercana, primero las que tuvieron dorados.
   if (terrainOf(world.map)) {
     const walk = walkableFor(world.map);
-    h.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, h.explorer.cell, now), avoidCells(insights(now), world.map, now));
+    h.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, h.explorer.cell, now), undefined);
   }
   const g = h.explorer.next(world.x, world.y, now);
   bot.goalPoint = [g.x, g.y];

@@ -3,7 +3,7 @@
  * entre ellos (dorados vistos, pedidos de ayuda, muertes). Los personajes con la cuenta bloqueada (baneados) no se
  * muestran. Cada mapa es el radar del propio bot (`/panel?mapa` en su puerto): no repite lógica.
  */
-import { ToastProvider, isOnline, isPaused, useActions, useStationData, type Character } from "./station-data";
+import { isOnline, isPaused, useActions, useStationData, type Character } from "./station-data";
 import "./simple.css";
 
 // Personajes que no se muestran aunque la cuenta esté activa (el server ya no deja conectar 3 a la vez).
@@ -94,10 +94,4 @@ function Shell() {
   );
 }
 
-export function SimpleStation() {
-  return (
-    <ToastProvider>
-      <Shell />
-    </ToastProvider>
-  );
-}
+export const SimpleStation = Shell;
