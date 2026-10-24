@@ -15,6 +15,7 @@ import { classFamily } from './farming';
 import { bot, world } from './state';
 import { directedLeader, myShadows } from './bus';
 import { isSafeZone, walkableFor } from './terrain';
+import { trackEvent } from './telemetry';
 import { dist, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
@@ -74,6 +75,7 @@ export function followsLeader(): boolean {
 /** El líder baja a buscar a su sombra como mucho una vez cada tanto (le cuesta exp: no está en la esquina). */
 const FETCH_COOLDOWN_MS = 3 * 60_000;
 let fetchedAt = 0;
+let fetchStart = 0;
 
 export const fighterNow = (): Fighter => ({ family: classFamily(world.classId) ?? 'knight', stats: world.stats, maxHp: world.maxHp });
 
@@ -92,8 +94,14 @@ export function choosePlace(): Place | null {
   // El líder baja a buscar a su sombra, que espera en la entrada de una Arena porque no puede cruzarla sola.
   const waiting = myShadows().find((m) => m.map === world.map && CROSS_GATE[m.map] != null && dist(m, { x: world.x, y: world.y }) > WITH_RADIUS);
   if (waiting && Date.now() - fetchedAt > FETCH_COOLDOWN_MS) {
-    if (dist(waiting, { x: world.x, y: world.y }) <= 12) fetchedAt = Date.now();
-    else return { kind: 'fetch', warp: WARPS.find((w) => w.map === world.map) ?? warp(CORNER.warp), anchor: { x: waiting.x, y: waiting.y }, radius: 6, name: `${waiting.char} en la entrada` };
+    if (dist(waiting, { x: world.x, y: world.y }) <= 12) {
+      fetchedAt = Date.now();
+      if (fetchStart) trackEvent('fetch', waiting.char, Math.round((fetchedAt - fetchStart) / 1000)); // segundos que tardó la recogida
+      fetchStart = 0;
+    } else {
+      fetchStart ||= Date.now();
+      return { kind: 'fetch', warp: WARPS.find((w) => w.map === world.map) ?? warp(CORNER.warp), anchor: { x: waiting.x, y: waiting.y }, radius: 6, name: `${waiting.char} en la entrada` };
+    }
   }
   // Orden del orquestador: seguir al líder por donde vaya. El warp es la entrada de su mapa más cercana a él a la que llego por nivel.
   // Solo vale seguirlo si va a un lugar que rinde: la esquina o una cacería (cuando recién resetea y está bajo, cada uno a lo suyo).
