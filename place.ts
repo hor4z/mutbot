@@ -14,6 +14,7 @@ import { canFarmMonster, type Fighter } from './power';
 import { classFamily } from './farming';
 import { bot, world } from './state';
 import { directedLeader, myShadows } from './bus';
+import { isSafeZone, walkableFor } from './terrain';
 import { dist, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
@@ -25,14 +26,44 @@ const TIERS: { minLevel: number; warp: number; anchor: Pos; radius: number }[] =
   { minLevel: 20, warp: 7, anchor: { x: 58, y: 192 }, radius: 25 },   // Devias 4
 ];
 
-/** Cuánto se separa del líder al seguirlo (tiles). */
-const SHADOW_RADIUS = 6;
+/** Radio de pelea alrededor del punto de la sombra: solo lo que se le acerca. */
+const SHADOW_RADIUS = 3;
 /** Las Arenas: el monstruo que hay que poder matar para cruzarlas solo (Deathvim Knight 63, Phantom Knight 72, Gaint Drakan 75). */
 const CROSS_GATE: Record<number, number> = { 83: 63, 84: 72, 85: 75 };
 /** Con el líder a menos de esto en el mismo mapa, el débil va con él (está protegido); más lejos, en una Arena, espera en la entrada. */
 const WITH_RADIUS = 40;
+/** Dónde se para la sombra respecto del líder: a esta distancia (tiles) y a lo sumo a MAX_FROM_LEADER, para seguir cobrando la party. */
+const SHADOW_DIST = 7;
+const MAX_FROM_LEADER = 9;
+let shadowSpot: Pos | null = null;
+
+/**
+ * El lugar de la sombra: un punto caminable cerca del líder pero lejos de donde pelea (el líder aguanta los monstruos, el débil
+ * no). De las 8 direcciones a SHADOW_DIST elige la de menos monstruos a <= 4 tiles; el punto anterior se mantiene mientras siga
+ * sirviendo, para no dar vueltas cada vez que el líder se mueve un tile.
+ */
+function shadowSpotNear(leader: Pos): Pos {
+  const walk = walkableFor(world.map);
+  const mons = [...world.npcs.values()];
+  const threat = (p: Pos) => mons.filter((m) => dist(m, p) <= 4).length;
+  const ok = (p: Pos) => p.x >= 0 && p.y >= 0 && p.x < 256 && p.y < 256 && walk(p.x, p.y) && !isSafeZone(world.map, p.x, p.y) && dist(p, leader) <= MAX_FROM_LEADER;
+  if (shadowSpot && ok(shadowSpot) && threat(shadowSpot) <= 1 && dist(shadowSpot, leader) >= 3) return shadowSpot;
+  let best: Pos | null = null;
+  let bs = Infinity;
+  for (let a = 0; a < 8; a++) {
+    for (const r of [SHADOW_DIST, SHADOW_DIST - 2]) {
+      const p = { x: Math.round(leader.x + Math.cos((a * Math.PI) / 4) * r), y: Math.round(leader.y + Math.sin((a * Math.PI) / 4) * r) };
+      if (!ok(p)) continue;
+      const s = threat(p) * 10 + dist(p, { x: world.x, y: world.y }) / 10;
+      if (s < bs) { bs = s; best = p; }
+    }
+  }
+  shadowSpot = best ?? leader;
+  return shadowSpot;
+}
+
 /** El líder baja a buscar a su sombra como mucho una vez cada tanto (le cuesta exp: no está en la esquina). */
-const FETCH_COOLDOWN_MS = 8 * 60_000;
+const FETCH_COOLDOWN_MS = 3 * 60_000;
 let fetchedAt = 0;
 
 export const fighterNow = (): Fighter => ({ family: classFamily(world.classId) ?? 'knight', stats: world.stats, maxHp: world.maxHp });
@@ -69,7 +100,7 @@ export function choosePlace(): Place | null {
       // Una Arena que no puedo cruzar sola y el líder lejos: espero en la entrada a que me recoja.
       if (gate != null && apart && !canFarmMonster(fighterNow(), gate, world.skills.has(41)) && wp.arrival)
         return { kind: 'shadow', warp: wp, anchor: wp.arrival, radius: 5, name: `la entrada de ${wp.name} (espero a ${leader.char})` };
-      return { kind: 'shadow', warp: wp, anchor: { x: leader.x, y: leader.y }, radius: SHADOW_RADIUS, name: `${leader.char} (${wp.name})` };
+      return { kind: 'shadow', warp: wp, anchor: shadowSpotNear({ x: leader.x, y: leader.y }), radius: SHADOW_RADIUS, name: `${leader.char} (${wp.name})` };
     }
   }
   if (strong && level >= CORNER.minLevel) return { kind: 'corner', warp: warp(CORNER.warp), anchor: CORNER.home, radius: CORNER.radius + CORNER.fill, name: 'la esquina de Arena 2' };
