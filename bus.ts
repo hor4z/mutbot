@@ -5,8 +5,9 @@
  * (MUBOT_BUS_PORT / MUBOT_BUS_PEERS); sin ellos el bot juega solo. UDP: si un compañero no está, el paquete se pierde y listo.
  */
 import { bot, world } from './state';
+import { statPower } from './util';
 
-export type TeamMember = { char: string; level: number; resets?: number; map: number; x: number; y: number; mode: string; at: number; /** espera en la entrada de una Arena a que su líder lo recoja */ waiting: boolean };
+export type TeamMember = { char: string; level: number; resets?: number; /** suma de stats (util.statPower); 0 si no la mandó */ power: number; map: number; x: number; y: number; mode: string; at: number; /** espera en la entrada de una Arena a que su líder lo recoja */ waiting: boolean };
 export type GoldNotice = { from: string; map: number; x: number; y: number; note: string; at: number };
 
 /** Posición vista hace más que esto = el compañero ya no está. */
@@ -41,7 +42,7 @@ function onPacket(buf: Uint8Array, fromPort: number) {
   }
   if (!name(m.c) || m.c.toLowerCase() === bot.charName.toLowerCase()) return;
   if (m.t === 's' && num(m.l, 0, 1000) && num(m.m, 0, 255) && num(m.x, 0, 255) && num(m.y, 0, 255)) {
-    members.set(m.c.toLowerCase(), { char: m.c, level: m.l, resets: num(m.r, 0, 100_000) ? m.r : undefined, map: m.m, x: m.x, y: m.y, mode: typeof m.d === 'string' ? m.d.slice(0, 10) : '', at: Date.now(), waiting: m.w === 1 });
+    members.set(m.c.toLowerCase(), { char: m.c, level: m.l, resets: num(m.r, 0, 100_000) ? m.r : undefined, power: num(m.p, 0, 10_000_000) ? m.p : 0, map: m.m, x: m.x, y: m.y, mode: typeof m.d === 'string' ? m.d.slice(0, 10) : '', at: Date.now(), waiting: m.w === 1 });
   } else if (m.t === 'g' && num(m.m, 0, 255) && num(m.x, 0, 255) && num(m.y, 0, 255)) {
     notices.push({ from: m.c, map: m.m, x: m.x, y: m.y, note: typeof m.n === 'string' ? m.n.slice(0, 80) : '', at: Date.now() });
     if (notices.length > 50) notices.shift();
@@ -66,7 +67,7 @@ export async function startBus() {
   }
   setInterval(() => {
     if (!bot.inGameAt || bot.kicked) return;
-    broadcast({ t: 's', c: bot.charName, l: world.level, r: world.resets ?? 0, m: world.map, x: world.x, y: world.y, d: bot.paused ? 'paused' : bot.hunting ? 'hunt' : 'farm', w: waitingForPickup ? 1 : 0 });
+    broadcast({ t: 's', c: bot.charName, l: world.level, r: world.resets ?? 0, p: statPower(world.stats), m: world.map, x: world.x, y: world.y, d: bot.paused ? 'paused' : bot.hunting ? 'hunt' : 'farm', w: waitingForPickup ? 1 : 0 });
   }, STATE_EVERY_MS);
 }
 

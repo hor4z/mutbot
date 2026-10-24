@@ -445,12 +445,14 @@ export function trackWorld() {
   EventBus.on('PartyRequest', (raw: any) => {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
-    const from = world.players.get(id)?.name;
+    let from = world.players.get(id)?.name;
     // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
     // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
-    const mate = from != null && isMate(from);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
+      // El nombre puede llegar después del pedido (el que invita recién apareció en mi lista): se mira recién al responder.
+      from = world.players.get(id)?.name ?? from;
+      const mate = from != null && isMate(from);
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
       log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
