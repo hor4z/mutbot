@@ -189,7 +189,6 @@ bun run proxy       # proxy WebSocket → TCP para un server local
 | `golden.ts`, `zones.ts`, `loot.ts` | Elección del dorado, zonas donde se vieron, levantar y qué vale. |
 | `vault.ts` | Leer el baúl (orden `vault`). |
 | `panel.html`, `panel-protocol.ts`, `panel-logic.ts`, `ws-server.ts` | El panel de cada bot y su contrato. |
-| `browser/` | El agente que jugaba dentro de la pestaña del juego (archivado; es la referencia de las reglas). |
 | `AGENTS.md` | Referencia técnica: protocolo, trampas del 0.97d, estructura, reglas para tocar el código. |
 | `PLAN-SIN-NAVEGADOR.md` | Estado y pendientes. |
 | `EVENTOS.md` | Eventos del server (invasiones, Dragón Rojo, BC/DS/CC) y lo medido. |

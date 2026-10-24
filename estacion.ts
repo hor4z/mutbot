@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { classFamily } from './farming';
 import { isSafeZone, walkableFor } from './terrain';
+import { propose } from './director';
 import { ASSIGNMENT_TTL_MS, SquadBook, cellsFromWalkable, signAssignment, type Assignment, type Finding, type MemberSnap, type Snapshot, type SquadClass, type SquadRequest } from './squad';
 import { AccountRunner, planSquadAccounts } from './squad-accounts';
 import { mapName } from './panel-logic';
@@ -626,7 +627,14 @@ function saveSquads() {
   const j = JSON.stringify(squads.toJSON());
   if (j === squadSaved) return;
   squadSaved = j;
-  try { mkdirSync(join(homedir(), '.mubot'), { recursive: true }); writeFileSync(SQUAD_FILE, j); } catch {}
+  try {
+    mkdirSync(join(homedir(), '.mubot'), { recursive: true });
+    writeFileSync(`${SQUAD_FILE}.tmp`, j);
+    renameSync(`${SQUAD_FILE}.tmp`, SQUAD_FILE); // atómico: si la estación muere a mitad, queda el archivo anterior
+  } catch (err) {
+    squadSaved = ''; // reintenta en el próximo tick
+    say('no pude guardar squads.json:', (err as Error).message);
+  }
 }
 const classKey = (id: number | undefined): SquadClass | null => {
   if (id == null) return null;
@@ -737,7 +745,25 @@ const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { sta
 
 refreshSlots();
 syncRunning();
+// Director (director.ts): propone la próxima misión de cada escuadra libre. Solo la lanza con MUBOT_DIRECTOR=auto
+// (las misiones nunca arrancan solas por defecto); si no, la anuncia una vez por propuesta.
+const DIRECTOR_AUTO = process.env.MUBOT_DIRECTOR === 'auto';
+const directorSaid = new Map<string, number>();
+function directorTick() {
+  const snap = squadSnapshot(Date.now());
+  for (const p of propose(squads.squads.values(), snap)) {
+    const k = `${p.squad}:${p.phase}:${p.req.warp ?? p.req.padrino ?? ''}`;
+    if (DIRECTOR_AUTO) {
+      const r = squads.startMission(p.squad, p.req, snap);
+      say(`director [${p.phase}] ${p.squad}: ${p.why} → ${r.msg}`);
+    } else if (Date.now() - (directorSaid.get(k) ?? 0) > 10 * 60_000) {
+      directorSaid.set(k, Date.now());
+      say(`director [${p.phase}] propone a ${p.squad}: ${p.why} (MUBOT_DIRECTOR=auto la lanza sola)`);
+    }
+  }
+}
 setInterval(() => { refreshSlots(); syncRunning(); trackAlerts(); squads.tick(squadSnapshot(Date.now())); saveSquads(); void squadAccountsTick(); }, 2000);
+setInterval(directorTick, 15_000);
 
 Bun.serve({
   hostname: '127.0.0.1',

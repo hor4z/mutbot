@@ -1,6 +1,11 @@
 /**
- * Loop autónomo: prioriza sobrevivir > órdenes del panel > reset > subir stats > esquina de
- * Arena 2 > cambiar de spot > loot > pelear > campamento/explorar. Una corrida por conexión, a
+ * Loop autónomo. Orden real de un tick (cada paso puede cortarlo con `continue`):
+ *   ciego/vigía > buffs propios > sobrevivir > pausa > PK > warp pedido (panel/escuadra/espera) > escuadra >
+ *   baúl/equipo > cacería (viaje y corte) > defensa propia > dorados > pedidos de ayuda > cazador automático >
+ *   espera en Lorencia > reset > stats > esquina de Arena 2 > rendimiento/hambre/cambio de spot > loot >
+ *   elegir objetivo (guardián, explorador, cacería, arranque, campamento) > pelear > caminar al campamento.
+ * Quién fija el spot lo dice `intent.ts` (un pin por dueño: panel > escuadra > espera); la sombra de una escuadra
+ * (`squadShadow`) se salta cacería automática, reset, espera, dorados y guardián. Una corrida por conexión, a
  * ritmo HUMANO (no flood): ver config.ts y AGENTS.md, "Anti-cheat".
  */
 import { askHelp, newRequests, postInsight, postScout, scoutCovered, scoutReports, teammates } from './team';
@@ -28,7 +33,6 @@ import { DragonFight, GoldenRule, dragonRush, stickyGolden } from './golden';
 import { goldFeedHints } from './gold-feed';
 import { FightHeat, parseFight } from './fight-heat';
 import { parseHitExtended } from './protocol097';
-import { Finisher, finisherOn } from './finisher';
 import monstersData from './data/monsters.json';
 import { SweepPlanner, zonePrior } from './sweep';
 import { canFight, monsterCombat } from './power';
@@ -37,6 +41,7 @@ import { ObserverTracker } from './observer';
 import { equipStep } from './equip';
 import { attackerOf, buildPartyInvite, ownAreaSkill, ownTargetedSkill, parseHitDamage } from './protocol097';
 import { GOLDEN_TYPES, MATES, isMate } from './state';
+import { pin, requestWarp } from './intent';
 import { WARP_SPOTS, pinActive } from './route';
 import { readVault, runEquip } from './vault';
 import { toBytes } from './util';
@@ -217,7 +222,7 @@ function hookAggro() {
       }
       if (!f || f.attacker === (bot.playerId & 0x7fff)) return;
       const a = world.players.get(f.attacker);
-      if (a && !isMate(a.name ?? '')) { fightHeat.record(f.attacker, a.x, a.y, Date.now()); finisher.other(f.target, f.attacker, Date.now()); }
+      if (a && !isMate(a.name ?? '')) { fightHeat.record(f.attacker, a.x, a.y, Date.now()) }
     });
   }
   for (const ev of ['ObjectAnimation', 'SkillAnimation', 'SkillAnimation075', 'SkillAnimation095']) {
@@ -235,16 +240,12 @@ function hookAggro() {
 // Espera en Lorencia con el reset frenado (ver waitTown en el loop).
 const LORENCIA_WAIT_WARP = 2;
 let lastTownTry = 0;
-let townPin: Spot | null | undefined;
 
 // Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
 const fightHeat = new FightHeat();
 // Monstruos que le pegaron a un compañero hace poco (id → cuándo), para que el fuerte los mate primero.
 const mateAggro = new Map<number, number>();
 let lastGuardLog = 0;
-// Remate del golpe final (finisher.ts) y qué hizo en la pelea actual (campo `finisher` de dragon_fight).
-const finisher = new Finisher();
-let finisherMode: 'wait' | 'strike' | 'none' = 'none';
 let lastHeatLog = 0;
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
@@ -321,7 +322,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   // Datos de cada pelea con un dragón (golden.ts, DragonFight): evento `dragon_fight`.
   const dragonFight = new DragonFight((t) => (monstersData as { Numb: number; HP: number }[]).find((m) => m.Numb === t)?.HP ?? null);
   const trackFight = (rec: ReturnType<DragonFight['lost']>) => {
-    if (rec) { trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map, finisher: finisherMode }); finisherMode = 'none'; }
+    if (rec) { trackEvent('dragon_fight', monsterName(rec.type), rec.type, rec.mine ? 1 : 0, { ...rec, map: world.map }); }
   };
   // ObjectHit (0x15 de 10 bytes): el daño que se ve sobre el dragón de la pelea (de cualquiera).
   // Para decodificar el daño de verdad (dmgSeen daba 0): los primeros bytes crudos de cada tipo de golpe que se ven
@@ -355,14 +356,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onHitDamage = (raw: any) => {
     dumpRaw(`0x15/${toBytes(raw).length}`, raw);
     const h = parseHitDamage(toBytes(raw));
-    if (h) { dragonFight.damage(h.id, h.damage); finisher.damage(h.id, h.damage, Date.now()); }
+    if (h) { dragonFight.damage(h.id, h.damage); }
   };
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const wasOurTarget = (p.KilledId & 0x7fff) === ctx.target;
     const dead = world.npcs.get(p.KilledId & 0x7fff);
-    if (finisher.waited(p.KilledId & 0x7fff)) decide(`Remate: ${dead ? monsterName(dead.type) : 'el objetivo'} murió ${p.KillerId === bot.playerId ? 'por mi golpe final' : 'mientras esperaba el golpe final'}.`);
-    finisher.forget(p.KilledId & 0x7fff);
     if (dead && DRAGON_TYPES.has(dead.type)) {
       const kid0 = p.KillerId & 0x7fff;
       const mine0 = kid0 === bot.playerId;
@@ -775,8 +774,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const fresh = isFreshChar(world.resets, world.stats);
     const weak = fresh || profile.limited;
     const me = weak ? { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp } : null;
-    const gold = bot.hunting ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowG, ctx.target);
-    const goldHold = !bot.hunting && golden.holding(nowG);
+    const gold = bot.hunting || shadow ? null : golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowG, ctx.target);
+    const goldHold = !bot.hunting && !shadow && golden.holding(nowG);
     if (gold && ctx.target !== gold.id) {
       if (!goldAnnounced.has(gold.id)) {
         goldAnnounced.add(gold.id);
@@ -810,8 +809,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           else if (world.map === CORNER.map && inCorner(me)) decide(`${r.from} pide ayuda en la esquina: ya estoy acá, sostenemos el sector juntos.`);
           else {
             corner.awayUntil = 0;
-            bot.pinnedSpot = null;
-            decide(`${r.from} pide ayuda en la esquina (${r.note}): voy.`);
+            if (pin.owner() === 'panel' || pin.owner() === 'squad') decide(`${r.from} pide ayuda en la esquina, pero tengo el spot fijado (${pin.owner()}).`);
+            else {
+              pin.clear('town', 'ayuda en la esquina');
+              decide(`${r.from} pide ayuda en la esquina (${r.note}): voy.`);
+            }
           }
         } else if (r.kind === 'golden') {
           const hm = HUNT_MAPS.find((h) => h.map === r.map);
@@ -877,15 +879,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // En el nivel de reset con el reset frenado por la invasión (:30 a :05): esperar en Lorencia, en zona segura y a un
     // warp de cualquier mapa de la invasión, en vez de farmear sin exp que sirva en una esquina donde se muere
     // (idea del usuario, 2026-10-23). MUBOT_WAIT_TOWN=0 la apaga.
-    const waitTown = process.env.MUBOT_WAIT_TOWN !== '0' && AUTO_HUNT_ON && !isPriorityChar(bot.charName) && !supportWaits && !bot.hunting && !goldHold
+    const waitTown = process.env.MUBOT_WAIT_TOWN !== '0' && AUTO_HUNT_ON && !shadow && !isPriorityChar(bot.charName) && !supportWaits && !bot.hunting && !goldHold
       && world.level >= RESET_LEVEL && resetBlockedByInvasion(Date.now());
     if (waitTown) {
       const town = WARP_SPOTS.find((sp) => sp.index === LORENCIA_WAIT_WARP);
       if (town && world.map !== town.map && !bot.pendingWarp && Date.now() - lastTownTry > 60_000) {
         lastTownTry = Date.now();
-        if (townPin === undefined) townPin = bot.pinnedSpot ?? null;
-        bot.pendingWarp = town;
-        bot.pinnedSpot = town;
+        if (requestWarp(town, 'town', 'reset frenado por la invasión')) pin.set('town', town, 'espera del reset');
         decide(`Nivel ${world.level} y el reset frenado hasta las :05: espero la invasión en ${town.name} (zona segura).`);
         continue;
       }
@@ -894,12 +894,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         await sleep(humanPace(1000));
         continue;
       }
-    } else if (townPin !== undefined) {
-      // Terminó la espera (invasión o :05): se suelta el fijado para que la ruta siga sola.
-      bot.pinnedSpot = townPin;
-      townPin = undefined;
+    } else if (pin.has('town')) {
+      // Terminó la espera (invasión o :05): se suelta solo el fijado de la espera; el de otros dueños sigue.
+      pin.clear('town', 'terminó la espera');
     }
-    if (!supportWaits && !bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
+    if (!shadow && !supportWaits && !bot.hunting && !goldHold && !(AUTO_HUNT_ON && !isPriorityChar(bot.charName) && resetBlockedByInvasion(Date.now())) && world.level >= RESET_LEVEL && Date.now() >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;
@@ -919,7 +918,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // o entrada. No se presume que sea un guardia: puede ser otro granjero.
     // Solo personajes limitados: con stats completos lo cubre el hambre (exp real con
     // jugadores cerca). Hume (39 resets) se iba de Arena 2 a 359M/min por un jugador quieto.
-    if (weak && observerSignal && !bot.hunting && !bot.pinnedSpot && Date.now() - lastObserverChange > 120_000) {
+    if (weak && observerSignal && !bot.hunting && !pin.current() && Date.now() - lastObserverChange > 120_000) {
       lastObserverChange = Date.now();
       decide(`Jugador ${observerSignal.name ?? '#' + observerSignal.id} ${observerSignal.kind} cerca hace ${Math.round(observerSignal.ms / 1000)} s: cambio de zona sin disputarle el lugar.`);
       if (world.map === 2 && await maybeChangeSpot({ crowded: true })) { ctx.target = null; continue; }
@@ -953,7 +952,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // deja 10 min; en Devias prueba otra entrada. Así no pasea por todo el mapa.
     // Solo personajes limitados: evitar una Arena baja el tramo a Devias, y a Hume con
     // stats completos lo mandaba de Arena 2 (nivel 300) a Devias 4 a 20M/min.
-    if (weak && !bot.hunting && !bot.pinnedSpot && bot.currentSpot && !goldHold) {
+    if (weak && !bot.hunting && !pin.current() && bot.currentSpot && !goldHold) {
       const now = Date.now();
       const why = farmMiddleware.observe({ spot: bot.currentSpot.index, map: world.map, level: world.level,
         now, arrivalAt: bot.lastArrivalAt, rate: expLog.rateSince(bot.lastArrivalAt, now), f: fighter, twistingSlash: world.skills.has(41) });
@@ -1056,7 +1055,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
     // Guardián (idea del usuario, 2026-10-23: "Hume farmea normal, solo es más defensivo de su sombra"): lo que le pega a un
     // compañero a la vista pasa a ser el objetivo, antes que el campamento. MUBOT_GUARD=0 lo apaga.
-    if (process.env.MUBOT_GUARD !== '0' && mateAggro.size && !bot.hunting?.scout) {
+    if (process.env.MUBOT_GUARD !== '0' && mateAggro.size && !shadow && !bot.hunting?.scout) {
       const nowGd = Date.now();
       let guard: ScopedNpc | null = null;
       let gdist = Infinity;
@@ -1263,26 +1262,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           await sleep(SKILL_PACE_MS - sinceCast);
           continue;
         }
-        if (finisherOn() && isGolden(t)) {
-          // Golpe final: con otros bajándolo, esperar a rango y rematar (finisher.ts). Sin datos: pega como siempre.
-          const fv = finisher.decide(target, (monstersData as { Numb: number; HP: number }[]).find((m) => m.Numb === t.type)?.HP ?? null, Date.now());
-          if (fv.verdict === 'wait') {
-            if (finisherMode !== 'wait') decide(`Remate: espero a rango sin pegar a ${monsterName(t.type)}, otros lo bajan (${fv.why}).`);
-            finisherMode = 'wait';
-            await sleep(humanPace(400));
-            continue;
-          }
-          if (fv.verdict === 'strike' && finisherMode !== 'strike') { finisherMode = 'strike'; decide(`Remate: a rematar a ${monsterName(t.type)} (${fv.why}).`); }
-        }
         if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
           ctx.lastCastAt = Date.now();
-          finisher.cast(target, ctx.lastCastAt);
           ctx.skillsUsed++;
           if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, ctx.lastCastAt);
           await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
-          finisher.cast(target, Date.now());
           if (DRAGON_TYPES.has(t.type)) dragonFight.hit(target, Date.now());
           await sleep(humanPace(ATTACK_PACE_MS));
         } else {

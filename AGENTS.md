@@ -30,7 +30,6 @@ bun run tsc         # typecheck (tiene que dar limpio)
 bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
 bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
 bun run bot         # un bot suelto: credenciales por .env (MUBOT_USER/PASS/CHAR)
-bun run agent       # el agente del navegador archivado (browser/serve-agent.ts, 8788)
 ```
 
 Flags del bot: ver la cabecera de `headless-bot.ts` (conexión, `--auto-seconds 0` = sin límite con
@@ -69,17 +68,16 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `chat.ts` | Chat: lo que llega va al panel (`chat`) y la orden `say` lo manda (un mensaje cada 2 s). |
 | `loop-ctx.ts` | Estado de una corrida del loop (objetivo, fase, último cast) y caminar/castear en el camino. |
 | `util.ts` | `log`, `sleep`, bytes y las 8 direcciones. |
-| `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura, port de `browser/corner.js`). Tests en `corner-tests.ts`. |
+| `corner.ts` | La esquina de Arena 2 y sus lados (esquina/medio/este por exp medida) (lógica pura). Tests en git (`pre-cerebro`). |
 | `duo.ts` | Dúo de crianza: reparto de exp de OpenMU (`baseExp`, `partyGain`), padrino/protegido por stats y dónde se para el protegido (lógica pura). Tests en `duo-tests.ts`. |
 | `power.ts` | ¿Puede el personaje con este monstruo? Daño y defensa con sus stats reales y la clase contra vida/daño/defensa de `monsters.json`: lo mata en <= 6 s perdiendo <= 35 % de la vida. Decide qué ataca y a qué campo va un personaje nuevo, y si va por un dorado. Tests en `early-tests.ts`. |
 | `equip.ts` | Equiparse con lo que levanta (personaje nuevo). Tests en `equip-tests.ts`. |
 | `item-rules.ts` / `item-score.ts` | Clase, requisitos y defensa de `data/items.json` (columnas corridas: ver la cabecera), puntaje de una pieza, Cristales del Alquimista, `judgeItem` y `makeDropJudge`. Puros. Tests en `items-tests.ts`. |
 | `equip-plan.ts` | `planEquip`: plan de equipamiento desde el baúl (qué sacar, a qué casilla, qué desvestir, qué poner, en orden). Puro. |
-| `crafting.ts` | Recetas del Chaos Goblin, Alquimista, armonía y Fenrir con sus tasas publicadas y `planCrafts` (propone por valor esperado, **nunca ejecuta**). Puro. Datos y fuentes en `docs/items-y-maquinas.md`. |
 | `early.ts` | El arranque hasta el 100: farmeo inicial del nivel 1 al 9, salida variada de Lorencia al Lich, campamento de Devias 4, objetivos con correa. Tests en `early-tests.ts`. |
 | `scout.ts` | Explorador (lógica pura): mapas seguros, recorrido (`ScoutTour`), compás de publicación (`ScoutPublisher`), reporte y consumo de reportes por los cazadores (`scoutFactor`, `scoutHints`). Tests en `scout-tests.ts`. |
 | `golden.ts` | Regla fuerte de dorados (dragones primero, 2 min y se deja, 15 s para las cajas). Tests en `golden-tests.ts`. |
-| `defense.ts` | Defensa propia contra jugadores (port de `browser/defense.js`). Tests en `defense-tests.ts`. |
+| `defense.ts` | Defensa propia contra jugadores (lógica pura). |
 | `camp.ts` | Campamentos (lógica pura): correa, primer campamento por mapa, mudanzas, pelea en el camino, memoria, hambre, skill de área. |
 | `explore.ts` | Exploración (lógica pura): filtro de monstruos, spots calientes, salidas del pueblo, mapa seco. |
 | `farming.ts` | Exp por segundo (lógica pura): valor y elección de objetivo, exp/segundos por tipo, loot, ciclos, autoevaluación. |
@@ -89,14 +87,15 @@ la sesión vieja del propio bot). Lo pasa la estación.
 | `estacion.ts` / `estacion.html` / `estacion-logic.ts` | La estación (ver "Estación"). |
 | `ui/` | La interfaz (React + Vite, radar Three.js). **`panel.html` y `estacion.html` se generan** con `bun run ui:build`: editar `ui/src`, no los HTML. Ver `ui/README.md`. |
 | `radar-assets.ts` | Sirve los archivos del radar (`/radar-assets/...`, solo lectura, nombres de la lista; CORS solo para la estación y los puertos de los bots). Los archivos (`assets/radar/`, 91 MB del cliente) no van al repo: `bun run ui:maps`. |
+| `intent.ts` | Quién fija el spot: un pin por dueño (`panel` > `squad` > `town`), `requestWarp` (un solo warp pendiente) y diario de cada cambio. Reemplaza a `bot.pinnedSpot`. |
+| `director.ts` | Propone la misión de cada escuadra libre (dorado avisado → `golden`; padrino alcanzable → crianza). Lógica pura; `estacion.ts` la lanza solo con `MUBOT_DIRECTOR=auto`. |
 | `squad.ts` | Escuadras (lógica pura, la usa la estación): roles por clase, misiones explorar/cazar dorados/crianza como máquinas de estados, abortos, órdenes firmadas (HMAC), `SquadBook` y el contrato `squad-*`. Tests en `squad-tests.ts`. |
 | `party.ts` / `formation.ts` | A quién se acepta en party y quién invita a quién (con espera), lista de la party; seguir al líder con correa y sin amontonarse. Tests en `party-tests.ts` y `formation-tests.ts`. |
 | `squad-client.ts` | El bot obedece a la estación: consulta `/api/squad`, verifica la firma y ejecuta (viaje, ir a, seguir, cobrar, retirada, invitar, buffs). Sin `MUBOT_SQUAD_KEY` no hace nada. |
-| `squad-gear.ts` / `squad-accounts.ts` | Alas por clase y su valor; plan de cuentas con ritmo humano (solo si el usuario lo dispara). |
+| `squad-accounts.ts` | Plan de cuentas con ritmo humano (solo si el usuario lo dispara). |
 | `ws-server.ts` | Server del panel de cada bot detrás de `--ws-port` (solo 127.0.0.1). |
 | `panel.html` / `panel-protocol.ts` / `panel-logic.ts` | El panel del bot, su contrato y la lógica pura (0x91, 0xFD, tickets, ciclos, cacería, señales de dorados). |
 | `*-tests.ts` | Tests offline de cada módulo (sin red, reloj simulado, dir temporal). |
-| `browser/` | El agente que jugaba dentro de la pestaña (archivado, ver `browser/README.md`). **Es la referencia de las reglas**: sus comentarios explican cada decisión aprendida jugando. |
 | `proxy.ts` | Proxy WebSocket -> TCP (copia de `proxy/main.ts` del cliente MU JS). |
 | `net/` | Socket, cifrado (xor3, xor32, SimpleModulus), helpers de bytes y event bus. |
 | `packets/` | Subconjunto de las clases de packets + `routes.ts`. **Generado**, no editar. |

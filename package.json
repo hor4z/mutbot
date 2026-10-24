@@ -10,7 +10,6 @@
     "aprender": "bun --env-file=.env.db scripts/aprender.ts",
     "tsc": "tsc --noEmit",
     "extract": "bun run extract-packets.ts",
-    "agent": "bun run browser/serve-agent.ts",
     "estacion": "bun run estacion.ts",
     "ui:build": "vite build --config ui/vite.config.ts",
     "ui:dev": "vite --config ui/vite.config.ts",

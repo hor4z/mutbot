@@ -19,6 +19,7 @@ import { sendToGS } from './connection';
 import { sendTargetedSkill } from './actions';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 import { WARP_SPOTS } from './route';
+import { pin, requestWarp } from './intent';
 import { bot, world } from './state';
 import { walkableFor } from './terrain';
 import { dist } from './corner';
@@ -38,8 +39,6 @@ let lastSquadKey = '';
 let polling = false;
 let partyNames: string[] = [];
 let partyIndex = -1;
-/** Lo que había antes de la escuadra, para devolverlo al soltar. */
-let savedPin: typeof bot.pinnedSpot | undefined;
 let released = '';
 const invites = new InviteScheduler();
 const follower = new Follower();
@@ -80,7 +79,7 @@ export function startSquadPolling() {
       const r = await fetch(`${URL_}?char=${encodeURIComponent(bot.charName)}`, { signal: AbortSignal.timeout(2000) });
       if (r.ok) {
         const body = (await r.json()) as unknown;
-        if ((body as { none?: boolean })?.none) { current = null; learnedLeader = ''; return; }
+        if ((body as { none?: boolean })?.none) { current = null; learnedLeader = ''; lastSeq = -1; lastSquadKey = ''; return; }
         const v = verifyAssignment(KEY, body, bot.charName, Date.now(), lastSeq);
         if ('a' in v) { if (v.a.squadId !== 'human') learnedLeader = ''; current = v.a; lastSeq = v.a.seq; }
         else if (v.err && /vieja/i.test(String(v.err))) {
@@ -107,7 +106,7 @@ export function squadShadow(): boolean {
 
 export function squadActive(): boolean {
   // Orden vencida (la estación se cayó o la misión terminó): se suelta lo fijado aunque nadie llame a squadStep.
-  if ((!current || Date.now() > current.expiresAt) && savedPin !== undefined) restore();
+  if ((!current || Date.now() > current.expiresAt) && pin.has('squad')) restore();
   return !!current && Date.now() <= current.expiresAt && current.order.kind !== 'release';
 }
 
@@ -172,9 +171,9 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
   released = '';
   if (world.hp <= 0 || bot.paused || bot.resetting || !bot.inGameAt) return false;
   // Sombra: se fija el spot del mapa actual para que la ruta fija no la warpee a su tramo (ping-pong de mapa); se suelta con restore().
-  if ((o.kind === 'follow' || o.kind === 'hold' || o.kind === 'idle') && !bot.pendingWarp) {
+  if ((o.kind === 'follow' || o.kind === 'hold' || o.kind === 'idle' || o.kind === 'retreat') && !bot.pendingWarp) {
     const here = WARP_SPOTS.filter((s) => s.map === world.map && s.reqLevel <= world.level).sort((x, y) => (x.arrival ? dist(x.arrival, world) : 999) - (y.arrival ? dist(y.arrival, world) : 999))[0];
-    if (here && bot.pinnedSpot?.index !== here.index) { if (savedPin === undefined) savedPin = bot.pinnedSpot; bot.pinnedSpot = here; bot.hunting = null; }
+    if (here && pin.current()?.index !== here.index && pin.owner() !== 'panel') { pin.set('squad', here, 'sombra'); bot.hunting = null; }
   }
 
   // Party: el líder invita a los que faltan (uno por vez, con espera larga).
@@ -198,7 +197,7 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       if (world.map === o.map) {
         // Ya estoy en ese mapa: se fija el spot para que mi ruta no me lleve a otro (el padrino espera al más débil).
         const here = WARP_SPOTS.find((s) => s.index === o.warp);
-        if (here && bot.pinnedSpot?.index !== here.index) { if (savedPin === undefined) savedPin = bot.pinnedSpot; bot.pinnedSpot = here; }
+        if (here && pin.current()?.index !== here.index && pin.owner() !== 'panel') pin.set('squad', here, 'ya estoy en el mapa de la misión');
         return false;
       }
       const k = `${a.missionId}:${o.warp}:${o.delayMs}`; // cada viaje con su espera nueva
@@ -208,11 +207,12 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
       if (!sp || sp.reqLevel > world.level) { log(`Escuadra: no puedo viajar al warp ${o.warp}.`); return false; }
       if (!bot.pendingWarp && Date.now() - lastSquadWarpAt > 20_000) { // sin reintentar cada tick si el warp no responde
         lastSquadWarpAt = Date.now();
-        if (savedPin === undefined) savedPin = bot.pinnedSpot;
-        bot.pendingWarp = sp;
-        bot.pinnedSpot = sp;
-        bot.hunting = null;
-        bot.doing = `escuadra: viajo a ${sp.name}`;
+        if (pin.owner() === 'panel') { log('Escuadra: el panel tiene fijado un spot; no viajo.'); return false; }
+        if (requestWarp(sp, 'squad', `misión ${a.missionId}`)) {
+          pin.set('squad', sp, 'viaje de la misión');
+          bot.hunting = null;
+          bot.doing = `escuadra: viajo a ${sp.name}`;
+        }
       }
       return false; // el loop ejecuta pendingWarp en el mismo tick
     }
@@ -237,7 +237,7 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
     }
     case 'farm':
       // El padrino vuelve a su ruta normal: se suelta el spot que se había fijado para esperar al más débil.
-      if (savedPin !== undefined) { bot.pinnedSpot = savedPin; savedPin = undefined; bot.canAdopt = true; log('Escuadra: el protegido ya puede con mi ruta, suelto el spot fijado.'); }
+      if (pin.has('squad')) { pin.clear('squad', 'el protegido ya puede con mi ruta'); bot.canAdopt = true; log('Escuadra: el protegido ya puede con mi ruta, suelto el spot fijado.'); }
       return false;
     case 'follow':
     case 'hold': {
@@ -254,9 +254,8 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
               .map((s) => ({ s, d: dist(s.arrival!, o.at!) })).sort((x, y) => x.d - y.d)[0];
             if (best && dist(world, o.at) - best.d >= 60 && best.d < dist(world, o.at)) {
               lastShortcutAt = Date.now();
-              if (savedPin === undefined) savedPin = bot.pinnedSpot;
-              bot.pendingWarp = best.s;
-              bot.pinnedSpot = best.s;
+              if (pin.owner() === 'panel' || !requestWarp(best.s, 'squad', 'atajo cerca del padrino')) return false;
+              pin.set('squad', best.s, 'atajo');
               bot.hunting = null;
               bot.doing = `escuadra: atajo a ${best.s.name}, cerca del padrino`;
               log(`Escuadra: el padrino está a ${Math.round(dist(world, o.at))} tiles; atajo por el warp a ${best.s.name} (a ${Math.round(best.d)}).`);
@@ -293,7 +292,7 @@ export async function squadStep(ctx: LoopCtx): Promise<boolean> {
 }
 
 function restore() {
-  if (savedPin !== undefined) { bot.pinnedSpot = savedPin; savedPin = undefined; }
+  pin.clear('squad', 'fin de la orden');
   current = null;
 }
 

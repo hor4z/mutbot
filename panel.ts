@@ -6,6 +6,7 @@
 import { sayFromPanel } from './chat';
 import { SKILL_TABLE, pickAttackSkill } from './combat';
 import { eventTimers } from './events';
+import { pin } from './intent';
 import { journal, panelLog } from './journal';
 import { drops, lootState } from './loot';
 import {
@@ -74,9 +75,9 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       bot.paused = false;
       return { ok: true, msg: `sigo: ${bot.hunting ? `cazando en ${bot.hunting.hunt.name}` : 'farmeo normal'}` };
     case 'farm': {
-      const was = [bot.hunting && 'cacería cancelada', bot.pinnedSpot && `spot fijo (${bot.pinnedSpot.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
+      const was = [bot.hunting && 'cacería cancelada', pin.current() && `spot fijo (${pin.current()!.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
       if (bot.hunting) stopHunt('orden del panel');
-      bot.pinnedSpot = null;
+      pin.clearAll('orden farm del panel');
       bot.pendingWarp = null;
       bot.paused = false;
       return { ok: true, msg: `farmeo normal por la ruta${was.length ? ` (${was.join(', ')})` : ''}` };
@@ -89,7 +90,7 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       if (bot.hunting) stopHunt('orden warp del panel');
       bot.paused = false;
       bot.pendingWarp = v.spot;
-      bot.pinnedSpot = v.spot;
+      pin.set('panel', v.spot, 'orden warp');
       return { ok: true, msg: `voy a ${v.spot.name} (warp ${v.spot.index}); queda fijo hasta la orden farm` };
     }
     case 'say':
@@ -130,7 +131,7 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       if (!first) return { ok: false, msg: 'no tengo un mapa seguro para explorar con mi nivel y mis stats' };
       if (bot.hunting) stopHunt('orden scout del panel');
       bot.hunting = { hunt: first, since: now, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), scout: { tour, pub: new ScoutPublisher() } };
-      bot.pinnedSpot = null;
+      pin.clearAll('orden del panel');
       bot.pendingWarp = null;
       bot.paused = false;
       bot.retarget = true;
@@ -143,7 +144,7 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       if (!ch.ok) return { ok: false, msg: ch.msg };
       if (bot.invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
       bot.hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
-      bot.pinnedSpot = null;
+      pin.clearAll('orden del panel');
       bot.pendingWarp = null;
       bot.paused = false;
       bot.retarget = true;
@@ -228,7 +229,7 @@ export function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `${bot.hunting.scout ? 'exploración' : 'cacería'} ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!bot.pinnedSpot },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `${bot.hunting.scout ? 'exploración' : 'cacería'} ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!pin.current() },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,

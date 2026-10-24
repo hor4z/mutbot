@@ -9,6 +9,7 @@ import { warpTo } from './actions';
 import { CycleLog, classFamily } from './farming';
 import { journal } from './journal';
 import { CROWDED_SPOT_MS, CROWD_FALLBACK, activeDryExclusions, chooseFixedRoute, loadLearning, saveLearningChar, type Spot } from './learning';
+import { pin } from './intent';
 import { isPriorityChar } from './knowledge';
 import { farmMiddleware } from './farm-middleware';
 import { bot, hotGrid, learned, pkGuard, typeStats, world } from './state';
@@ -45,7 +46,7 @@ export const WARP_SPOTS: Spot[] = [
   { index: 28, name: 'Aida 2', reqLevel: 170, zen: 9000, map: 33 },
 ];
 /** El spot fijado manda solo si le da el nivel: después de un reset sigue la ruta hasta llegar. */
-export const pinActive = (level = world.level) => !!bot.pinnedSpot && level >= bot.pinnedSpot.reqLevel;
+export const pinActive = (level = world.level) => { const p = pin.current(); return !!p && level >= p.reqLevel; };
 export const zenTxt = (sp: Spot | null | undefined) => (sp?.zen ? `cuesta ${sp.zen} zen` : 'zen sin capturar');
 export const LORENCIA_WARP = 2;
 // Spot → cuándo se lo encontró "seco" (mapa entero sin monstruos DRY_MAP_MS).
@@ -194,13 +195,13 @@ export async function warpAndWait(spot: Spot): Promise<boolean> {
 type SpotSignals = { mapDead?: boolean; crowded?: boolean };
 export async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
-  if (now - bot.lastWarpAt < WARP_COOLDOWN_MS) return false;
+  if (now - bot.lastWarpAt < WARP_COOLDOWN_MS || bot.pendingWarp) return false; // un warp pedido ya viaja: no duplicarlo
   // Spot fijado por la orden `warp` del panel: la ruta no lo cambia hasta la orden `farm`. Si murió
   // o lo sacaron, vuelve ahí.
-  const pinnedSpot = bot.pinnedSpot;
+  const pinnedSpot = pin.current();
   if (pinnedSpot && pinActive()) {
     if (bot.currentSpot?.index === pinnedSpot.index) return false;
-    journal('travel', `vuelvo al spot fijado por el panel: ${pinnedSpot.name} (${zenTxt(pinnedSpot)})`, { warp: pinnedSpot.index, reason: 'panel' });
+    journal('travel', `vuelvo al spot fijado (${pin.owner()}): ${pinnedSpot.name} (${zenTxt(pinnedSpot)})`, { warp: pinnedSpot.index, reason: 'panel' });
     return warpAndWait(pinnedSpot);
   }
   const exclude = activeDryExclusions(dryAt, now);

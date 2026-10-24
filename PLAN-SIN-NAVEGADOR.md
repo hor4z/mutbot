@@ -18,8 +18,7 @@ bun run bot --allow-remote --proxy wss://mu.mormon.garden/ws --cs-host mu.mormon
 ```
 
 Más simple: `bun run estacion` y en `http://127.0.0.1:8787` Conectar con la rutina (ver AGENTS.md
-"Estación"). A mano, panel en `http://127.0.0.1:8787/panel` (el 8788 lo usa `bun run agent`, el servidor del agente del
-navegador). Para pararlo: matar el proceso `headless-bot.ts`. **Nunca** con la misma cuenta abierta
+"Estación"). A mano, panel en `http://127.0.0.1:8787/panel`. Para pararlo: matar el proceso `headless-bot.ts`. **Nunca** con la misma cuenta abierta
 en el navegador.
 
 ## Lo que se arregló hoy (probado con Melu contra el server real)

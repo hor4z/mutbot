@@ -6,6 +6,7 @@
  * jugadores cerca cuenta como llena, sin nadie como mapa vacío).
  */
 import { decide } from './journal';
+import { pin } from './intent';
 import { CORNER, type Pos } from './corner';
 import { EARLY, INITIAL, deviasCamp, dist, fieldFor, inField, initialCamp, lorenciaPlan, type Field, type LorenciaPlan } from './early';
 import { FIGHT_LIMITS, canFight, type Fighter } from './power';
@@ -120,7 +121,7 @@ export class EarlyPlanner {
 
   /** ¿Manda el arranque ahora? */
   active(): boolean {
-    if (bot.hunting || bot.pinnedSpot || world.level >= CORNER.minLevel) return false;
+    if (bot.hunting || pin.current() || world.level >= CORNER.minLevel) return false;
     // Personaje nuevo sin terminar el farmeo inicial: manda el arranque aunque pase el 20 (Hume en el 27
     // caía al farmeo de siempre, iba al Lich por la cripta y lo mataba un Skeleton).
     if (world.map === EARLY.lorencia.map) return this.initial() || this.detour() || (world.level < EARLY.lorencia.maxLevel && this.lichOffFor !== bot.lastArrivalAt);

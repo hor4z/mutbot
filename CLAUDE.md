@@ -20,8 +20,7 @@ Foco: **bot sin navegador + estación/panel**. Para "correlo", "arrancalo", "pon
 `POST /api/do`, ver "Estación" en AGENTS.md). Estado y pendientes en
 **[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**. Primero Horaz, después Melu.
 
-El modo navegador (agente pegado en la pestaña del juego) está archivado en `browser/`: no se toca
-salvo pedido explícito. El usuario entra al navegador a jugar a mano cuando quiere.
+El modo navegador se eliminó de `main` (tag `pre-cerebro` lo conserva). El usuario entra al navegador a jugar a mano cuando quiere.
 
 Reglas rápidas:
 
