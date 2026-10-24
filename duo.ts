@@ -11,7 +11,7 @@
  *
  * Lógica pura: se testea en `duo-tests.ts`.
  */
-import { dist, type Pos } from './corner';
+import { dist, type Pos } from './util';
 
 /** Nivel del Gaint Drakan (data/monsters.json, 75): lo que se mata en la esquina. */
 export const CORNER_MONSTER_LEVEL = 100;

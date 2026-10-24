@@ -44,3 +44,6 @@ export function directionTowards(fromX: number, fromY: number, toX: number, toY:
   // Si no hay una dirección exacta (ya llegamos en un eje), probamos la que achique más distancia.
   return dx !== 0 ? (dx > 0 ? 3 : 7) : dy > 0 ? 5 : 1;
 }
+
+export type Pos = { x: number; y: number };
+export const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.y - b.y);

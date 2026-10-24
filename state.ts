@@ -12,10 +12,9 @@ import { CHAR_NAME, type StatName } from './config';
 import { HotSpotGrid } from './explore';
 import { CycleLog, ExpLog, ExpSplitTracker, MonsterTypeStats } from './farming';
 import type { CharLearning, Spot } from './learning';
-import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
+import { goldenTypes } from './panel-logic';
 import type { Invasion } from './panel-protocol';
 import { PkRecovery } from './recovery';
-import type { ScoutPublisher, ScoutTour } from './scout';
 import type { StatusServer } from './ws-server';
 import monstersData from './data/monsters.json';
 
@@ -110,30 +109,6 @@ export const world = {
   classId: null as number | null,
 };
 
-// Cacería de dorados (orden `hunt` del panel).
-// auto: la arrancó el cazador automático (corta con pocos vivos); si no, una orden del panel.
-export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number>; auto?: boolean;
-  // Dorados vistos en el mapa de la cacería (propios o avisados por un compañero): id → dónde y cuándo.
-  // Después de morir o si se van de scope, se vuelve directo ahí en vez de recorrer celdas.
-  spots?: Map<number, { x: number; y: number; type: number; at: number }>;
-  // Zonas de dragones ya recorridas en esta cacería ("x,y"; zones.ts).
-  zonesVisited?: Set<string>;
-  // Rastrillaje por visión (sweep.ts): se arma al llegar al mapa de la cacería si se conoce el terreno.
-  sweep?: import('./sweep').SweepPlanner;
-  sweepMap?: number;
-  // Distancia máxima (Chebyshev) a la que se vio un objeto en scope: de ahí sale el radio de visión.
-  scopeMax?: number;
-  // Mapas ya cazados en esta invasión (el encadenado no vuelve a ellos).
-  done?: Set<number>;
-  // Cacería del Dragón Rojo: corta por tiempo (RED_HUNT_MS), no por el 0xFD de la invasión dorada.
-  red?: boolean;
-  // Último dorado a la vista en este mapa (para huntDryOut).
-  lastSeenAt?: number;
-  // Explorador (orden `scout`, scout.ts): recorre mapas sin pelear y publica. `hunt` es el mapa de ahora.
-  scout?: { tour: ScoutTour; pub: ScoutPublisher };
-  // Pistas de exploradores ya sembradas en `spots` (clave = -hora del reporte), para no volver a una ya visitada.
-  hinted?: Set<number> };
-
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.
   playerId: -1,
@@ -157,8 +132,6 @@ export const bot = {
   lastArrivalAt: Date.now(),
   // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
   paused: false,
-  // Cacería de dorados (orden `hunt`). null = farmeo normal.
-  hunting: null as HuntState | null,
   // Orden `warp`: el loop la ejecuta en su próximo tick; el spot queda fijo hasta `farm`.
   pendingWarp: null as Spot | null,
   // Orden `vault` del panel: leer el baúl en el próximo paso del loop.

@@ -17,8 +17,6 @@ import { describeStep, summarizePlan } from './equip-plan';
 import { equipPlanNow } from './vault';
 import { runCommerce, runShops, shopsView } from './commerce';
 import { WARP_SPOTS } from './route';
-import { ScoutPublisher, ScoutTour } from './scout';
-import { scoutCovered } from './team';
 import { isFreshChar } from './farming';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
 import { chebyshev } from './util';
@@ -30,7 +28,7 @@ export function currentMode(): BotMode {
   if (bot.resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
   if (bot.paused) return 'paused';
-  return bot.hunting ? 'hunt' : 'farm';
+  return 'farm';
 }
 
 // Señales de dorados a la estación (GOLD_URL): cada dorado que ve, con posición; POST con timeout
@@ -48,19 +46,6 @@ export function publishGold(p: GoldSighting | GoldGone) {
   }
 }
 
-export function stopHunt(reason: string) {
-  if (!bot.hunting) return;
-  const h = bot.hunting;
-  bot.hunting = null;
-  bot.retarget = true;
-  bot.goalPoint = null;
-  // El spot de la cacería no es de la ruta: que la ruta fija decida (adopta el
-  // mapa si es el del tramo, si no warpea).
-  bot.currentSpot = null;
-  bot.canAdopt = true;
-  panelLog(`Cacería en ${h.hunt.name} terminada (${reason}): vuelvo a farmear.`);
-}
-
 let equipPlanView: EquipPlanView | null = null;
 
 async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
@@ -73,10 +58,9 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
     case 'resume':
       if (!bot.paused) return { ok: true, msg: 'no estaba en pausa' };
       bot.paused = false;
-      return { ok: true, msg: `sigo: ${bot.hunting ? `cazando en ${bot.hunting.hunt.name}` : 'farmeo normal'}` };
+      return { ok: true, msg: 'sigo con el farmeo normal' };
     case 'farm': {
-      const was = [bot.hunting && 'cacería cancelada', pin.current() && `spot fijo (${pin.current()!.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
-      if (bot.hunting) stopHunt('orden del panel');
+      const was = [pin.current() && `spot fijo (${pin.current()!.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
       pin.clearAll('orden farm del panel');
       bot.pendingWarp = null;
       bot.paused = false;
@@ -87,7 +71,6 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
       const v = validateWarp(c.warp, world.level, WARP_SPOTS);
       if (!v.ok) return { ok: false, msg: v.msg };
-      if (bot.hunting) stopHunt('orden warp del panel');
       bot.paused = false;
       bot.pendingWarp = v.spot;
       pin.set('panel', v.spot, 'orden warp');
@@ -114,7 +97,6 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
     case 'equip':
       if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
       if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      if (bot.hunting) return { ok: false, msg: 'estoy cazando: cortá la cacería (farm) y mandá equip de nuevo' };
       bot.pendingEquip = true;
       equipPlanView = null;
       return { ok: true, msg: 'voy a Lorencia, saco las piezas del baúl y me las pongo (lee el baúl de nuevo y arma el plan con datos de ahora)' };
@@ -122,34 +104,9 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
       return runShops(c);
     case 'commerce':
       return runCommerce(c.op);
-    case 'scout': {
-      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      const now = Date.now();
-      const tour = new ScoutTour();
-      const first = tour.start({ now, map: world.map, level: world.level, weak: isFreshChar(world.resets, world.stats), covered: scoutCovered(now) });
-      if (!first) return { ok: false, msg: 'no tengo un mapa seguro para explorar con mi nivel y mis stats' };
-      if (bot.hunting) stopHunt('orden scout del panel');
-      bot.hunting = { hunt: first, since: now, warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set(), scout: { tour, pub: new ScoutPublisher() } };
-      pin.clearAll('orden del panel');
-      bot.pendingWarp = null;
-      bot.paused = false;
-      bot.retarget = true;
-      return { ok: true, msg: `exploro desde ${first.name} sin pelear (salvo defensa propia) y aviso a la estación cada 30-60 s; farm me corta` };
-    }
-    case 'hunt': {
-      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      const ch = chooseHuntMap({ invasion: bot.invasion, level: world.level, map: c.map });
-      if (!ch.ok) return { ok: false, msg: ch.msg };
-      if (bot.invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      bot.hunting = { hunt: ch.hunt, since: Date.now(), warpTries: 0, nextWarpAt: 0, explorer: new HuntExplorer(), seen: new Set() };
-      pin.clearAll('orden del panel');
-      bot.pendingWarp = null;
-      bot.paused = false;
-      bot.retarget = true;
-      return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
-    }
+    case 'scout':
+    case 'hunt':
+      return { ok: false, msg: 'la cacería y la exploración automáticas se quitaron: los bots se avisan los dorados y se ayudan solos' };
   }
 }
 
@@ -229,7 +186,7 @@ export function buildPanelState(now: number): PanelState {
       points: world.levelUpPoints,
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
-    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.hunting ? `${bot.hunting.scout ? 'exploración' : 'cacería'} ${bot.hunting.hunt.name}` : (bot.currentSpot?.name ?? null), pinned: !!pin.current() },
+    where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null, pinned: !!pin.current() },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
     cycle: toPanelCycle(cycleLog.cur, true),
     cycles,

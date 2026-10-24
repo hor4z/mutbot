@@ -52,7 +52,6 @@
  *   util.ts         log, sleep, bytes, direcciones
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
-import { startGoldFeed } from './gold-feed';
 import { startTeamPolling } from './team';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
@@ -109,7 +108,6 @@ function clearScope() {
   bot.pendingWarp = null;
   pin.clear('help', 'reconexión');
   pin.clear('town', 'reconexión');
-  if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null;
 }
 
 async function session(deadline: number): Promise<LoopResult> {
@@ -129,7 +127,6 @@ async function session(deadline: number): Promise<LoopResult> {
     watchChat();
     watchLiveness();
     startTeamPolling();
-  startGoldFeed();
     worldTracked = true;
   }
   await loginAndSelectCharacter();
