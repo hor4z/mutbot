@@ -24,6 +24,10 @@ import { pin } from './intent';
 
 // Nivel mínimo para salir a cazar: el chequeo de poder (`weak`, stats por detrás del nivel) ya frena al recién reseteado.
 const HUNT_MIN_LEVEL = 300;
+// Un personaje limitado (stats por detrás del nivel) también sale a la invasión: recorre, avisa lo que ve y solo ataca
+// los dorados que su poder aguanta (el resto, como un dragón, queda avisado para el fuerte).
+const INFORM_MIN_LEVEL = 150;
+const minLevelFor = (weak: boolean) => (weak ? INFORM_MIN_LEVEL : HUNT_MIN_LEVEL);
 // Un dorado visto se recuerda 3 min (para volver tras morir); a los compañeros se les avisa como mucho cada 15 s.
 const SPOT_TTL_MS = 3 * 60_000;
 const SHARE_MS = 15_000;
@@ -91,9 +95,9 @@ export function onGoldenRequest(r: TeamRequest, weak: boolean) {
 export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
   const now = Date.now();
   if (!bot.hunting) {
-    if (!AUTO_HUNT_ON || weak || bot.paused || bot.resetting || world.level < HUNT_MIN_LEVEL || pin.owner() === 'panel') return false;
+    if (!AUTO_HUNT_ON || bot.paused || bot.resetting || world.level < minLevelFor(weak) || pin.owner() === 'panel') return false;
     // Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
-    if (bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
+    if (!weak && bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
       lastRedAt = bot.redDragon.at;
       const hm = HUNT_MAPS.find((x) => x.map === bot.redDragon!.map);
       if (hm && world.level >= hm.reqLevel) {
@@ -105,7 +109,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
       }
     }
     // Invasión dorada con vivos en un mapa al alcance → a cazar, una vez por invasión.
-    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, minLevel: HUNT_MIN_LEVEL, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
+    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, minLevel: minLevelFor(weak), lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
     if (ch?.ok) {
       lastAutoHuntKey = invasionKey(bot.invasion!);
       bot.hunting = newHunt(ch.hunt, now, { auto: true });
@@ -130,7 +134,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((now - h.since) / 60_000).toFixed(1), red: !!h.red });
     stopHunt(stop);
     ctx.target = null;
-    if (h.auto && !h.red && !weak) {
+    if (h.auto && !h.red) {
       const done = new Set([...(h.done ?? []), h.hunt.map]);
       const next = pickHuntMap({ invasion: bot.invasion, level: world.level, done, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
       if (next.ok) {
@@ -161,10 +165,10 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
  * Cazando: el dorado que corresponde pegar (o null). Anota dónde está cada dorado a la vista y avisa a los compañeros.
  * `walked` = true si el dragón salió de la vista y este tick se fue a donde estaba.
  */
-export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boolean }): Promise<{ gold: ScopedNpc | null; walked: boolean }> {
+export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boolean }, canHit: (type: number) => boolean): Promise<{ gold: ScopedNpc | null; walked: boolean }> {
   const h = bot.hunting!;
   const now = Date.now();
-  const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t)) as ScopedNpc | null;
+  const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t) && canHit(t)) as ScopedNpc | null;
   if (gold && DRAGON_TYPES.has(gold.type)) lastDragon = { id: gold.id, x: gold.x, y: gold.y, at: now };
   // No repartir el daño con un común cercano mientras el dragón está fuera de la vista un instante.
   if (lastDragon && (!gold || !DRAGON_TYPES.has(gold.type)) && !ctx.npcs.has(lastDragon.id) && now - lastDragon.at < DRAGON_MEMORY_MS && world.map === h.hunt.map) {

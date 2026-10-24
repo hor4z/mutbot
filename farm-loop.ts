@@ -443,7 +443,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
     let gold: ScopedNpc | null = null;
     if (bot.hunting) {
-      const hp = await huntPick(ctx, unreachable);
+      const hp = await huntPick(ctx, unreachable, (t) => !me || canFight(me, t));
       if (hp.walked) continue;
       gold = hp.gold;
       // Cazando no se pelea con comunes: cada golpe frena y lo único que importa es llegar al próximo dorado.
