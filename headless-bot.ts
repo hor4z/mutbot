@@ -68,6 +68,7 @@ import { buildPanelState, handlePanelCommand, noteModeChange, updateTrail } from
 import { Backoff } from './protocol097';
 import { watchLiveness } from './liveness';
 import { loadLearningState } from './route';
+import { pin } from './intent';
 import { bot, world } from './state';
 import { log, sleep } from './util';
 import { CreateCharacterError, listCharacters, loginAndSelectCharacter, trackWorld } from './world';
@@ -104,6 +105,12 @@ function clearScope() {
   bot.inGameAt = 0;
   bot.doing = 'conectando';
   bot.goalPoint = null;
+  // Lo transitorio no sobrevive a la reconexión: un warp pendiente, los pins de la escuadra y de la espera, y una
+  // cacería vieja (sus 'since' y reintentos ya no valen). El spot fijado por el panel sí queda: lo pidió una persona.
+  bot.pendingWarp = null;
+  pin.clear('squad', 'reconexión');
+  pin.clear('town', 'reconexión');
+  if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null;
 }
 
 async function session(deadline: number): Promise<LoopResult> {

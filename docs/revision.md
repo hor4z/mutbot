@@ -222,3 +222,12 @@ Qué hacer: (a) `proc.unref()` y arrancar los bots con `nohup`/`launchctl` o via
 4. Estación: supervisor / pids persistidos / mostrar la señal con que murió el bot (4.1).
 5. Borrar `shop.ts`, `crafting.ts`, `squad-gear.ts`; arreglar la doc de `bun run test` y `setsid`.
 6. Partir el bundle y sacar los mocks de producción (5).
+
+---
+
+## Estado tras el cerebro único (commit posterior a `pre-cerebro`)
+
+Resuelto: 1.2 (sombra aislada), 1.3 (pins por dueño en `intent.ts`, un warp pendiente), 2.1 (pin de escuadra se suelta al vencer/`none`),
+2.2 (`lastSeq`), 2.4 (warps duplicados), 2.7 (squads.json atómico y con aviso, poll de la estación anotado), 2.8 (constante de Lorencia),
+2.11/2.12 (warp pendiente, pins de escuadra/espera y cacería vieja se limpian al reconectar), clave fuera de `environ`, 3 (muerto borrado:
+`browser/`, `finisher`). Pendiente: partir `farm-loop.ts`, bundle del UI (5), supervisor de bots en la estación (4.1).

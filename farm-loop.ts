@@ -57,7 +57,7 @@ import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPa
 import { currentMode, publishGold, sessionStart, setLoopView, stopHunt } from './panel';
 import { AUTO_HUNT, aliveHistory, GoldReporter, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, resetBlockedByInvasion, shouldStopHunt } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
-import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
+import { LORENCIA_WARP, SAVE_EVERY_MS, WARP_COOLDOWN_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait, zenTxt } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type HuntState, type ScopedNpc } from './state';
 import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
@@ -238,7 +238,6 @@ function hookAggro() {
 }
 
 // Espera en Lorencia con el reset frenado (ver waitTown en el loop).
-const LORENCIA_WAIT_WARP = 2;
 let lastTownTry = 0;
 
 // Peleas de varios jugadores a la vista (fight-heat.ts): "oír la pelea" mientras se caza.
@@ -546,7 +545,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           ctx.target = null;
           ctx.walkStuck = 0;
           journal('travel', `vigía: ${wd.remedy === 'warp_town' ? 'warp a Lorencia' : 'vuelvo a entrar al mapa'}`, { reason: 'watchdog', diagnosis: wd.diagnosis });
-          if (wd.remedy === 'warp_town') await warpAndWait(WARP_SPOTS.find((sp) => sp.index === 2)!);
+          if (wd.remedy === 'warp_town') await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
           else if (bot.hunting) {
             const h = bot.hunting.hunt;
             await warpAndWait({ index: h.warp, name: `cacería ${h.name}`, reqLevel: h.reqLevel, zen: 0, map: h.map });
@@ -735,7 +734,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           if (world.map === CORNER.map) corner.awayUntil = nowD + (isPriorityChar(bot.charName) ? 60_000 : DEFENSE.avoidMapMs);
           ctx.target = null;
           journal('travel', 'huyo de un jugador: warp a Lorencia', { warp: 2, reason: 'defense' });
-          await warpAndWait(WARP_SPOTS.find((sp) => sp.index === 2)!);
+          await warpAndWait(WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP)!);
           continue;
         }
         const sk = Defense.skill((n) => world.skills.has(n));
@@ -882,7 +881,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const waitTown = process.env.MUBOT_WAIT_TOWN !== '0' && AUTO_HUNT_ON && !shadow && !isPriorityChar(bot.charName) && !supportWaits && !bot.hunting && !goldHold
       && world.level >= RESET_LEVEL && resetBlockedByInvasion(Date.now());
     if (waitTown) {
-      const town = WARP_SPOTS.find((sp) => sp.index === LORENCIA_WAIT_WARP);
+      const town = WARP_SPOTS.find((sp) => sp.index === LORENCIA_WARP);
       if (town && world.map !== town.map && !bot.pendingWarp && Date.now() - lastTownTry > 60_000) {
         lastTownTry = Date.now();
         if (requestWarp(town, 'town', 'reset frenado por la invasión')) pin.set('town', town, 'espera del reset');

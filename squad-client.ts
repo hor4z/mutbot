@@ -37,6 +37,7 @@ let current: Assignment | null = null;
 let lastSeq = -1;
 let lastSquadKey = '';
 let polling = false;
+let stationDown = false;
 let partyNames: string[] = [];
 let partyIndex = -1;
 let released = '';
@@ -89,8 +90,10 @@ export function startSquadPolling() {
           log(`Escuadra: orden descartada (${v.err}).`);
         } else log(`Escuadra: orden descartada (${v.err}).`);
       }
+      if (stationDown) { stationDown = false; log('Escuadra: la estación volvió a contestar.'); }
     } catch {
-      // sin estación: el bot sigue solo
+      // sin estación: el bot sigue solo, pero se anota una vez para saber por qué "no obedece"
+      if (!stationDown) { stationDown = true; log('Escuadra: la estación no contesta; sigo con mi rutina.'); }
     }
   };
   void poll();

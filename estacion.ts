@@ -135,7 +135,7 @@ function scanProcs(): Running[] {
       const i = cmdline.indexOf('--ws-port');
       // `ps eww` agrega el entorno al final de la línea: alcanza para reconocer la clave de escuadra y MUBOT_USER.
       const env = Bun.spawnSync(['ps', 'eww', '-o', 'command=', '-p', m[1]]).stdout.toString();
-      const environ = env.match(/MUBOT_[A-Z_]+=\S*/g) ?? [];
+      const environ = (env.match(/MUBOT_[A-Z_]+=\S*/g) ?? []).filter((v) => !v.startsWith('MUBOT_PASS=')); // la clave no se guarda ni en memoria
       out.push({ pid: Number(m[1]), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ });
     }
     return out;
