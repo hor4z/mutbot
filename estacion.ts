@@ -646,7 +646,11 @@ Bun.serve({
       }
       const r = parseTeamRequest(raw, Date.now());
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
+      const prev = teamRequests.get(`${r.from}:${r.kind}`);
       teamRequests.set(`${r.from}:${r.kind}`, r);
+      // Al feed de mensajes de la interfaz (una vez por minuto por pedido).
+      if (!prev || r.at - prev.at > 60_000)
+        addAlert({ at: r.at, kind: r.kind === 'golden' ? 'gold' : 'status', tone: r.kind === 'golden' ? 'good' : 'info', char: r.from, text: r.kind === 'golden' ? `${r.from} avisa: ${r.note}` : `${r.from} pide ayuda (${r.note})` });
       say(`${r.from} pide ayuda (${r.kind}): ${r.note}`);
       return json({ ok: true });
     }

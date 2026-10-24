@@ -1,0 +1,35 @@
+.simple { display: grid; grid-template-columns: 340px 1fr; height: 100vh; background: var(--bg, #0e0d12); color: var(--text, #e8e6ee); }
+.simple-list { overflow: auto; padding: 16px; border-right: 1px solid rgba(255,255,255,.08); display: flex; flex-direction: column; gap: 8px; }
+.simple-list h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
+.simple-list h2 { font-size: 13px; margin: 16px 0 4px; opacity: .7; font-weight: 600; }
+.simple-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.08); }
+.simple-info { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 2px 8px; min-width: 0; }
+.simple-info small { grid-column: 1 / -1; opacity: .7; font-size: 12px; }
+.simple-doing { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.simple-dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+.simple-dot.on { background: #4cd18a; }
+.simple-dot.wait { background: #e6b450; }
+.simple-row button { border: 0; border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; font-size: 13px; }
+.simple-row button.go { background: #4cd18a; color: #08130d; }
+.simple-row button.stop { background: #3a3745; color: #e8e6ee; }
+.simple-row button:disabled { opacity: .5; cursor: default; }
+.simple-msgs { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.simple-msg { padding: 5px 8px; border-radius: 6px; background: rgba(255,255,255,.04); }
+.simple-msg time { opacity: .5; font-variant-numeric: tabular-nums; margin-right: 4px; }
+.simple-msg.good { border-left: 3px solid #4cd18a; }
+.simple-msg.warn { border-left: 3px solid #e6b450; }
+.simple-msg.bad { border-left: 3px solid #ff6b6b; }
+.simple-maps { min-width: 0; display: grid; gap: 1px; background: rgba(255,255,255,.08); }
+.simple-maps.n0, .simple-maps.n1 { grid-template-columns: 1fr; }
+.simple-maps.n2 { grid-template-columns: 1fr 1fr; }
+.simple-maps.n3, .simple-maps.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.simple-map { position: relative; min-height: 0; background: var(--bg, #0e0d12); }
+.simple-map header { position: absolute; top: 8px; left: 10px; z-index: 2; font-weight: 600; font-size: 13px; background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 6px; }
+.simple-map iframe { width: 100%; height: 100%; border: 0; }
+.simple-empty { padding: 32px; opacity: .6; background: var(--bg, #0e0d12); }
+.simple-err { background: rgba(255,90,90,.15); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.maponly { height: 100vh; }
+.maponly .radar { height: 100%; }
+@media (max-width: 800px) { .simple { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+/* Mapa solo: sin controles, capas, brújula ni leyenda; queda el mapa, el título y lo que hace. */
+.maponly .hud-map-controls, .maponly .hud-toolbar, .maponly .hud-compass, .maponly .hud-legend, .maponly .hud-mini { display: none !important; }

@@ -180,6 +180,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const p = new ObjectGotKilledPacket(raw);
     const id = p.KilledId & 0x7fff;
     const wasOurTarget = id === ctx.target;
+    const dead = world.npcs.get(id);
+    // Dorado muerto a la vista y quién lo mató: "vistos contra matados" y quién se queda con los dragones.
+    if (dead && GOLDEN_TYPES.has(dead.type)) {
+      const kid = p.KillerId & 0x7fff;
+      const mine = kid === bot.playerId;
+      trackEvent('golden_kill', monsterName(dead.type), dead.type, mine ? 1 : 0, { gx: dead.x, gy: dead.y, killer: mine ? bot.charName : world.players.get(kid)?.name ?? null, hunting: !!bot.hunting });
+    }
     world.npcs.delete(id);
     ctx.npcs.delete(id);
     if (id === bot.playerId) {

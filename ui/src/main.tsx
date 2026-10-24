@@ -4,7 +4,8 @@ import "@fontsource/geist/latin-500.css";
 import "@fontsource/geist/latin-600.css";
 import "@fontsource/geist/latin-700.css";
 import "@fontsource/geist-mono/latin-400.css";
-import { Station } from "./Station";
+import { SimpleStation } from "./Simple";
+import { MapOnly } from "./MapOnly";
 import { Panel } from "./Panel";
 import "./style.css";
 import "./station.css";
@@ -17,4 +18,4 @@ installMock();
 // `panel.html` trae data-surface="panel"; en `ui:dev` se abre con `?panel` (y `&demo` para el bot simulado).
 const q = new URLSearchParams(location.search);
 const panel = document.body.dataset.surface === "panel" || q.has("panel");
-createRoot(document.getElementById("root")!).render(isCommerceDemo() ? <CommerceDemo /> : panel ? <Panel /> : <Station />);
+createRoot(document.getElementById("root")!).render(isCommerceDemo() ? <CommerceDemo /> : q.has("mapa") ? <MapOnly /> : panel ? <Panel /> : <SimpleStation />);
