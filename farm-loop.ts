@@ -15,13 +15,14 @@ import { closeSockets } from './connection';
 import { ATTACK_PACE_MS, ATTACK_SKILL_POOL, BUILD, BUILD_ARG, EXPLORE_PREF, HEAL_AT_PCT, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
 import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
+import { CORNER, cornerTarget, inCorner, nextRoutePoint } from './corner';
 import { GoldenRule } from './golden';
 import { parseFight } from './fight-heat';
 import { canFight } from './power';
 import { farmMiddleware, statPower } from './farm-middleware';
 import { ownAreaSkill, ownTargetedSkill } from './protocol097';
 import { GOLDEN_TYPES, isMate } from './state';
-import { askForHelp, helpStep, onHelpRequest, skipHelp } from './help';
+import { partyUp } from './help';
 import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
 import { pin } from './intent';
 import { readVault, runEquip } from './vault';
@@ -37,7 +38,7 @@ import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPa
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
-import { SAVE_EVERY_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait } from './route';
+import { SAVE_EVERY_MS, WARP_COOLDOWN_MS, WARP_SPOTS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait } from './route';
 import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
@@ -151,6 +152,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let lastGoalTxt = '';
   let explorerMap: number | null = null;
   let ticks = 0;
+  let routeIdx: number | null = null;
   const golden = new GoldenRule();
   const goldAnnounced = new Set<number>();
   const explorer = new Explorer(EXPLORE_PREF, EXPLORE, hotGrid);
@@ -256,7 +258,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // Ciego: el server a veces deja de mandar el scope de monstruos, o la sesión queda "fantasma" (monstruos pero
     // ninguna exp). Reconectar lo arregla.
-    const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0 && !pin.has('help');
+    const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0;
     const sinceIn = nowT - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
     if (noExp || nowT - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
@@ -281,7 +283,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.stuckSince = 0;
       if (bot.hunting) { bot.hunting.explorer.reset(); bot.hunting.zonesVisited = new Set(); }
       else if (learned.camps.camp) learned.camps.leave(nowT, world.level, 'trabado caminando', true, expLog);
-      skipHelp();
       if (ctx.stuckStrikes >= 2 && bot.currentSpot && !bot.pendingWarp) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
       continue;
     }
@@ -375,18 +376,16 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const weak = isFreshChar(world.resets, world.stats) || profile.limited;
     const me = weak ? fighterNow() : null;
 
-    // Ayuda entre compañeros (help.ts): el débil pide, el fuerte va, invita a party y pelea a su lado.
-    askForHelp();
-    for (const r of newRequests()) {
-      if (r.kind === 'help') onHelpRequest(r);
-      else if (r.kind === 'golden') onGoldenRequest(r, weak);
-    }
-    if (await helpStep(ctx)) continue;
+    // Compañeros: party con el cercano más débil (help.ts) y avisos de dorados (hunt.ts).
+    partyUp();
+    for (const r of newRequests()) if (r.kind === 'golden') onGoldenRequest(r, weak);
     // Cacería de dorados (hunt.ts): arrancar con la invasión o un aviso, cortar, viajar al mapa.
     if (await huntStep(ctx, weak)) continue;
 
     // Reset al llegar al nivel, salvo cazando o con un dorado en juego.
     const goldHold = !!bot.hunting || golden.holding(nowT);
+    // La esquina de Arena 2 (corner.ts): desde el nivel 100 hasta el reset, para quien la aguanta, salvo cazando o con el spot fijado.
+    const cornerOn = !goldHold && !pin.current() && profile.corner && world.level >= CORNER.minLevel && world.level < RESET_LEVEL;
     if (!goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
       if (await doReset()) {
         resets++;
@@ -399,7 +398,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     investStatPointsInBackground((n) => { statPointsSpent += n; });
 
     // Medición neta de la exp (incluye la caminata desde el warp): un mapa que no rinde se deja 10 min.
-    if (weak && !pin.current() && bot.currentSpot && !goldHold) {
+    if (weak && !cornerOn && !pin.current() && bot.currentSpot && !goldHold) {
       const why = farmMiddleware.observe({ spot: bot.currentSpot.index, map: world.map, level: world.level,
         now: nowT, arrivalAt: bot.lastArrivalAt, rate: expLog.rateSince(bot.lastArrivalAt, nowT), f: fighterNow(), twistingSlash: world.skills.has(41) });
       if (why) {
@@ -408,8 +407,28 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       }
     }
     // Ruta fija por tramo: cada 10 ticks (o sin spot) revisa si toca cambiar de mapa.
-    if (!goldHold && (ticks % 10 === 0 || !bot.currentSpot)) {
+    if (!goldHold && !cornerOn && (ticks % 10 === 0 || !bot.currentSpot)) {
       if (await maybeChangeSpot()) { ctx.target = null; continue; }
+    }
+
+    // Viajar a la esquina y caminar el camino hasta ella.
+    if (cornerOn && !inCorner({ x: world.x, y: world.y })) {
+      ctx.target = null;
+      if (world.map !== CORNER.map) {
+        routeIdx = null;
+        if (nowT - bot.lastWarpAt < WARP_COOLDOWN_MS) { bot.doing = 'esperando para ir a la esquina de Arena 2'; await sleep(500); continue; }
+        bot.doing = `viajando a la esquina de Arena 2 (nivel ${world.level})`;
+        journal('travel', `warp a Arena 2 para la esquina (nivel ${world.level})`, { warp: CORNER.warp, reason: 'corner' });
+        await warpAndWait(WARP_SPOTS.find((sp) => sp.index === CORNER.warp)!);
+        continue;
+      }
+      const next = nextRoutePoint({ x: world.x, y: world.y }, routeIdx);
+      routeIdx = next.idx;
+      bot.doing = `camino a la esquina (${next.x},${next.y})`;
+      ctx.phase = 'walk';
+      castOnTheWay(ctx);
+      await walkTowards(ctx, next.x, next.y);
+      continue;
     }
 
     // Loot valioso, salvo con un objetivo a distancia de golpe.
@@ -439,6 +458,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       pickTarget(gold);
+    } else if (ctx.target == null && !bot.hunting && cornerOn) {
+      const t = cornerTarget({ x: world.x, y: world.y }, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)));
+      if (t) pickTarget(t);
     } else if (ctx.target == null && !bot.hunting) {
       const pick = learned.camps.pick({
         now: nowT, map: world.map, me: { x: world.x, y: world.y }, level: world.level,
@@ -498,6 +520,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
+    // Sin objetivo en la esquina: esperar adentro, en el punto de espera.
+    if (cornerOn) {
+      bot.goalPoint = [CORNER.wait.x, CORNER.wait.y];
+      if (chebyshev(world.x, world.y, CORNER.wait.x, CORNER.wait.y) > 2) { bot.doing = 'esperando en la esquina'; ctx.phase = 'walk'; await walkTowards(ctx, CORNER.wait.x, CORNER.wait.y); }
+      else { bot.doing = 'esperando monstruos en la esquina'; ctx.phase = 'wait'; await sleep(400); }
+      continue;
+    }
     // Sin objetivo. Cazando: al dorado recordado, a una zona o recorrer el mapa.
     if (bot.hunting && (await huntWander(ctx))) continue;
     // a) Mapa vacío 90 s: otra entrada del tramo.

@@ -8,9 +8,9 @@ import { journal } from './journal';
 import type { Spot } from './learning';
 import { bot } from './state';
 
-export type PinOwner = 'panel' | 'help' | 'town';
+export type PinOwner = 'panel' | 'town';
 
-const PRIORITY: Record<PinOwner, number> = { panel: 3, help: 2, town: 1 };
+const PRIORITY: Record<PinOwner, number> = { panel: 3, town: 1 };
 const pins = new Map<PinOwner, Spot>();
 
 const top = (): [PinOwner, Spot] | null => {

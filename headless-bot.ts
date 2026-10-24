@@ -106,7 +106,7 @@ function clearScope() {
   // Lo transitorio no sobrevive a la reconexión: un warp pendiente, los pins de la escuadra y de la espera, y una
   // cacería vieja (sus 'since' y reintentos ya no valen). El spot fijado por el panel sí queda: lo pidió una persona.
   bot.pendingWarp = null;
-  pin.clear('help', 'reconexión');
+  pin.clear('town', 'reconexión');
   if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null; // una cacería vieja ya no vale
   pin.clear('town', 'reconexión');
 }
