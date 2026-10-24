@@ -9,7 +9,6 @@ import { FleetView } from "./Fleet";
 import { GoldsView } from "./Golds";
 import { NewAccount } from "./NewAccount";
 import { Help, Palette, type Cmd } from "./Palette";
-import { Squads } from "./Squads";
 import { StrategiesView } from "./Strategies";
 import { ConsoleView, CharacterView, RankingView } from "./Views";
 import { ROLES, ROLE_KEYS } from "../../estacion-logic";
@@ -21,7 +20,6 @@ const VIEWS = [
   { id: "flota", label: "Flota", icon: <LayoutGrid size={16} /> },
   { id: "personaje", label: "Personaje", icon: <UserRound size={16} /> },
   { id: "estrategias", label: "Estrategias", icon: <Compass size={16} /> },
-  { id: "escuadras", label: "Escuadras", icon: <Shield size={16} /> },
   { id: "dorados", label: "Dorados", icon: <Sparkles size={16} /> },
   { id: "ranking", label: "Ranking", icon: <Trophy size={16} /> },
   { id: "consola", label: "Consola", icon: <Terminal size={16} /> },
@@ -173,7 +171,6 @@ function Shell() {
         {view === "flota" && <FleetView data={data} loaded={loaded} actions={actions} selected={multi} setSelected={setMulti} onOpen={open} onGoto={(v) => isView(v) && setView(v)} onNew={() => setCreating(true)} />}
         {view === "personaje" && <CharacterView data={data} selected={selected} onPick={pickChar} actions={actions} demo={demo} />}
         {view === "estrategias" && <StrategiesView data={data} actions={actions} onOpen={open} />}
-        {view === "escuadras" && <Squads />}
         {view === "dorados" && <GoldsView data={data} actions={actions} onPick={open} />}
         {view === "ranking" && <RankingView mine={data.chars.map((c) => c.char)} />}
         {view === "consola" && <ConsoleView data={data} selected={selected} onPick={pickChar} />}

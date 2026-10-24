@@ -54,7 +54,6 @@
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
 import { startGoldFeed } from './gold-feed';
 import { startTeamPolling } from './team';
-import { startSquadPolling } from './squad-client';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, LIST_CHARS, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
@@ -108,7 +107,7 @@ function clearScope() {
   // Lo transitorio no sobrevive a la reconexión: un warp pendiente, los pins de la escuadra y de la espera, y una
   // cacería vieja (sus 'since' y reintentos ya no valen). El spot fijado por el panel sí queda: lo pidió una persona.
   bot.pendingWarp = null;
-  pin.clear('squad', 'reconexión');
+  pin.clear('help', 'reconexión');
   pin.clear('town', 'reconexión');
   if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null;
 }
@@ -131,7 +130,6 @@ async function session(deadline: number): Promise<LoopResult> {
     watchLiveness();
     startTeamPolling();
   startGoldFeed();
-    startSquadPolling();
     worldTracked = true;
   }
   await loginAndSelectCharacter();

@@ -36,7 +36,7 @@ export const WARP_SPOTS: Spot[] = [
   { index: 5, name: 'Devias 2', reqLevel: 20, zen: 2000, map: 2, arrival: { x: 24, y: 25 } },
   // Arena 1 (warp 1): monstruos flojos y dispersos, ~0 exp/min medido jugando.
   // Solo como plan B si todas las Devias están llenas de gente (nivel 50-99).
-  { index: CROWD_FALLBACK.warp, name: 'Arena', reqLevel: 50, zen: 0 },
+  { index: CROWD_FALLBACK.warp, name: 'Arena', reqLevel: 50, zen: 0, map: 6 },
   { index: 24, name: 'Arena 2', reqLevel: 100, zen: 0, map: 83 },
   { index: 25, name: 'Arena 3', reqLevel: 200, zen: 0, map: 84 },
   { index: 26, name: 'Arena 4', reqLevel: 300, zen: 0, map: 85 },

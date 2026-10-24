@@ -1,16 +1,16 @@
 /**
  * Quién manda sobre el spot y los warps. Antes el panel, la escuadra, la espera en Lorencia y los pedidos de ayuda
  * escribían los mismos campos (`pinnedSpot`, `pendingWarp`) y cada uno guardaba y restauraba "su" valor: se pisaban.
- * Ahora cada dueño tiene su propio pin y manda el de mayor prioridad (panel > escuadra > espera en pueblo). Soltar
+ * Ahora cada dueño tiene su propio pin y manda el de mayor prioridad (panel > ayuda > espera en pueblo). Soltar
  * el propio nunca toca el de otro, y todo cambio queda en el diario con dueño y motivo.
  */
 import { journal } from './journal';
 import type { Spot } from './learning';
 import { bot } from './state';
 
-export type PinOwner = 'panel' | 'squad' | 'town';
+export type PinOwner = 'panel' | 'help' | 'town';
 
-const PRIORITY: Record<PinOwner, number> = { panel: 3, squad: 2, town: 1 };
+const PRIORITY: Record<PinOwner, number> = { panel: 3, help: 2, town: 1 };
 const pins = new Map<PinOwner, Spot>();
 
 const top = (): [PinOwner, Spot] | null => {

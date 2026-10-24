@@ -32,7 +32,6 @@ import { PARTY_MATES } from './config';
 import { parsePositionFix } from './protocol097';
 import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
-import { onPartyGone, onPartyList, squadPartyDecision } from './squad-client';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
@@ -471,17 +470,15 @@ export function trackWorld() {
     const from = world.players.get(id)?.name;
     // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
     // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
-    // Con una escuadra vigente (firmada por la estación) solo se acepta a sus miembros, nunca a extraños.
-    const sq = squadPartyDecision(from);
-    const mate = sq ? sq.accept : (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
+    const mate = (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
-      log(mate ? `Party de ${from}: acepto (${sq ? sq.why : 'compañero'}).` : `Party rechazada (de ${from ?? '#' + id}${sq ? `: ${sq.why}` : ''}).`);
+      log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
-  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, (raw: any) => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; onPartyList(toBytes(raw)); });
-  EventBus.on('RemovePartyMember', () => { if (bot.inParty) trackEvent('party', 'leave'); bot.inParty = false; onPartyGone(); });
+  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, (raw: any) => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
+  EventBus.on('RemovePartyMember', () => { if (bot.inParty) trackEvent('party', 'leave'); bot.inParty = false; });
 }
 
 // --- Zen -----------------------------------------------------------

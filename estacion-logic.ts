@@ -5,10 +5,6 @@
  */
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
 import { validCharName } from './names';
-import { parseSquadRequest, type SquadRequest } from './squad';
-
-// Escuadras (squad.ts): el contrato que ven la interfaz y los bots.
-export type { Assignment, Mission, MissionKind, Order, Squad, SquadRequest, SquadView, SquadRole } from './squad';
 
 /**
  * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
@@ -138,19 +134,13 @@ export type StationRequest =
   | { action: 'probe'; user: string; pass?: string }
   // Órdenes puntuales al bot (solo las de BOT_ORDERS): calcular el plan de equipo, ejecutarlo, limpiar el PK.
   | { action: 'bot'; char: string; command: PanelCommand }
-  // Escuadras (squad.ts): crear, misión (solo con confirm: true), abortar, disolver y alta de cuentas.
-  | SquadRequest
-  // Seguir al humano: bots que se pegan a un personaje que juega el usuario a mano (sin escuadra ni misión).
-  | { action: 'human-follow'; human: string; chars: string[] }
-  | { action: 'human-follow-stop' };
+  ;
 
 /** Lo único que la estación le reenvía a un bot por /api/do { action: 'bot' } (la interfaz pide confirmación antes de las que mueven o tocan algo). */
 export function isBotOrder(c: unknown): c is PanelCommand {
   if (!isPanelCommand(c)) return false;
   return c.cmd === 'equipplan' || c.cmd === 'equip' || (c.cmd === 'say' && c.text === '/pkclear');
 }
-
-export const isSquadRequest = (r: StationRequest): r is SquadRequest => r.action.startsWith('squad-');
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
@@ -183,14 +173,6 @@ export function accountProblem(user: string, pass: string): string | null {
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
-  if (typeof r.action === 'string' && r.action.startsWith('squad-')) return parseSquadRequest(v);
-  if (r.action === 'human-follow') {
-    if (Object.keys(r).sort().join() !== 'action,chars,human') return null;
-    if (typeof r.human !== 'string' || (r.human !== '' && !/^[A-Za-z0-9_]{1,10}$/.test(r.human))) return null;
-    if (!Array.isArray(r.chars) || r.chars.length < 1 || r.chars.length > 5 || !r.chars.every((c) => typeof c === 'string' && /^[a-z0-9_]{1,10}$/.test(c))) return null;
-    return { action: 'human-follow', human: r.human, chars: r.chars as string[] };
-  }
-  if (r.action === 'human-follow-stop') return Object.keys(r).length === 1 ? { action: 'human-follow-stop' } : null;
   if (r.action === 'create') {
     const keys = Object.keys(r).sort().join();
     if (keys !== 'action,char,cls,existing,pass,user') return null;
@@ -461,7 +443,7 @@ export function freshGolds(golds: Map<string, GoldSignal>, now: number): GoldSig
 }
 
 /** Pedido de ayuda entre personajes propios (equipo, ver team.ts). */
-export type TeamRequest = { from: string; kind: 'corner' | 'golden'; map: number; x: number; y: number; note: string; at: number };
+export type TeamRequest = { from: string; kind: 'corner' | 'golden' | 'help'; map: number; x: number; y: number; note: string; at: number };
 export const TEAM_REQUEST_TTL_MS = 2 * 60_000;
 
 /** Valida un pedido de ayuda de un bot; null si no es válido. */
@@ -469,7 +451,7 @@ export function parseTeamRequest(body: unknown, now: number): TeamRequest | null
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   const from = typeof b.from === 'string' ? b.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 10) : '';
-  if (!from || (b.kind !== 'corner' && b.kind !== 'golden') || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
+  if (!from || (b.kind !== 'corner' && b.kind !== 'golden' && b.kind !== 'help') || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
   return { from, kind: b.kind, map: b.map, x: b.x, y: b.y, note: String(b.note ?? '').slice(0, 80), at: now };
 }
 
