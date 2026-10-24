@@ -4,13 +4,13 @@
  * procesos: se testea en estacion-tests.ts.
  */
 import { isPanelCommand, type PanelCommand } from './panel-protocol';
-import { validCharName } from './names';
+import { validCharName } from './util';
 
 /**
  * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
- * de la base (`estacion-db.ts`; `envFile` = de qué `.env` se importó; `cls` si hay que crearlo al entrar).
+ * de la base (`estacion-db.ts`; `envFile` = de qué `.env` se importó).
  */
-export type CharConfig = { key: string; envFile: string | null; user: string; char: string; cls?: CharClassKey };
+export type CharConfig = { key: string; envFile: string | null; user: string; char: string };
 
 /**
  * Lee un archivo de env (formato de Bun: KEY=valor, comentarios con #, comillas opcionales).
@@ -66,24 +66,23 @@ export function botArgs(c: CharConfig, wsPort: number, server: GameServer, botFi
 /** Rutinas que se eligen en la estación. Cada una es una secuencia de órdenes del panel. */
 export type Routine =
   | { kind: 'farm' }
-  | { kind: 'spot'; warp: number }
+  /** cazar dorados (donde haya más vivos según 0xFD) */
+  | { kind: 'hunt' }
   | { kind: 'pause' };
 
-export const ROUTINE_KINDS = ['farm', 'spot', 'pause'] as const;
 
 export function isRoutine(v: unknown): v is Routine {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   const keys = Object.keys(r);
-  if (r.kind === 'spot') return keys.every((k) => k === 'kind' || k === 'warp') && Number.isInteger(r.warp) && (r.warp as number) >= 0 && (r.warp as number) < 256;
-  return (r.kind === 'farm' || r.kind === 'pause') && keys.length === 1;
+  return (r.kind === 'farm' || r.kind === 'hunt' || r.kind === 'pause') && keys.length === 1;
 }
 
 /** Órdenes del panel que ponen al bot en esa rutina (todas pasan por isPanelCommand). */
 export function routineCommands(r: Routine): PanelCommand[] {
   switch (r.kind) {
     case 'farm': return [{ cmd: 'farm' }];
-    case 'spot': return [{ cmd: 'warp', warp: r.warp }];
+    case 'hunt': return [{ cmd: 'hunt' }];
     case 'pause': return [{ cmd: 'pause' }];
   }
 }
@@ -91,7 +90,7 @@ export function routineCommands(r: Routine): PanelCommand[] {
 export function routineLabel(r: Routine): string {
   switch (r.kind) {
     case 'farm': return 'farmear por la ruta';
-    case 'spot': return `farmear fijo en el warp ${r.warp}`;
+    case 'hunt': return 'cazar dorados';
     case 'pause': return 'en pausa';
   }
 }
@@ -117,73 +116,84 @@ export function exitStatus(code: number | null): { status: CharStatus; msg: stri
 export type StationRequest =
   | { action: 'connect'; char: string; routine: Routine }
   | { action: 'disconnect'; char: string }
+  // Reintentar ya: corta el intento de conexión en curso (el bot espera cupo) y lanza otro sin esperar el backoff.
+  | { action: 'retry'; char: string }
   | { action: 'routine'; char: string; routine: Routine }
-  | NewCharRequest
-  | { action: 'add'; user: string; char: string; cls: CharClassKey | null }
-  // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
-  | { action: 'probe'; user: string; pass?: string };
-
-/**
- * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
- * clase. Va al almacén de cuentas (`accounts.ts`) y el bot crea el personaje al entrar.
- */
-export type NewCharRequest = { action: 'create'; user: string; pass: string; char: string; cls: CharClassKey | null; existing: boolean };
-
-/**
- * Clases que se pueden crear en este server (0.97d) y su número de red (`CharacterClassNumber` del
- * cliente; el packet lo lleva corrido 2 bits). MG pide un personaje de nivel alto en la cuenta.
- */
-export const CHAR_CLASSES = {
-  dk: { id: 4, label: 'Dark Knight' },
-  dw: { id: 0, label: 'Dark Wizard' },
-  elf: { id: 8, label: 'Fairy Elf' },
-  mg: { id: 12, label: 'Magic Gladiator' },
-} as const;
-export type CharClassKey = keyof typeof CHAR_CLASSES;
-export const isCharClass = (v: unknown): v is CharClassKey => typeof v === 'string' && Object.hasOwn(CHAR_CLASSES, v);
-
-/** Cuenta y clave como las valida el registro del cliente web. Devuelve el motivo o null. */
-export function accountProblem(user: string, pass: string): string | null {
-  if (!/^[A-Za-z0-9]{4,10}$/.test(user)) return 'la cuenta tiene que tener de 4 a 10 letras o números';
-  if (pass.length < 4 || pass.length > 10) return 'la clave tiene que tener de 4 a 10 caracteres';
-  if (!/^[!-~]+$/.test(pass)) return 'la clave solo puede tener caracteres visibles, sin espacios ni acentos';
-  return null;
-}
+  // Sombra: el orquestador manda (o no) a este personaje a seguir al más fuerte.
+  | { action: 'shadow'; char: string; on: boolean }
+  ;
 
 
 export function parseStationRequest(v: unknown): StationRequest | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const r = v as Record<string, unknown>;
-  if (r.action === 'create') {
-    const keys = Object.keys(r).sort().join();
-    if (keys !== 'action,char,cls,existing,pass,user') return null;
-    if (typeof r.user !== 'string' || typeof r.pass !== 'string' || typeof r.char !== 'string' || typeof r.existing !== 'boolean') return null;
-    // Clase null = el personaje ya existe en el server (solo con una cuenta que ya existe).
-    if (accountProblem(r.user, r.pass) || !validCharName(r.char) || !(isCharClass(r.cls) || (r.cls === null && r.existing))) return null;
-    return { action: 'create', user: r.user, pass: r.pass, char: r.char, cls: r.cls, existing: r.existing };
-  }
-  if (r.action === 'probe') {
-    const keys = Object.keys(r).sort().join();
-    if (keys !== 'action,user' && keys !== 'action,pass,user') return null;
-    if (typeof r.user !== 'string') return null;
-    if (keys === 'action,user') return /^[A-Za-z0-9]{4,10}$/.test(r.user) ? { action: 'probe', user: r.user } : null;
-    if (typeof r.pass !== 'string' || accountProblem(r.user, r.pass)) return null;
-    return { action: 'probe', user: r.user, pass: r.pass };
-  }
-  // Otro personaje en una cuenta que ya está en la base: la clave la pone la estación.
-  if (r.action === 'add') {
-    if (Object.keys(r).sort().join() !== 'action,char,cls,user') return null;
-    if (typeof r.user !== 'string' || !/^[A-Za-z0-9]{4,10}$/.test(r.user) || typeof r.char !== 'string' || !validCharName(r.char) || !(isCharClass(r.cls) || r.cls === null)) return null;
-    return { action: 'add', user: r.user, char: r.char, cls: r.cls };
-  }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
+  if (r.action === 'retry') return keys.length === 2 ? { action: 'retry', char: r.char } : null;
+  if (r.action === 'shadow') return keys.length === 3 && typeof r.on === 'boolean' ? { action: 'shadow', char: r.char, on: r.on } : null;
   if (r.action === 'connect' || r.action === 'routine') {
     if (keys.length !== 3 || !isRoutine(r.routine)) return null;
     return { action: r.action, char: r.char, routine: r.routine };
   }
   return null;
+}
+
+// --- Alertas de la flota ----------------------------------------------------------------------------
+
+export type AlertKind = 'gold' | 'invasion' | 'death' | 'pk' | 'blocked' | 'stuck' | 'status' | 'level';
+export type AlertTone = 'info' | 'good' | 'warn' | 'bad';
+export type Alert = { id: number; at: number; kind: AlertKind; tone: AlertTone; char: string | null; text: string };
+export const MAX_ALERTS = 120;
+/** Un bot que farmea o caza y no se mueve ni cambia de actividad este tiempo, está trabado. */
+export const STUCK_MS = 5 * 60_000;
+
+/** Lo que la estación mira de cada personaje para detectar cambios. */
+export type CharSnap = {
+  key: string; char: string; status: CharStatus; account: string;
+  mode: string | null; doing: string | null; map: string | null; x: number | null; y: number | null;
+  level: number | null; deaths: number | null;
+};
+
+/** Memoria del detector de alertas (la estación la guarda entre vueltas). */
+export type AlertMemory = { prev: Map<string, CharSnap>; movedAt: Map<string, number>; stuck: Set<string> };
+export const newAlertMemory = (): AlertMemory => ({ prev: new Map(), movedAt: new Map(), stuck: new Set() });
+
+/** Compara el estado nuevo con el anterior y devuelve las alertas (sin id: lo pone `pushAlert`). */
+export function diffAlerts(mem: AlertMemory, cur: CharSnap[], now: number): Omit<Alert, 'id'>[] {
+  const out: Omit<Alert, 'id'>[] = [];
+  const add = (kind: AlertKind, tone: AlertTone, char: string | null, text: string) => out.push({ at: now, kind, tone, char, text });
+  for (const c of cur) {
+    const p = mem.prev.get(c.key);
+    if (p) {
+      if (p.status !== c.status) {
+        if (c.status === 'on') add('status', 'good', c.char, `${c.char} entró al juego`);
+        else if (c.status === 'failed') add('blocked', 'bad', c.char, `${c.char} no pudo entrar`);
+        else if (c.status === 'in-use') add('blocked', 'warn', c.char, `${c.char}: la cuenta está abierta en otro lado`);
+        else if (c.status === 'off' && (p.status === 'on' || p.status === 'stopping')) add('status', 'info', c.char, `${c.char} se desconectó`);
+      }
+      if (c.account === 'blocked' && p.account !== 'blocked') add('blocked', 'bad', c.char, `La cuenta de ${c.char} quedó bloqueada por el server`);
+      if (p.deaths != null && c.deaths != null && c.deaths > p.deaths) add('death', 'bad', c.char, `${c.char} murió${c.map ? ` en ${c.map}` : ''} (${c.deaths} en la sesión)`);
+      if (p.level != null && c.level != null && c.level > p.level && c.level - p.level < 20) add('level', 'good', c.char, `${c.char} subió a nivel ${c.level}`);
+    }
+    const active = c.status === 'on' && (c.mode === 'farm' || c.mode === 'hunt');
+    const moved = !p || p.x !== c.x || p.y !== c.y || p.map !== c.map || p.doing !== c.doing || !active;
+    if (moved || !mem.movedAt.has(c.key)) mem.movedAt.set(c.key, now);
+    const frozen = active && now - (mem.movedAt.get(c.key) ?? now) >= STUCK_MS;
+    if (frozen && !mem.stuck.has(c.key)) {
+      mem.stuck.add(c.key);
+      add('stuck', 'warn', c.char, `${c.char} parece trabado: hace ${Math.round(STUCK_MS / 60_000)} min que no se mueve`);
+    } else if (!frozen) mem.stuck.delete(c.key);
+    mem.prev.set(c.key, c);
+  }
+  return out;
+}
+
+/** Agrega una alerta a la lista (la más nueva primero, tope MAX_ALERTS) numerándola. */
+export function pushAlert(list: Alert[], a: Omit<Alert, 'id'>) {
+  const id = (list[0]?.id ?? 0) + 1;
+  list.unshift({ ...a, id });
+  if (list.length > MAX_ALERTS) list.length = MAX_ALERTS;
 }
 
 /** Puerto del panel de cada bot: 8791, 8792, ... (8787 la estación, 8788 el agente del navegador). */
@@ -213,54 +223,10 @@ export function processRunsAccount(cmdline: string[], environ: string[], c: Char
 }
 
 // Sanity: las órdenes de las rutinas tienen que pasar el filtro del bot.
-for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'pause' }] as Routine[])
+for (const r of [{ kind: 'farm' }, { kind: 'hunt' }, { kind: 'pause' }] as Routine[])
   for (const c of routineCommands(r)) if (!isPanelCommand(c)) throw new Error(`rutina ${r.kind}: orden inválida ${JSON.stringify(c)}`);
 
 /** Tras desconectar desde la estación, cuánto se considera que la sesión vieja puede seguir abierta. */
 export const RECENT_STOP_MS = 90_000;
 
-/** Señal de dorado (de un bot sin navegador o del navegador si el usuario juega ahí). */
-export type GoldSignal = { from: string; map: number; x: number; y: number; name: string; id: number; at: number };
-export const GOLD_TTL_MS = 60_000;
-/** Origen del juego en el navegador: puede mandar señales (POST /api/gold) con CORS. */
-export const GAME_ORIGIN = 'https://mu.mormon.garden';
-
 const num = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
-
-/**
- * Aplica una señal `{ from, map, x, y, name, id }` (visto/movido) o `{ from, map, id, gone: true }` al
- * registro de avistamientos (clave from:id). Devuelve false si el cuerpo no es válido.
- */
-export function applyGoldSignal(golds: Map<string, GoldSignal>, body: unknown, now: number): boolean {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  const g = body as Record<string, unknown>;
-  const from = typeof g.from === 'string' ? g.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 20) : '';
-  if (!from || !num(g.map, 0, 255) || !num(g.id, 0, 65535)) return false;
-  const key = `${from}:${g.id}`;
-  if (g.gone === true) {
-    golds.delete(key);
-    return true;
-  }
-  if (!num(g.x, 0, 255) || !num(g.y, 0, 255)) return false;
-  golds.set(key, { from, map: g.map, x: g.x, y: g.y, name: String(g.name ?? '').slice(0, 40), id: g.id, at: now });
-  return true;
-}
-
-/** Avistamientos vigentes (los de más de GOLD_TTL_MS se borran). */
-export function freshGolds(golds: Map<string, GoldSignal>, now: number): GoldSignal[] {
-  for (const [k, g] of golds) if (now - g.at > GOLD_TTL_MS) golds.delete(k);
-  return [...golds.values()].sort((a, b) => b.at - a.at);
-}
-
-/** Pedido de ayuda entre personajes propios (equipo, ver team.ts). */
-export type TeamRequest = { from: string; kind: 'corner' | 'golden'; map: number; x: number; y: number; note: string; at: number };
-export const TEAM_REQUEST_TTL_MS = 2 * 60_000;
-
-/** Valida un pedido de ayuda de un bot; null si no es válido. */
-export function parseTeamRequest(body: unknown, now: number): TeamRequest | null {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-  const b = body as Record<string, unknown>;
-  const from = typeof b.from === 'string' ? b.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 10) : '';
-  if (!from || (b.kind !== 'corner' && b.kind !== 'golden') || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
-  return { from, kind: b.kind, map: b.map, x: b.x, y: b.y, note: String(b.note ?? '').slice(0, 80), at: now };
-}

@@ -25,8 +25,7 @@ for (let i = 0; i < argv.length; i++) {
 // Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
-  '--auto-seconds', '--reset-level', '--build', '--max-stat', '--stat-batch', '--heal-at', '--skills', '--spots',
-  '--explore-dir', '--learn-file', '--ws-port', '--decision-log', '--no-auto-hunt', '--party-mates', '--list-chars',
+  '--auto-seconds', '--reset-level', '--stat-batch', '--heal-at', '--ws-port', 
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -44,7 +43,6 @@ export const PASSWORD = args.get('--pass') ?? process.env.MUBOT_PASS ?? 'test1';
 export const CHAR_NAME = args.get('--char') ?? process.env.MUBOT_CHAR ?? 'test1Dk';
 // Personaje nuevo (lo escribe la estación en el .env): si CHAR_NAME no está en la cuenta, se crea
 // con esta clase (dk, dw, elf, mg). Sin esto, entra con el primero de la lista, como siempre.
-export const CREATE_CLASS = process.env.MUBOT_CREATE_CLASS ?? '';
 // Personaje pedido a propósito (--char o MUBOT_CHAR): si no está en la cuenta y no hay que crearlo,
 // el bot corta en vez de entrar con otro (un nombre mal escrito jugaba con el primero de la lista).
 export const CHAR_EXPLICIT = args.has('--char') || !!process.env.MUBOT_CHAR;
@@ -59,16 +57,11 @@ if (!ALLOW_REMOTE && !(LOCAL.test(proxyHost) && LOCAL.test(CS_HOST))) {
 
 // --exit-if-in-use (lo pasa la estación): ver main() en headless-bot.ts.
 export const EXIT_IF_IN_USE = args.has('--exit-if-in-use');
-// --list-chars (lo usa la estación): entra, imprime los personajes de la cuenta y sale. No elige
-// ninguno ni entra al mundo.
-export const LIST_CHARS = args.has('--list-chars');
 // 0 = sin límite: farmea, resetea y reconecta con backoff.
 export const AUTO_SECONDS = parseInt(args.get('--auto-seconds') ?? '600');
 // Panel (ws-server.ts); sin el flag no se levanta.
 export const WS_PORT_ARG = args.get('--ws-port');
 // Diario de acciones en JSONL (journal.ts).
-export const DECISION_LOG_PATH = args.get('--decision-log') ?? '';
-export const LEARN_FILE = args.get('--learn-file') ?? join(homedir(), '.mubot', 'learning.json');
 
 // ---------------------------------------------------------------------------
 // Ritmos humanos, NO flood (ver SpeedHackDetectPlugIn: AttackSpeedBaseDelay
@@ -94,24 +87,12 @@ export type StatName = 'str' | 'agi' | 'vit' | 'ene';
 // IncreaseCharacterStatPoint.StatType usa exactamente esos mismos índices.
 export const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
 
-// --explore-dir 0..7 (ver DIR_DELTA; 1 = norte): en mapas sin salida conocida
-// (FIRST_EXITS de explore.ts) es la primera dirección que se prueba.
-export const EXPLORE_PREF = args.has('--explore-dir') ? parseInt(args.get('--explore-dir')!) % 8 : null;
-
 export const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
-export const MAX_STAT = parseInt(args.get('--max-stat') ?? '10000');
 // --build str:50,ene:33,vit:17 → reparto proporcional de los puntos libres.
 // Sin peso, cada stat pesa 1. Default: el reparto que usó el usuario en su
 // tercer reset con un Dark Knight que pelea con Twisting Slash (la energía
 // sube el daño de los skills del DK).
 // Sin --build se usa planStats (farming.ts), el reparto del agente web.
-export const BUILD_ARG = args.get('--build');
-export const BUILD_WEIGHTS: Array<[StatName, number]> = (BUILD_ARG ?? 'str:50,ene:33,vit:17')
-  .split(',')
-  .map((part) => part.trim().split(':'))
-  .filter(([name]) => STAT_ORDER.includes(name as StatName))
-  .map(([name, w]) => [name as StatName, w ? Number(w) : 1]);
-export const BUILD = BUILD_ARG ? BUILD_WEIGHTS.map(([name]) => name) : (['ene', 'str', 'vit'] as StatName[]);
 // Con menos puntos que esto no vale la pena frenar a repartir (3 comandos de
 // chat = ~7.5 s sin pelear). El agente web reparte de a 200.
 export const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '200');
@@ -126,17 +107,4 @@ export const RESET_LEVEL = parseInt(args.get('--reset-level') ?? '400');
 // que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
 // 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
 const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2];
-export const ATTACK_SKILLS = (args.get('--skills') ?? '')
-  .split(',')
-  .map((s) => parseInt(s.trim(), 10))
-  .filter((n) => !Number.isNaN(n));
-export const ATTACK_SKILL_POOL = ATTACK_SKILLS.length ? ATTACK_SKILLS : DEFAULT_ATTACK_SKILLS;
-
-// --spots 2,8,21 limita a qué warps puede ir el bot (default: todos).
-export const ALLOWED_SPOTS = args.get('--spots') ? new Set(args.get('--spots')!.split(',').map(Number)) : null;
-
-// Cazador automático de invasiones (panel-logic.ts, AUTO_HUNT): prendido salvo --no-auto-hunt.
-export const AUTO_HUNT_ON = !args.has('--no-auto-hunt');
-// Party: se acepta solo de un compañero (MUBOT_MATES, que pone la estación, o --party-mates); el resto
-// se rechaza. Ver world.ts.
-export const PARTY_MATES = args.has('--party-mates') || !!process.env.MUBOT_MATES;
+export const ATTACK_SKILL_POOL = DEFAULT_ATTACK_SKILLS;

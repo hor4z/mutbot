@@ -18,21 +18,16 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
-import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
+import { CHAR_EXPLICIT, CHAR_NAME, PASSWORD, USERNAME } from './config';
 import { journal } from './journal';
-import { classFamily, isFreshChar } from './farming';
-import { farmMiddleware, statPower } from './farm-middleware';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
-import { scheduleEventPolls } from './events';
-import { isMonsterType, isTownNpcType } from './explore';
 import { drops } from './loot';
 import { EventBus } from './net/eventBus';
-import { PARTY_MATES } from './config';
 import { parsePositionFix } from './protocol097';
+import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
-import { MONSTER_TYPE_NUMBERS, bot, expTracker, learned, world, type SkillInfo, isMate } from './state';
+import { MONSTER_TYPE_NUMBERS, bot, world, type SkillInfo, isMate } from './state';
 import { log, toBytes } from './util';
 import { trackEvent } from './telemetry';
 
@@ -183,23 +178,14 @@ function parseCharacters095(raw: any): Array<{ id: number; x: number; y: number;
   return out;
 }
 
-// Llegada a un mapa (entrada al mundo o MapChanged): punto de llegada (correa de Devias) y primer
-// campamento (camp.ts).
+// NPC amistosos del pueblo (vendedores, guardias): tipos 200-299; los monstruos propios del server, desde 300.
+const isTownNpcType = (type: number) => type >= 200 && type <= 299;
+const isMonsterType = (type: number, known: ReadonlySet<number>) => !isTownNpcType(type) && (known.has(type) || type >= 300);
+
+// Llegada a un mapa (entrada al mundo o MapChanged).
 export function onMapArrival() {
   bot.lastArrivalAt = Date.now();
-  const f = { family: classFamily(world.classId) ?? 'knight' as const, stats: world.stats, maxHp: world.maxHp };
-  const prof = farmMiddleware.profile(f, world.level, world.skills.has(41), bot.lastArrivalAt);
-  const localOnly = world.map >= 83 && world.map <= 85 && !prof.corner;
-  learned.camps.setPower(statPower(f), prof.spot != null);
-  // Telemetría de Hume: en Arena 4 el corredor (84,48) rindió bien y las
-  // muertes de personajes frágiles se concentraron cerca de (85,14–22).
-  // El campamento aprendido del propio personaje siempre tiene prioridad.
-  const preferred = world.map === 85 && world.maxHp > 0 && world.maxHp < 5_000 && !localOnly
-    ? { x: 84, y: 48 } : undefined;
-  learned.camps.onArrival(world.map, world.x, world.y, bot.lastArrivalAt, world.level, localOnly, preferred);
-  const lz = learned.camps.leashFor(world.map);
-  log(`Llegada en (${world.x},${world.y}) map=${world.map}${lz ? `, correa de ${lz.r} tiles` : ''}.`);
-  for (const e of learned.camps.events) log(`Campamento: ${e}.`);
+  log(`Llegada en (${world.x},${world.y}) map=${world.map}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +193,8 @@ export function onMapArrival() {
 // Es lo que permite que el bot decida solo (pocarse, subir stats, etc.).
 // Se engancha una sola vez: los handlers del EventBus sobreviven a la reconexión.
 // ---------------------------------------------------------------------------
+// Vida de 16 bits que se da vuelta (health.ts): world.hp/maxHp quedan con la vida real estimada.
+const hpTracker = new HpTracker();
 export function trackWorld() {
   EventBus.on('CharacterLevelUpdate', (raw: any) => {
     const p = new CharacterLevelUpdatePacket(raw);
@@ -218,7 +206,8 @@ export function trackWorld() {
 
   EventBus.on('CurrentHealthAndShield', (raw: any) => {
     const p = new CurrentHealthAndShieldPacket(raw);
-    world.hp = p.Health;
+    world.hp = hpTracker.feed(p.Health, world.maxHp);
+    world.maxHp = hpTracker.maxFor(world.maxHp);
   });
 
   EventBus.on('CurrentManaAndAbility', (raw: any) => {
@@ -293,7 +282,6 @@ export function trackWorld() {
     if (npc) {
       npc.x = p.TargetX;
       npc.y = p.TargetY;
-      expTracker.see(id, { type: npc.type, x: npc.x, y: npc.y, map: world.map });
     }
     const pl = world.players.get(id);
     if (pl) {
@@ -389,7 +377,6 @@ export function trackWorld() {
       npcs.set(id, { id, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
       // El tipo de cada id visto: cuando llega ExperienceGained el monstruo ya
       // salió del scope (ver farming.ts, ExpSplitTracker).
-      expTracker.see(id, { type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY, map: world.map });
       if (isNew) log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
     }
   };
@@ -458,17 +445,19 @@ export function trackWorld() {
   EventBus.on('PartyRequest', (raw: any) => {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
-    const from = world.players.get(id)?.name;
+    let from = world.players.get(id)?.name;
     // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
     // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
-    const mate = (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
+      // El nombre puede llegar después del pedido (el que invita recién apareció en mi lista): se mira recién al responder.
+      from = world.players.get(id)?.name ?? from;
+      const mate = from != null && isMate(from);
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
       log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
-  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, () => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
+  for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, (raw: any) => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
   EventBus.on('RemovePartyMember', () => { if (bot.inParty) trackEvent('party', 'leave'); bot.inParty = false; });
 }
 
@@ -483,16 +472,6 @@ export function watchMoney() {
 // ---------------------------------------------------------------------------
 // Entrada al mundo: login -> lista de personajes -> elegir -> CharacterInformation.
 // ---------------------------------------------------------------------------
-/** Personajes de la cuenta, sin elegir ninguno (--list-chars). */
-export async function listCharacters() {
-  login(USERNAME, PASSWORD);
-  const loginResp = new LoginResponsePacket(await waitFor('LoginResponse'));
-  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
-  const listWaiter = waitFor('CharacterList');
-  requestCharacterList();
-  return parseCharacterList097(await listWaiter).map((c) => ({ name: c.Name, level: c.Level }));
-}
-
 export async function loginAndSelectCharacter() {
   login(USERNAME, PASSWORD);
   const loginBytes = await waitFor('LoginResponse');
@@ -505,30 +484,8 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
-/** El personaje pedido no está en la cuenta, o el server no dejó crearlo (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
-export class CreateCharacterError extends Error {}
-
-/**
- * Crea el personaje en la cuenta: `C1 0F F3 01 <nombre 10 bytes> <clase << 2>`, igual que el
- * cliente web (el adaptador del 0.97d no lo reescribe). Contesta F3/01 con el resultado en el
- * byte 4 (1 = creado); éxito y error comparten código, así que llegan los dos como
- * `CharacterCreationSuccessful` (el primero de la tabla). Máximo 5 personajes por cuenta.
- */
-async function createCharacter(name: string, cls: CharClassKey, count: number) {
-  if (count >= 5) throw new CreateCharacterError(`La cuenta ya tiene 5 personajes: no puedo crear a ${name}.`);
-  const p = new Uint8Array(15);
-  p.set([0xc1, 15, 0xf3, 0x01]);
-  for (let i = 0; i < name.length; i++) p[4 + i] = name.charCodeAt(i);
-  p[14] = CHAR_CLASSES[cls].id << 2;
-  log(`${name} no está en la cuenta: lo creo (${CHAR_CLASSES[cls].label}).`);
-  const reply = waitFor(['CharacterCreationSuccessful', 'CharacterCreationFailed']);
-  sendToGS(new DataView(p.buffer));
-  const bytes = toBytes(await reply);
-  if (bytes[4] !== 1) throw new CreateCharacterError(`El server no dejó crear a ${name} (respuesta ${bytes[4]}): nombre tomado o clase bloqueada.`);
-  log(`Personaje ${name} creado.`);
-  journal('decide', `Personaje nuevo: ${name} (${CHAR_CLASSES[cls].label})`);
-  return { SlotIndex: bytes[15] ?? count, Name: name, Level: 1, ClassId: CHAR_CLASSES[cls].id };
-}
+/** El personaje pedido no está en la cuenta. No se reintenta. */
+export class CharNotFoundError extends Error {}
 
 export async function selectCharacter(charListBytes: any) {
   const characters = parseCharacterList097(charListBytes);
@@ -537,9 +494,8 @@ export async function selectCharacter(charListBytes: any) {
   );
 
   let target = characters.find((c: any) => c.Name === CHAR_NAME);
-  if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
   if (!target && CHAR_EXPLICIT && characters.length) {
-    throw new CreateCharacterError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}) y no tengo clase para crearlo.`);
+    throw new CharNotFoundError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}).`);
   }
   target ??= characters[0];
   if (!target) throw new Error('La cuenta no tiene personajes');
@@ -550,6 +506,7 @@ export async function selectCharacter(charListBytes: any) {
 
   const infoBytes = await waitFor('CharacterInformation');
   const info = parseCharacterInformation097(infoBytes);
+  hpTracker.reset();
   Object.assign(world, {
     x: info.x,
     y: info.y,
@@ -573,7 +530,6 @@ export async function selectCharacter(charListBytes: any) {
   bot.inGameAt = Date.now();
   bot.charName = target.Name;
   // El panel pregunta las aperturas de eventos (0x91) apenas entra al mundo.
-  scheduleEventPolls(bot.inGameAt);
   onMapArrival();
   return { name: target.Name, startX: info.x, startY: info.y, startExp: info.exp };
 }

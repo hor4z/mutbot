@@ -1,0 +1,70 @@
+.simple { display: grid; grid-template-columns: 340px 1fr; height: 100vh; background: var(--bg, #0e0d12); color: var(--text, #e8e6ee); }
+.simple-list { overflow: auto; padding: 16px; border-right: 1px solid rgba(255,255,255,.08); display: flex; flex-direction: column; gap: 8px; }
+.simple-list h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
+.simple-list h2 { font-size: 13px; margin: 16px 0 4px; opacity: .7; font-weight: 600; }
+.simple-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.08); }
+.simple-info { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 2px 8px; min-width: 0; }
+.simple-info small { grid-column: 1 / -1; opacity: .7; font-size: 12px; }
+.simple-doing { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.simple-dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+.simple-dot.on { background: #4cd18a; }
+.simple-dot.wait { background: #e6b450; }
+.simple-row button { border: 0; border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; font-size: 13px; }
+.simple-row button.go { background: #4cd18a; color: #08130d; }
+.simple-row button.stop { background: #3a3745; color: #e8e6ee; }
+.simple-row button:disabled { opacity: .5; cursor: default; }
+.simple-msgs { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.simple-msg { padding: 4px 2px; font-size: 12.5px; line-height: 1.35; }
+.simple-msg time { opacity: .5; font-variant-numeric: tabular-nums; margin-right: 4px; }
+.simple-maps { min-width: 0; display: grid; gap: 1px; background: rgba(255,255,255,.08); }
+.simple-maps.n0, .simple-maps.n1 { grid-template-columns: 1fr; }
+.simple-maps.n2 { grid-template-columns: 1fr 1fr; }
+.simple-maps.n3, .simple-maps.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.simple-map { position: relative; min-height: 0; background: var(--bg, #0e0d12); }
+.simple-map header { position: absolute; bottom: 10px; right: 10px; z-index: 2; pointer-events: none; font-weight: 600; font-size: 13px; background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 6px; }
+.simple-map iframe { width: 100%; height: 100%; border: 0; }
+.simple-empty { padding: 32px; opacity: .6; background: var(--bg, #0e0d12); }
+.simple-err { background: rgba(255,90,90,.15); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.maponly { height: 100vh; }
+.maponly .radar { height: 100%; }
+@media (max-width: 800px) { .simple { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+
+.simple-btns { display: flex; flex-direction: column; gap: 6px; }
+.simple-row button.pause { background: transparent; color: inherit; border: 1px solid rgba(255,255,255,.2); }
+.simple-hp { grid-column: 1 / -1; height: 5px; border-radius: 3px; background: rgba(255,255,255,.1); overflow: hidden; margin-top: 4px; }
+.simple-hp i { display: block; height: 100%; background: #4cd18a; }
+.simple-inv { font-size: 12.5px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.05); margin-bottom: 4px; }
+.simple-inv.on { background: rgba(230,180,80,.18); border: 1px solid rgba(230,180,80,.5); }
+
+/* Tarjeta en columna: nada se corta y los botones van abajo, uno al lado del otro. */
+.simple-row { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 6px; }
+.simple-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.simple-head small { opacity: .75; font-size: 12.5px; }
+.simple-row > small { opacity: .7; font-size: 12px; }
+.simple-doing { opacity: .7; font-size: 12px; white-space: normal; overflow: visible; text-overflow: clip; }
+.simple-hp { margin-top: 2px; }
+.simple-btns { flex-direction: row; gap: 8px; margin-top: 2px; }
+.simple-btns button { flex: 1; }
+/* El mapa ocupa todo el alto de su marco. */
+.maponly .hud-map { height: 100vh; display: flex; flex-direction: column; border: 0; border-radius: 0; }
+.maponly .hud-stage { flex: 1 1 auto; height: auto; min-height: 0; }
+
+/* El tono del mensaje se marca con el color de la hora, sin borde. */
+.simple-msg.good time { color: #4cd18a; opacity: 1; }
+.simple-msg.warn time { color: #e6b450; opacity: 1; }
+.simple-msg.bad time { color: #ff6b6b; opacity: 1; }
+
+.simple-shadow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; opacity: .85; cursor: pointer; }
+
+.simple-add { border: 1px dashed rgba(255,255,255,.25); background: transparent; color: inherit; border-radius: 10px; padding: 9px 12px; font-size: 13px; cursor: pointer; }
+.simple-add:hover { background: rgba(255,255,255,.05); }
+.simple-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0,0,0,.6); padding: 16px; }
+.simple-modal-box { width: min(380px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 12px; background: #1a1922; border: 1px solid rgba(255,255,255,.12); }
+.simple-modal-box h2 { margin: 0; font-size: 15px; opacity: 1; }
+.simple-modal-box small { opacity: .65; font-size: 12px; line-height: 1.35; }
+.simple-modal-box label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; opacity: .9; }
+.simple-modal-box input { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: inherit; font: inherit; }
+.simple-ok { background: rgba(76,209,138,.15); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.simple-modal-box label.simple-check { flex-direction: row; align-items: center; gap: 8px; }
+.simple-modal-box label.simple-check input { width: auto; }
+.simple-wait { color: #e6b450; white-space: normal; }

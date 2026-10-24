@@ -9,24 +9,11 @@
  * contesta con `command-result`.
  */
 
+
 /** Qué está haciendo el bot, en una palabra (para el panel y el log). */
 export type BotMode = 'farm' | 'hunt' | 'paused' | 'resetting' | 'connecting' | 'dead';
 
 export type MapName = string; // "Lorencia", "Devias", "Arena 4", ... (o "mapa N")
-
-export type EventKey = 'devilSquare' | 'bloodCastle' | 'chaosCastle';
-
-/** Respuesta a la pregunta 0x91 (MiniGameOpeningState). */
-export type EventTimer = {
-  key: EventKey;
-  /** minutos para que abra la entrada; 0 = abierta; null = más de 4 h / desconocido */
-  minutes: number | null;
-  /** hora absoluta estimada de apertura (ms epoch), o null */
-  opensAt: number | null;
-  users: number;
-  /** cuándo se recibió la respuesta (ms epoch) */
-  at: number;
-};
 
 /** Paquete propio 0xFD (InvasionMonsters). */
 export type Invasion = {
@@ -36,15 +23,6 @@ export type Invasion = {
   at: number;
   /** próxima invasión según el calendario fijo (todas las horas a los :50, 15 min) */
   nextAt: number;
-};
-
-export type CycleRecord = {
-  start: number;
-  /** duración en minutos (null mientras corre) */
-  min: number | null;
-  /** minuto del ciclo en que llegó a cada nivel hito (20, 50, 100, 200, 300, 350, 400) */
-  marks: Record<string, number>;
-  tag?: string | null;
 };
 
 export type PanelState = {
@@ -60,22 +38,10 @@ export type PanelState = {
     stats: { str: number; agi: number; vit: number; ene: number; cmd?: number };
     points: number; zen: number | null;
   };
-  /** pinned: spot fijo elegido desde el panel (la ruta no lo cambia hasta "farm") */
-  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null; pinned?: boolean };
+  where: { map: number; mapName: MapName; x: number; y: number; spot?: string | null };
   exp: { perMin1: number; perMin5: number };
-  cycle: CycleRecord | null;
-  cycles: CycleRecord[];
-  /** resets/día proyectados con el promedio de los últimos ciclos sin tag */
-  resetsPerDay: number | null;
-  events: EventTimer[];
   invasion: Invasion | null;
-  /** tickets de eventos en el inventario, ej. { "Devil's Invitation +4": 1 } */
-  tickets: Record<string, number>;
   nearby: { monsters: number; players: number };
-  /** slots de equipo 0-11 ocupados (del inventario que trackea el bot) */
-  equipment?: EquippedItem[];
-  /** inventario (slots 12-75) */
-  inventory?: EquippedItem[];
   /** últimas ~60 posiciones (una cada 2 s), solo del mapa actual */
   trail?: [number, number][];
   /** campamento / punto al que va el bot ahora, si tiene uno */
@@ -90,11 +56,19 @@ export type PanelState = {
   /** zonas donde se vieron dragones en este mapa (de la base, v_dragon_zones): n = avistamientos */
   zones?: { x: number; y: number; n: number }[];
   /** desde que arrancó el bot: kills, muertes, skills tirados, exp ganada, loot, skill de ataque actual */
+  /** últimas decisiones del bot (dorado visto, cacería, aviso al equipo, trabas...), las más nuevas al final */
+  notes?: { at: number; text: string }[];
   session?: { since: number; level0: number; kills: number; deaths: number; casts: number; exp: number; loot: number; skill: string };
+  /**
+   * Opcionales (los llena quien los tenga; un bot viejo no los manda y la vista usa defaults):
+   * celdas letales / zonas de muertes del mapa actual (n = muertes vistas) …
+   */
+  hazards?: { x: number; y: number; n: number }[];
+  /** … miembros de escuadra / scouts en cualquier mapa … */
+  squad?: { name: string; map: number; x: number; y: number; role?: string }[];
+  /** … y skills con su espera (readyAt = ms epoch en que vuelve a estar listo; ausente = listo). */
+  skills?: { name: string; readyAt?: number; current?: boolean }[];
 };
-
-/** Ítem del personaje. `slot`: 0-11 equipo, 12-75 inventario (grilla de 8×8 desde el 12). `w`×`h`: casillas que ocupa. */
-export type EquippedItem = { slot: number; group: number; num: number; level: number; excellent: boolean; name?: string; w?: number; h?: number };
 
 /** Órdenes que acepta el bot. Cualquier otra se rechaza. */
 export type PanelCommand =
@@ -102,34 +76,19 @@ export type PanelCommand =
   | { cmd: 'resume' }
   | { cmd: 'farm' }
   /** cazar dorados; sin map = el mapa con más vivos al alcance según 0xFD */
-  | { cmd: 'hunt'; map?: number }
-  /**
-   * chat del personaje: `to` = susurro a ese personaje; si no, `channel` normal (default), party o
-   * guild. Texto de 1 a 60 caracteres imprimibles; los comandos ("/...") no se aceptan.
-   */
-  | { cmd: 'say'; text: string; to?: string; channel?: 'normal' | 'party' | 'guild' }
-  /** ir a un spot de la ruta (índice de warp: 2 Lorencia, 6 Devias 3, 26 Arena 4, ...) */
-  | { cmd: 'warp'; warp: number }
-  /** leer el baúl (Baz, Lorencia) con el equipo y la bolsa: solo lee, no mueve nada */
-  | { cmd: 'vault' };
+  | { cmd: 'hunt'; map?: number };
 
-export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt', 'warp', 'say', 'vault'] as const;
+export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt'] as const;
 
 /** Mensajes bot → panel por el WebSocket. */
 export type PanelServerMessage =
   | { type: 'hello'; botVersion: string; commands: readonly string[] }
   | { type: 'panel-state'; state: PanelState }
-  | { type: 'log'; at: number; text: string }
-  | { type: 'command-result'; id: number; ok: boolean; msg: string }
-  /** una línea de chat (recibida o mandada por el bot) o un aviso del server */
-  | { type: 'chat'; at: number; kind: 'normal' | 'party' | 'guild' | 'whisper' | 'server'; from: string; text: string; mine?: boolean };
-
-/** Mensaje panel → bot. */
-export type PanelClientMessage = { type: 'command'; id: number; command: PanelCommand };
+  | { type: 'command-result'; id: number; ok: boolean; msg: string };
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {
-  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'], warp: ['cmd', 'warp'], say: ['cmd', 'text', 'to', 'channel'], vault: ['cmd'],
+  pause: ['cmd'], resume: ['cmd'], farm: ['cmd'], hunt: ['cmd', 'map'],
 };
 
 export function isPanelCommand(v: unknown): v is PanelCommand {
@@ -138,15 +97,7 @@ export function isPanelCommand(v: unknown): v is PanelCommand {
   if (typeof c.cmd !== 'string' || !PANEL_COMMANDS.includes(c.cmd as never)) return false;
   const allowed = COMMAND_KEYS[c.cmd as (typeof PANEL_COMMANDS)[number]];
   if (Object.keys(c).some((k) => !allowed.includes(k))) return false;
-  if (c.cmd === 'say') {
-    // Imprimible latin1 (sin controles), 1-60, sin comandos del server.
-    if (typeof c.text !== 'string' || !/^[\x20-\x7e\xa0-\xff]{1,60}$/.test(c.text) || c.text.trimStart().startsWith('/')) return false;
-    if (c.to !== undefined && (typeof c.to !== 'string' || !/^[A-Za-z0-9_]{1,10}$/.test(c.to))) return false;
-    if (c.channel !== undefined && !['normal', 'party', 'guild'].includes(c.channel as string)) return false;
-    return !(c.to !== undefined && c.channel !== undefined && c.channel !== 'normal');
-  }
-  if (c.cmd === 'warp') return Number.isInteger(c.warp) && (c.warp as number) >= 0 && (c.warp as number) < 256;
-  const isMap = (m: unknown) => m === undefined || (Number.isInteger(m) && (m as number) >= 0 && (m as number) < 256);
-  if (c.cmd === 'hunt') return isMap(c.map);
+  const inRange = (m: unknown) => Number.isInteger(m) && (m as number) >= 0 && (m as number) < 256;
+  if (c.cmd === 'hunt') return c.map === undefined || inRange(c.map);
   return true;
 }

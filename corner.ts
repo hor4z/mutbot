@@ -1,62 +1,32 @@
 /**
- * La esquina de Arena 2 (port de `browser/corner.js`, lo que hacía rápido al agente del navegador).
- *
- * Los primeros del ranking farmean en la esquina (5,11) de Arena 2, donde se juntan 12-18 Gaint Drakan
- * (nivel 100, 50.000 de vida). Horaz ahí, en el navegador: ~574M exp/min y 38 niveles/min en nivel 300,
- * contra ~50M en las Arenas 3/4 de la ruta normal. Desde el nivel 100 (el warp a Arena 2 lo pide) el bot
- * va a la esquina y se queda hasta el reset; si está llena de gente y rinde poco, se va 5 min a la Arena
- * de su nivel y vuelve a mirar.
- *
- * Lógica PURA (posiciones y reloj por parámetro): se testea en `corner-tests.ts`.
+ * La esquina de Arena 2: el mejor spot conocido. Ahí se juntan 12-18 Gaint Drakan (nivel 100, 50.000 de vida) y un
+ * personaje fuerte rinde unos 550M exp/min (38 niveles/min en nivel 300) contra ~50M en las Arenas 3/4 y ~15M en Devias.
+ * Versión mínima: desde el nivel 100 hasta el reset el bot viaja a Arena 2, camina el camino hasta la esquina y pelea lo
+ * que entra en el radio de `home`. Sin medir lados, sin mirar a otros jugadores. Lo llama farm-loop.ts (`cornerOn`).
+ * Solo lo usa un personaje que `farmMiddleware` deja farmear ahí (`profile.corner`: stats a la altura).
  */
-
-export type Pos = { x: number; y: number };
+import type { Pos } from './util';
+import { dist } from './util';
 
 export const CORNER = {
   map: 83,          // Arena 2
   warp: 24,
   minLevel: 100,    // "You need to be level 100 in order to warp"
   home: { x: 7, y: 11 } as Pos,
-  // Donde espera cuando no hay nada en el giro: la esquina misma (el agente arrancaba ahí).
+  // Donde espera cuando no hay nada a la vista: la esquina misma.
   wait: { x: 2, y: 10 } as Pos,
-  radius: 7,        // se pelea dentro de esto (+ FILL) alrededor de home
+  radius: 7,        // se pelea dentro de esto (+ fill) alrededor de home
   fill: 2,
-  // Camino de LeanLive desde la llegada (61,114): norte por x≈56-61 y oeste por y≈10. Directo, cortaba
-  // por el medio de los Elite Skeleton y zigzagueaba.
+  // Camino desde la llegada (61,114): norte por x≈56-61 y oeste por y≈10 (directo cortaba por los Elite Skeleton).
   route: [[61, 98], [58, 72], [56, 45], [52, 28], [40, 21], [30, 11], [16, 10], [7, 11]] as const,
-  // Esquina llena: 3+ jugadores a <= 15 de home, 60 s adentro y el último minuto rindiendo menos del 80 %
-  // de lo que da la Arena de su nivel (al menos 60M/min): 5 min afuera.
-  fullRivals: 3,
-  fullRivalDist: 15,
-  fullAfterMs: 60_000,
-  altMinRate: 60e6,
-  altFrac: 0.8,
-  awayMs: 5 * 60_000,
-  // Esquina que no rinde aunque no haya gente (usuario: "cuando la esquina no rendía cambiaba"): más de
-  // esto adentro y el último minuto debajo de altFrac de la Arena de afuera → también se va.
-  poorAfterMs: 90_000,
-  // Cerca del reset no vale la pena volver (el camino a la esquina lleva ~1 min).
-  noReturnLevel: 360,
-  // Con 2+ jugadores a <= 6, no caminar hacia los monstruos (cuando llega ya los mataron): pegar solo
-  // lo que entra en el giro.
-  crowdDist: 6,
-  crowdPlayers: 2,
-  // Buff propio en la esquina (Swell Life 48 del DK, Mana Shield 16 del mago) cada tanto.
-  buffMs: 55_000,
 } as const;
-
-/** Alcance del giro del skill de área (tiles). Twisting Slash 2,5; Evil Spirit 5. */
-const SPIN: Record<number, number> = { 9: 5, 14: 3, 38: 3.5, 41: 2.5, 42: 3 };
-export const spinRange = (skill: number | null | undefined) => (skill != null ? SPIN[skill] : undefined) ?? 2.5;
-
-export const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /** ¿Está en la esquina (no viajando)? */
 export const inCorner = (p: Pos) => dist(p, CORNER.home) <= CORNER.radius + 3;
 
 /**
- * Próximo punto del camino a la esquina. `idx` = el que venía siguiendo (null tras aparecer: warp o
- * muerte → el más cercano). Solo avanza: antes, "el más cercano" oscilaba entre los dos primeros.
+ * Próximo punto del camino a la esquina. `idx` = el que venía siguiendo (null tras aparecer: warp o muerte → el más
+ * cercano). Solo avanza: "el más cercano" oscilaba entre los dos primeros.
  */
 export function nextRoutePoint(p: Pos, idx: number | null): { idx: number; x: number; y: number } {
   const R = CORNER.route;
@@ -73,191 +43,3 @@ export function nextRoutePoint(p: Pos, idx: number | null): { idx: number; x: nu
   return { idx: k, x: R[k][0], y: R[k][1] };
 }
 
-/** Cuántos monstruos quedan dentro del giro centrado en `m`. */
-const cluster = <M extends Pos>(m: M, all: readonly M[], r: number) => all.filter((o) => dist(o, m) <= r).length;
-
-/**
- * A quién tirarle el skill ahora: el monstruo a tiro (`reach`; por defecto la distancia de giro r + 0,5)
- * que deja más monstruos adentro. null = nada a tiro.
- */
-export function spinTarget<M extends Pos>(me: Pos, monsters: readonly M[], r: number, reach = r + 0.5): M | null {
-  let best: M | null = null;
-  let bn = 0;
-  for (const m of monsters) {
-    if (dist(m, me) > reach) continue;
-    const n = cluster(m, monsters, r);
-    if (n > bn) { bn = n; best = m; }
-  }
-  return best;
-}
-
-/**
- * Hacia qué monstruo caminar estando en la esquina (sin nada a tiro). Viajando: solo lo que bloquea
- * el paso (<= 1,5). Con competencia encima: nada (se queda y pega lo que entra). Si no, el que deja
- * más monstruos en el giro, cerca, dentro de radius + fill de home.
- */
-export function cornerTarget<M extends Pos>(me: Pos, monsters: readonly M[], playersNear: number, r: number): M | null {
-  if (!inCorner(me)) return monsters.find((m) => dist(m, me) <= 1.5) ?? null;
-  if (playersNear >= CORNER.crowdPlayers) return null;
-  const pool = monsters.filter((m) => dist(m, CORNER.home) <= CORNER.radius + CORNER.fill);
-  let best: M | null = null;
-  let bs = -Infinity;
-  for (const m of pool) {
-    const s = cluster(m, pool, r) * 3 - dist(me, m) * 0.4;
-    if (s > bs) { bs = s; best = m; }
-  }
-  return best;
-}
-
-/**
- * Mago solo: el punto (un monstruo o home) que deja más monstruos a <= r de la esquina (Evil Spirit
- * pega alrededor). Usuario: "si está solo, a un mago le conviene centrarse y explotar la mayor cantidad
- * de enemigos". Empate: el más cerca de home. Devuelve el punto y cuántos agarra.
- */
-export function mageCenter<M extends Pos>(monsters: readonly M[], r: number): { at: Pos; n: number } {
-  const pool = monsters.filter((m) => dist(m, CORNER.home) <= CORNER.radius + CORNER.fill);
-  let best = { at: { x: CORNER.home.x, y: CORNER.home.y } as Pos, n: cluster(CORNER.home as M, pool, r) };
-  for (const m of pool) {
-    const n = cluster(m, pool, r);
-    if (n > best.n || (n === best.n && dist(m, CORNER.home) < dist(best.at, CORNER.home))) best = { at: { x: m.x, y: m.y }, n };
-  }
-  return best;
-}
-
-/**
- * Disputarle el grupo a un rival (mago con un top cerca): el monstruo a tiro que deja más monstruos en
- * el giro, tirando hacia el rival (cluster × 3 − distancia al rival). Le saca kills sin pegarle a él.
- */
-export function contestTarget<M extends Pos>(me: Pos, monsters: readonly M[], rival: Pos, r: number, reach: number): M | null {
-  let best: M | null = null;
-  let bs = -Infinity;
-  for (const m of monsters) {
-    if (dist(m, me) > reach) continue;
-    const n = cluster(m, monsters, r);
-    if (n === 0) continue;
-    const s = n * 3 - dist(m, rival);
-    if (s > bs) { bs = s; best = m; }
-  }
-  return best;
-}
-
-/** La Arena "de afuera" según el nivel: 24 (Arena 2, otro spot), 25 (Arena 3) o 26 (Arena 4). */
-export const altWarp = (level: number) => (level >= 300 ? 26 : level >= 200 ? 25 : 24);
-
-/** ¿La esquina está llena y conviene irse un rato? */
-export function cornerFull(inp: { rivals: number; inCornerSince: number | null; now: number; rate1m: number; altRate?: number; level?: number; mateHere?: boolean }): boolean {
-  if (inp.inCornerSince == null) return false;
-  // Con un compañero en la esquina se sostiene el sector entre los dos: no se va.
-  if (inp.mateHere) return false;
-  // Debajo del 200 "la Arena de su nivel" es Arena 2 misma: irse es farmear peor en el mismo mapa
-  // (Melu en nivel 124 se iba a los 60 s). Ahí se queda y compite.
-  if (inp.level != null && altWarp(inp.level) === CORNER.warp) return false;
-  const inside = inp.now - inp.inCornerSince;
-  const alt = Math.max(inp.altRate ?? 0, CORNER.altMinRate);
-  const poor = inp.rate1m < alt * CORNER.altFrac;
-  // Llena (3+ jugadores, 60 s) y rindiendo poco, o rindiendo poco 90 s aunque no haya nadie.
-  return poor && ((inp.rivals >= CORNER.fullRivals && inside > CORNER.fullAfterMs) || inside > CORNER.poorAfterMs);
-}
-
-/** ¿Va (o vuelve) a la esquina? Afuera por estar llena hasta `awayUntil`; cerca del reset no vuelve. */
-export function cornerActive(inp: { level: number; resetLevel: number; awayUntil: number; now: number }): boolean {
-  return inp.level >= CORNER.minLevel && inp.level < inp.resetLevel && inp.now >= inp.awayUntil;
-}
-
-// ---------------------------------------------------------------------------
-// Lados de la esquina (corner.js): esquina (2,10), medio (7,11) o este (12,11). Usuario: "si
-// conviene, foco en la esquina; si no, en el spot del medio; adaptate". Se queda >= 40 s en cada uno
-// y después elige el de mayor exp/min medida (promedio móvil 0,6/0,4 en ventanas de >= 15 s, solo
-// mientras está a <= 4 del lado). Uno sin medir cuenta como el mejor × 1,2 (supera el 15 %: se prueba). Cada
-// jugador a <= 4 del lado divide por (1 + 0,25): un rival encima pesa poco, se compite. Cambia solo
-// si el otro rinde > 15 % más.
-// ---------------------------------------------------------------------------
-export type Side = { name: string } & Pos;
-export const SIDES: readonly Side[] = [{ name: 'esquina', x: 2, y: 10 }, { name: 'medio', x: 7, y: 11 }, { name: 'este', x: 12, y: 11 }];
-export const SIDE = { dwellMs: 40_000, near: 4, windowMs: 15_000, emaOld: 0.6, untried: 1.2, rivalPenalty: 0.25, switchAt: 1.15 } as const;
-
-export class CornerSides {
-  side: Side = SIDES[0];
-  private since = -Infinity;
-  readonly stats = new Map<string, { exp: number; ms: number; rate: number; windows: number }>();
-  private statAt: number | null = null;
-
-  /**
-   * El lado donde esperar ahora (puede cambiar si pasaron SIDE.dwellMs). `players` = rivales (sin los
-   * compañeros). Con un compañero en la esquina (usuario: "si Horaz detecta que está Melu en un spot,
-   * que ataque el otro"): los lados que él ocupa no se eligen y se cambia ya, sin esperar; el DK
-   * (`preferCorner`) se planta en la esquina (2,10) si está libre. El mago con un compañero a la vista
-   * (`yieldCorner`) le deja la esquina: no la elige y, si está ahí, se corre ya (Melu se quedaba con la
-   * esquina mientras Horaz reseteaba y Horaz volvía al lado este) y va al medio si está libre.
-   */
-  pick(now: number, players: readonly Pos[], mates: readonly Pos[] = [], preferCorner = false, yieldCorner = false): Side {
-    const taken = (s: Side) => (yieldCorner && s === SIDES[0]) || mates.some((m) => dist(m, s) <= SIDE.near);
-    // El mago va al segundo spot (medio, 7,11) si está libre: ahí, con Decay, le gana el sector a los rivales.
-    if (yieldCorner && !taken(SIDES[1])) return this.choose(SIDES[1], now);
-    if (yieldCorner && this.side === SIDES[0]) return this.choose(this.bestOf(SIDES.filter((s) => !taken(s)), players), now);
-    const free = SIDES.filter((s) => !taken(s));
-    if (mates.some((m) => inCorner(m)) && free.length) {
-      if (preferCorner && free.includes(SIDES[0])) return this.choose(SIDES[0], now);
-      if (taken(this.side)) return this.choose(this.bestOf(free, players), now);
-      if (now - this.since < SIDE.dwellMs) return this.side;
-      return this.choose(this.bestOf(free, players, this.side), now);
-    }
-    if (now - this.since < SIDE.dwellMs) return this.side;
-    this.since = now;
-    const known = [...this.stats.values()].map((s) => s.rate).filter((r) => r > 0);
-    const best = known.length ? Math.max(...known) : 1;
-    const score = (s: Side) => {
-      const st = this.stats.get(s.name);
-      // Medido (aunque haya dado 0): su exp/min; sin medir, optimista para probarlo.
-      const r = st?.windows ? st.rate : best * SIDE.untried;
-      return r / (1 + SIDE.rivalPenalty * players.filter((p) => dist(p, s) <= SIDE.near).length);
-    };
-    let pick = this.side;
-    for (const s of SIDES) if (!taken(s) && score(s) > score(pick) * SIDE.switchAt) pick = s;
-    this.side = pick;
-    return pick;
-  }
-
-  private choose(s: Side, now: number): Side {
-    if (s !== this.side) this.since = now;
-    this.side = s;
-    return s;
-  }
-
-  /** El mejor de `options` por exp/min medida (con castigo por rivales); `keep` gana si no lo supera por SIDE.switchAt. */
-  private bestOf(options: readonly Side[], players: readonly Pos[], keep?: Side): Side {
-    const known = [...this.stats.values()].map((s) => s.rate).filter((r) => r > 0);
-    const best = known.length ? Math.max(...known) : 1;
-    const score = (s: Side) => {
-      const st = this.stats.get(s.name);
-      const r = st?.windows ? st.rate : best * SIDE.untried;
-      return r / (1 + SIDE.rivalPenalty * players.filter((p) => dist(p, s) <= SIDE.near).length);
-    };
-    let pick = keep && options.includes(keep) ? keep : options[0];
-    for (const s of options) if (score(s) > score(pick) * (pick === keep ? SIDE.switchAt : 1)) pick = s;
-    return pick;
-  }
-
-  /** Al (re)entrar a la esquina: el reloj de medición arranca de nuevo (lo de afuera no cuenta). */
-  restartClock() {
-    this.statAt = null;
-  }
-
-  /** Anota la exp ganada desde la última llamada al lado actual, si está a <= SIDE.near de él. */
-  record(now: number, me: Pos, exp: number) {
-    const dt = this.statAt == null ? 0 : now - this.statAt;
-    this.statAt = now;
-    if (dt <= 0 || dist(me, this.side) > SIDE.near) return;
-    const st = this.stats.get(this.side.name) ?? { exp: 0, ms: 0, rate: 0, windows: 0 };
-    st.exp += exp;
-    st.ms += dt;
-    if (st.ms >= SIDE.windowMs) {
-      const r = (st.exp / st.ms) * 60_000;
-      st.rate = st.windows ? st.rate * SIDE.emaOld + r * (1 - SIDE.emaOld) : r;
-      st.windows++;
-      st.exp = 0;
-      st.ms = 0;
-    }
-    this.stats.set(this.side.name, st);
-  }
-}

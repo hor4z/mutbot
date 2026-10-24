@@ -7,7 +7,7 @@ import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { step, sendPickup } from './actions';
 import { itemInfo } from './panel-logic';
-import { pickLoot } from './farming';
+import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
@@ -15,7 +15,9 @@ import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
-type ScopedDrop = { id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean };
+type ScopedDrop = { seenAt?: number; id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean; level?: number };
+/** Juez opcional del equipo que cae (item-score.ts `makeDropJudge`). Vacío por defecto: nada cambia hasta que alguien lo conecte. */
+export const lootPolicy: { judge?: DropJudge } = {};
 export const drops = new Map<number, ScopedDrop>();
 
 // Drop que se está yendo a buscar, y cuántos se levantaron en total (panel e informe).
@@ -52,7 +54,7 @@ function parseDropsPacket(raw: any): ScopedDrop[] {
 export function watchDrops(): () => void {
   const onDrop = (raw: any) => {
     try {
-      for (const d of parseDropsPacket(raw)) drops.set(d.id, d);
+      for (const d of parseDropsPacket(raw)) drops.set(d.id, { ...d, seenAt: Date.now() });
     } catch (e) {
       log(`AVISO: no pude parsear un drop, lo ignoro: ${(e as Error).message}`);
     }
@@ -75,8 +77,8 @@ export function watchDrops(): () => void {
     const line = parseServerMessage(toBytes(raw));
     const lt = lootState.looting;
     if (!line || !lt || lt.pickAt == null || !/doesn't belong to you/i.test(line.text)) return;
-    foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
     const d = drops.get(lt.id) ?? lt.drop;
+    foreignUntil.set(lt.id, Date.now() + FOREIGN_RETRY_MS);
     if (d) trackEvent('loot_foreign', `${d.group}/${d.num}`, d.group, d.num, { x: d.x, y: d.y });
     log(`El drop Id=${lt.id} es de otro: lo dejo y vuelvo a probar en ${FOREIGN_RETRY_MS / 1000} s si sigue ahí.`);
     lootState.looting = null;
@@ -110,10 +112,14 @@ const isBox = (d: { group: number; num: number }) => d.group === 14 && d.num ===
 // hasta FOREIGN_RETRY_MS después (por si queda libre). Insistir 20 s en plena invasión era perder dorados.
 const FOREIGN_RETRY_MS = 10_000;
 const foreignUntil = new Map<number, number>();
+// Cajas ajenas a esperar adyacente (snipe.ts) y el último pedido de cada una.
+const SNIPE_HOLD_MAX_MS = 14_000;
+const snipeIds = new Set<number>();
+const snipePickAt = new Map<number, number>();
 // Joyas, excelentes y equipo solo con lugar en el inventario (casillas libres de las 64): que siempre
 // entren las cajas, el zen y las pociones.
 const LOOT_GEAR_MIN_FREE = 12;
-function bagRoom(): number {
+export function bagRoom(): number {
   let used = 0;
   for (const it of world.inventory.values()) if (it.slot >= 12 && it.slot < 76) { const i = itemInfo(it.group, it.num); used += i.w * i.h; }
   return 64 - used;
@@ -152,7 +158,7 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
   const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE);
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
   if (!d) return false;
   if (!lootState.looting) {
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });

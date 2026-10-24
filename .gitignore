@@ -13,3 +13,5 @@ assets/radar
 node_modules
 # Íconos de ítems del cliente (62 MB) para el equipo/inventario del panel: no van al repo (público).
 assets/items
+.dev.vars
+.wrangler/

@@ -94,6 +94,28 @@ export function isObjectMovedPacket(raw: Uint8Array | DataView | ArrayBuffer): b
   return b.length === 8 && b[0] === 0xc1 && b[2] === 0x15;
 }
 
+/**
+ * El 0x15 de 10 bytes (ObjectHit 0.97d): daño de un golpe sobre un objeto, id u16 BE @3 y daño u16 BE @5.
+ * Solo para estadísticas (`dragon_fight`); null si no mide 10. Layout sin verificar contra bytes reales.
+ */
+export function parseHitDamage(raw: Uint8Array | DataView | ArrayBuffer): { id: number; damage: number } | null {
+  const b = u8(raw);
+  if (b.length !== 10 || b[0] !== 0xc1 || b[2] !== 0x15) return null;
+  return { id: ((b[3] << 8) | b[4]) & 0x7fff, damage: (b[5] << 8) | b[6] };
+}
+
+/**
+ * ObjectHitExtended (C1 16 11, docs/Packets/C1-11-ObjectHitExtended de OpenMU): el server lo manda cuando YO pego
+ * (o me pegan) e incluye la vida que le queda al blanco: es la barra roja del cliente. Byte 3 = tipo de daño (bits
+ * bajos), id u16 LITTLE endian @4, vida restante @6 en fracciones de 1/250, escudo @7, daño u32 LE @8 y daño al
+ * escudo u32 LE @12. null si no es ese paquete. Sin verificar contra bytes reales (ver las líneas RAW del log).
+ */
+export function parseHitExtended(raw: Uint8Array | DataView | ArrayBuffer): { kind: number; id: number; healthStatus: number; shieldStatus: number; damage: number } | null {
+  const b = u8(raw);
+  if (b.length !== 16 || b[0] !== 0xc1 || b[2] !== 0x11) return null;
+  return { kind: b[3] & 0x0f, id: (b[4] | (b[5] << 8)) & 0x7fff, healthStatus: b[6], shieldStatus: b[7], damage: (b[8] | (b[9] << 8) | (b[10] << 16) | (b[11] << 24)) >>> 0 };
+}
+
 // ---------------------------------------------------------------------------
 // Ítems. Este server manda casi todos los ítems en 5 bytes (formato clásico 0.97); el cliente web los
 // convierte a 12 antes de leerlos. Confirmado con bytes reales de Horaz (2026-10-11): inventario y
@@ -317,4 +339,51 @@ export function parsePositionFix(raw: Uint8Array | DataView | ArrayBuffer): { id
   const b = u8(raw);
   if (b.length !== 8 || b[0] !== 0xc1 || b[2] !== 0x11) return null;
   return { id: ((b[3] << 8) | b[4]) & 0x7fff, x: b[5], y: b[6] };
+}
+
+// ---------------------------------------------------------------------------
+// Mover ítems entre depósitos (baúl, bolsa, equipo) y hablar con un NPC.
+//   MoveItem (C3 <len> 24): <de: depósito> <de: casilla> <ítem 5 o 6 bytes> <a: depósito> <a: casilla>.
+//   Depósito 0 = inventario (equipo 0-11, bolsa 12-75): esa forma está PROBADA en vivo (equip.ts, Hume
+//   2026-10-12). Depósito 2 = baúl y 3 = Chaos Machine: salen del cliente web (`placePickedItem(slot, 2)`
+//   al guardar en el baúl, `autoMoveItem(0, slot, 3)` para la máquina; browser/browser-agent.js y
+//   browser/MANUAL-CHAOS.md), que usa el mismo adaptador del 0x24. SIN verificar en vivo desde el headless:
+//   sacar del baúl a la bolsa (de=2) nunca se mandó desde acá.
+//   Casillas del baúl: 0-based, 8 columnas (las que devuelve StoreItemList / vault-<pj>.json).
+// ---------------------------------------------------------------------------
+export const STORAGE = { inventory: 0, trade: 1, vault: 2, chaosMachine: 3 } as const;
+
+export function buildMoveItem(fromStorage: number, fromSlot: number, item: Uint8Array, toStorage: number, toSlot: number): Uint8Array {
+  if (item.length !== 5 && item.length !== 6) throw new Error(`ítem de ${item.length} bytes (esperaba 5 o 6)`);
+  return Uint8Array.from([0xc3, 7 + item.length, 0x24, fromStorage, fromSlot, ...item, toStorage, toSlot]);
+}
+
+/** TalkToNpcRequest (C3 05 30 <id BE>): abre la ventana del NPC (Baz = baúl; el Chaos Goblin es el NPC 238). */
+export function buildTalkNpc(npcId: number): Uint8Array {
+  return Uint8Array.from([0xc3, 0x05, 0x30, (npcId >> 8) & 0xff, npcId & 0xff]);
+}
+
+/** CloseNpcRequest (C1 03 31): cierra la ventana del NPC (baúl incluido). */
+export function buildCloseNpc(): Uint8Array {
+  return Uint8Array.from([0xc1, 0x03, 0x31]);
+}
+
+/**
+ * AssignCharacterToGuild (C2 65, docs/Packets/C2-65 de OpenMU; el 0x5B del 0.75 es parecido): jugadores a la vista con su guild.
+ * Cuenta @4 y, desde @5, entradas de 12 bytes: guildId u32 LE @0, rol @4, y @7-8 el id del jugador (u16 BE, bit alto del byte 7 = "recién
+ * visto"). Devuelve [idJugador, idGuild]. Si el largo no cierra, vacío. SIN VERIFICAR contra bytes reales.
+ */
+export function parseGuildRelations(raw: Uint8Array | DataView | ArrayBuffer): [number, number][] {
+  const b = u8(raw);
+  if (b[0] !== 0xc2 || b[3] !== 0x65) return [];
+  const n = b[4];
+  if (n === 0 || b.length < 5 + 12 * n) return [];
+  const out: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const o = 5 + 12 * i;
+    const guild = (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+    const id = (((b[o + 7] & 0x7f) << 8) | b[o + 8]) & 0x7fff;
+    out.push([id, guild]);
+  }
+  return out;
 }

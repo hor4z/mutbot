@@ -80,3 +80,6 @@ export class GoldenRule {
     return now < this.holdUntil;
   }
 }
+
+type Fight = { id: number; type: number; seenAt: number; announceAt: number | null; firstHitAt: number | null; lastSeenAt: number; hits: number; dmg: number; ownHits: number; ownDmg: number; hsFirst: number | null; hsLast: number | null; others: Set<string>; sx: number; sy: number; ex: number; ey: number };
+

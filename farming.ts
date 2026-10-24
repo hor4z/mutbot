@@ -1,247 +1,16 @@
 /**
- * Elección de objetivo por EXP POR SEGUNDO, aprendizaje por tipo de monstruo y
- * autoevaluación. Portado del agente que juega dentro del cliente web
- * (`browser/browser-agent.js`), que es el que sube de nivel rápido: ahí está cada
- * decisión explicada con lo que se aprendió jugando con el usuario.
- *
- * Lógica PURA (sin red, sin EventBus, sin `world`): recibe posiciones, eventos y
- * reloj por parámetro, así se testea offline en `farming-tests.ts`.
- * `farm-loop.ts` la engancha en `autonomousLoop`. Ver AGENTS.md, "Farmeo
- * por exp/segundo".
+ * Lo que el bot mide y reparte, sin estado de red (lógica pura):
+ *  - `ExpLog`: exp ganada por segundo; todo "exp/min" del bot sale de acá.
+ *  - Reparto de puntos de atributo (`planStats` del DK, `planByClass` del resto, `capStats`).
+ *  - Qué ítems del piso vale la pena levantar (`pickLoot`).
  */
 
-// ---------------------------------------------------------------------------
-// Parámetros (del modelo, no del uso). Mismos valores que `ai.cfg` del agente web.
-// ---------------------------------------------------------------------------
-export const FARM = {
-  // Segundos que cuesta caminar un tile (para el costo de ir hasta el objetivo).
-  SEC_PER_TILE: 0.4,
-  // Un monstruo que se estima tardar más que esto en matar solo se elige si no
-  // hay ninguno más rápido ("duros" solo si no hay nada razonable).
-  MAX_KILL_SEC: 8,
-  // Sin medición de un tipo: vida / dps medido × esto (algo de pesimismo).
-  UNKNOWN_PESSIMISM: 1.4,
-  // Sin ninguna medición de dps: se asume esto.
-  DEFAULT_KILL_SEC: 3,
-  // Sin ninguna medición de exp: exp/sqrt(vida) por defecto.
-  DEFAULT_EXP_PER_SQRT_HP: 300,
-  // Densidad: otros monstruos a <= esto del objetivo suman CROWD_WEIGHT de su
-  // valor (Twisting Slash es de área: pega a todos los de alrededor).
-  CROWD_RADIUS: 3,
-  CROWD_WEIGHT: 0.5,
-  // Competencia: cada jugador a <= PLAYER_RADIUS del objetivo multiplica el
-  // valor por COMPETITION_FACTOR (otro jugador nos roba el kill o el respawn).
-  // 0.7 = penalización 0.3 por jugador, como `competitionPenalty` del agente web
-  // (con 0.4 se iba de objetivos que igual rendían: "a veces hay competencia pero
-  // no es mejor que yo").
-  PLAYER_RADIUS: 5,
-  COMPETITION_FACTOR: 0.7,
-  // Solo se consideran monstruos a menos de esto (Chebyshev, tiles).
-  SCAN: 28,
-  // EMA de lo aprendido: nuevo = viejo × EMA_OLD + medido × (1 − EMA_OLD).
-  EMA_OLD: 0.7,
-  // Kills grandes llegan partidos en tramos de 65535 (AddedExperience es u16)
-  // para el mismo KilledObjectId: tramos dentro de esta ventana se suman.
-  SPLIT_WINDOW_MS: 1500,
-  // Tiempos de kill fuera de (0, esto) son ruido (perseguir a uno que huye,
-  // el objetivo quedó colgado): no se aprenden.
-  MAX_KILL_SAMPLE_SEC: 60,
-  // Tope del registro id → tipo (los ids se reciclan; se limpia entero).
-  NET_INFO_MAX: 3000,
-} as const;
-export type FarmParams = typeof FARM;
-
-export const median = (xs: number[]): number | null => {
-  if (!xs.length) return null;
-  const v = [...xs].sort((a, b) => a - b);
-  return v[Math.floor(v.length / 2)];
-};
-
-const ema = (prev: number | undefined, x: number, old: number) => (prev == null ? x : prev * old + x * (1 - old));
-
-// ---------------------------------------------------------------------------
-// Aprendizaje por tipo de monstruo: exp por kill y segundos hasta matarlo.
-// ---------------------------------------------------------------------------
-export type TypeKnowledge = {
-  expByType: Record<number, number>;
-  killSecByType: Record<number, number>;
-};
-
-export class MonsterTypeStats {
-  expByType: Record<number, number> = {};
-  killSecByType: Record<number, number> = {};
-
-  /**
-   * @param maxHpOf vida máxima por TypeNumber. En el protocolo headless no llega
-   *   (el cliente web la tiene en su attributeSystem): sale de `data/monsters.json`
-   *   (`HP` por `Numb`). null = desconocida (ej. los custom >= 300 de este server).
-   */
-  constructor(
-    private readonly maxHpOf: (type: number) => number | null,
-    private readonly p: FarmParams = FARM,
-    init?: Partial<TypeKnowledge>,
-  ) {
-    if (init?.expByType) this.expByType = { ...init.expByType };
-    if (init?.killSecByType) this.killSecByType = { ...init.killSecByType };
-  }
-
-  snapshot(): TypeKnowledge {
-    return { expByType: { ...this.expByType }, killSecByType: { ...this.killSecByType } };
-  }
-
-  // Valor crudo (sin EMA): lo usa ExpSplitTracker para reescribir el kill partido.
-  setExp(type: number, v: number) {
-    this.expByType[type] = v;
-  }
-
-  recordKillSec(type: number, secs: number) {
-    if (!(secs > 0 && secs < this.p.MAX_KILL_SAMPLE_SEC)) return;
-    this.killSecByType[type] = ema(this.killSecByType[type], secs, this.p.EMA_OLD);
-  }
-
-  // Mediana de exp/sqrt(vida) entre los tipos medidos con vida conocida. En MU
-  // la exp va con el NIVEL del monstruo, que crece mucho más lento que su vida;
-  // el usuario lo confirmó jugando: con monstruos más débiles sube más rápido.
-  expPerSqrtHp(): number | null {
-    const xs: number[] = [];
-    for (const [k, exp] of Object.entries(this.expByType)) {
-      const hp = this.maxHpOf(Number(k));
-      if (hp && hp > 0) xs.push(exp / Math.sqrt(hp));
-    }
-    return median(xs);
-  }
-
-  // Daño por segundo efectivo medido: mediana de vida/segundos-de-kill.
-  dps(): number | null {
-    const xs: number[] = [];
-    for (const [k, secs] of Object.entries(this.killSecByType)) {
-      const hp = this.maxHpOf(Number(k));
-      if (hp && hp > 0 && secs > 0) xs.push(hp / secs);
-    }
-    return median(xs);
-  }
-
-  // Exp esperada por kill: lo medido, o sqrt(vida) × mediana(exp/sqrt(vida)).
-  expOf(type: number): number {
-    const known = this.expByType[type];
-    if (known != null) return known;
-    const k = this.expPerSqrtHp() ?? this.p.DEFAULT_EXP_PER_SQRT_HP;
-    const hp = this.maxHpOf(type);
-    if (hp && hp > 0) return Math.sqrt(hp) * k;
-    // Vida desconocida: la mediana de lo medido (o, sin nada, el default con vida 1).
-    return median(Object.values(this.expByType)) ?? k;
-  }
-
-  // Segundos esperados hasta matarlo: lo medido, o vida / dps × pesimismo.
-  killSecOf(type: number): number {
-    const known = this.killSecByType[type];
-    if (known != null) return known;
-    const dps = this.dps();
-    const hp = this.maxHpOf(type);
-    if (dps && hp && hp > 0) return (hp / dps) * this.p.UNKNOWN_PESSIMISM;
-    return this.p.DEFAULT_KILL_SEC;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Exp por kill partida: ExperienceGained (C3 16) trae {KilledObjectId u16 BE @3,
-// AddedExperience u16 BE @5, DamageOfLastHit @7}. Un kill de más de 65535 exp
-// llega como varios packets seguidos con el mismo KilledObjectId: se suman los
-// que caen dentro de SPLIT_WINDOW_MS y el EMA se recalcula sobre la suma (no
-// sobre cada tramo, que daría un promedio basura).
-//
-// Cuando llega el evento el monstruo ya salió del scope: el tipo y la posición
-// se buscan en el registro de ids vistos (`netInfo`).
-// ---------------------------------------------------------------------------
-export type NetInfo = { type: number; x: number; y: number; map: number };
-
-export type ExpEvent = {
-  info: NetInfo | null; // null = id que no vimos (exp sin kill nuestro identificable)
-  added: number;
-  sum: number;          // exp total de ese kill hasta ahora (suma de tramos)
-  continuation: boolean;
-};
-
-export class ExpSplitTracker {
-  readonly netInfo = new Map<number, NetInfo>();
-  private last: { id: number; t: number; sum: number; prev: number | undefined } | null = null;
-
-  constructor(private readonly stats: MonsterTypeStats, private readonly p: FarmParams = FARM) {}
-
-  // Anotar cada monstruo visto (al entrar al scope y cuando se mueve).
-  see(id: number, info: NetInfo) {
-    if (this.netInfo.size >= this.p.NET_INFO_MAX && !this.netInfo.has(id)) this.netInfo.clear();
-    this.netInfo.set(id, info);
-  }
-
-  onExp(killedId: number, added: number, now: number): ExpEvent {
-    const info = this.netInfo.get(killedId) ?? null;
-    if (!info || added <= 0) return { info, added, sum: added, continuation: false };
-    const k = info.type;
-    const last = this.last;
-    if (last && last.id === killedId && now - last.t < this.p.SPLIT_WINDOW_MS) {
-      last.sum += added;
-      last.t = now;
-      this.stats.setExp(k, ema(last.prev, last.sum, this.p.EMA_OLD));
-      return { info, added, sum: last.sum, continuation: true };
-    }
-    const prev = this.stats.expByType[k];
-    this.last = { id: killedId, t: now, sum: added, prev };
-    this.stats.setExp(k, ema(prev, added, this.p.EMA_OLD));
-    return { info, added, sum: added, continuation: false };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Elección de objetivo: exp/segundo esperada.
-//   valor = (exp(tipo) + densidad) / (seg_kill(tipo) + distancia × SEC_PER_TILE)
-//           × COMPETITION_FACTOR ^ (jugadores a <= PLAYER_RADIUS del objetivo)
-//   densidad = Σ CROWD_WEIGHT × exp(otro) para otros a <= CROWD_RADIUS.
-// Los que tardan > MAX_KILL_SEC se descartan si hay alguno más rápido.
-// ---------------------------------------------------------------------------
-export type Candidate = { id: number; type: number; x: number; y: number };
 export type Pos = { x: number; y: number };
-export type TargetPick<C extends Candidate> = { target: C; rate: number; rivals: number } | null;
-
 const cheb = (a: Pos, b: Pos) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 
-export function targetRate(
-  me: Pos, c: Candidate, pool: readonly Candidate[], players: readonly Pos[], stats: MonsterTypeStats, p: FarmParams = FARM,
-): { rate: number; rivals: number } {
-  let crowd = 0;
-  for (const o of pool) if (o !== c && cheb(o, c) <= p.CROWD_RADIUS) crowd += stats.expOf(o.type) * p.CROWD_WEIGHT;
-  const rivals = players.filter((q) => cheb(q, c) <= p.PLAYER_RADIUS).length;
-  const secs = stats.killSecOf(c.type) + cheb(me, c) * p.SEC_PER_TILE;
-  const rate = ((stats.expOf(c.type) + crowd) / Math.max(secs, 0.1)) * Math.pow(p.COMPETITION_FACTOR, rivals);
-  return { rate, rivals };
-}
-
-export function pickTarget<C extends Candidate>(
-  me: Pos, monsters: readonly C[], players: readonly Pos[], stats: MonsterTypeStats, p: FarmParams = FARM,
-): TargetPick<C> {
-  const inRange = monsters.filter((m) => cheb(me, m) < p.SCAN);
-  const easy = inRange.filter((m) => stats.killSecOf(m.type) <= p.MAX_KILL_SEC);
-  const pool = easy.length ? easy : inRange;
-  let best: TargetPick<C> = null;
-  for (const m of pool) {
-    const r = targetRate(me, m, pool, players, stats, p);
-    if (!best || r.rate > best.rate) best = { target: m, rate: r.rate, rivals: r.rivals };
-  }
-  return best;
-}
-
 // ---------------------------------------------------------------------------
-// Registro de exp POR SEGUNDO (un bucket por segundo).
-//
-// Los kills grandes llegan partidos en tramos de 65535 (~60 ExperienceGained
-// por kill a nivel alto). El agente web guardaba un registro por evento con
-// tope fijo (5000): cubría ~30 s de juego, así que toda medición de 1-3 min
-// (spots, campamentos, autoajuste) salía truncada. Con un bucket por segundo,
-// MAX_BUCKETS segundos cubren horas sin importar cuántos tramos lleguen.
-//
-// Todas las mediciones de exp/min por ventana del bot salen de acá y dividen
-// por la ventana REAL cubierta (si el registro empezó hace 2 min, "exp/min en
-// 30 min" divide por 2 min, no por 30).
+// Registro de exp por segundo. Las ventanas se promedian por la ventana REAL cubierta (si el registro empezó hace
+// 2 min, "exp/min en 30 min" divide por 2 min, no por 30).
 // ---------------------------------------------------------------------------
 export class ExpLog {
   private buckets: Array<{ t: number; n: number }> = [];
@@ -286,120 +55,9 @@ export class ExpLog {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Autoevaluación: exp/min reciente y en qué se va el tiempo.
-// ---------------------------------------------------------------------------
-export type TimeKind = 'fight' | 'walk' | 'wait' | 'other';
-
-export class SelfReport {
-  readonly exp: ExpLog;
-  readonly time: Record<TimeKind, number> = { fight: 0, walk: 0, wait: 0, other: 0 };
-  readonly cyclesMin: number[] = [];
-  cycleStart: number;
-
-  constructor(now: number, exp?: ExpLog) {
-    this.cycleStart = now;
-    this.exp = exp ?? new ExpLog(now);
-  }
-
-  addExp(n: number, now: number) {
-    this.exp.add(n, now);
-  }
-
-  addTime(kind: TimeKind, ms: number) {
-    if (ms > 0) this.time[kind] += ms;
-  }
-
-  // Exp por minuto en la ventana [now − ms, now] (ventana real, ver ExpLog).
-  expPerMin(now: number, ms: number): number {
-    return this.exp.perMin(now, ms);
-  }
-
-  // Terminó un ciclo de reset: guarda su duración y arranca otro.
-  cycleDone(now: number) {
-    this.cyclesMin.push(Math.round((now - this.cycleStart) / 60_000));
-    this.cycleStart = now;
-  }
-
-  timePct(): Record<TimeKind, number> {
-    const tot = this.time.fight + this.time.walk + this.time.wait + this.time.other || 1;
-    const out = {} as Record<TimeKind, number>;
-    for (const k of Object.keys(this.time) as TimeKind[]) out[k] = Math.round((100 * this.time[k]) / tot);
-    return out;
-  }
-
-  format(now: number, level: number, resets: number, extra = ''): string {
-    const pct = this.timePct();
-    const cycles = this.cyclesMin.length ? this.cyclesMin.map((m) => `${m} min`).join(', ') : 'ninguno completo';
-    return [
-      `Autoevaluación: nivel ${level}, resets ${resets}${extra ? `, ${extra}` : ''}`,
-      `  exp/min: ${Math.round(this.expPerMin(now, 5 * 60_000))} (5 min), ${Math.round(this.expPerMin(now, 30 * 60_000))} (30 min)`,
-      `  tiempo: peleando ${pct.fight}%, caminando ${pct.walk}%, esperando ${pct.wait}%, otro ${pct.other}%`,
-      `  ciclos de reset: ${cycles} (actual: ${Math.round((now - this.cycleStart) / 60_000)} min)`,
-    ].join('\n');
-  }
-}
 
 // ---------------------------------------------------------------------------
-// Registro de tramos por ciclo: minuto (desde el inicio del ciclo) en que se
-// llegó a cada nivel hito. Persiste en learning.json para comparar ciclos y
-// proyectar resets/día (como `ai.cycleLog` del agente web).
-// ---------------------------------------------------------------------------
-export const CYCLE_MARKS = [20, 50, 100, 200, 300, 350, 400] as const;
-export type CycleRecord = { start: number; end?: number; min?: number; marks: Record<number, number> };
-
-export class CycleLog {
-  cur: CycleRecord;
-  readonly done: CycleRecord[];
-
-  constructor(now: number, init?: { cur?: CycleRecord | null; done?: CycleRecord[] }, private readonly keep = 200) {
-    this.done = [...(init?.done ?? [])];
-    this.cur = init?.cur ? { start: init.cur.start, marks: { ...init.cur.marks } } : { start: now, marks: {} };
-  }
-
-  // Devuelve los hitos nuevos alcanzados (para loguearlos).
-  observe(level: number, now: number): number[] {
-    const out: number[] = [];
-    for (const m of CYCLE_MARKS) {
-      if (level >= m && this.cur.marks[m] == null) {
-        this.cur.marks[m] = +((now - this.cur.start) / 60_000).toFixed(1);
-        out.push(m);
-      }
-    }
-    return out;
-  }
-
-  // Reset hecho: cierra el ciclo (solo se guarda si llegó al 400: un ciclo
-  // empezado a la mitad, p.ej. al arrancar el bot en nivel 250, no compara).
-  reset(now: number): CycleRecord | null {
-    let closed: CycleRecord | null = null;
-    if (this.cur.marks[400] != null) {
-      closed = { ...this.cur, end: now, min: +((now - this.cur.start) / 60_000).toFixed(1) };
-      this.done.push(closed);
-      if (this.done.length > this.keep) this.done.splice(0, this.done.length - this.keep);
-    }
-    this.cur = { start: now, marks: {} };
-    return closed;
-  }
-
-  // Promedio de minutos por ciclo de los últimos `n` y resets/día proyectados.
-  projection(n = 5): { cycles: number; avgMin: number | null; perDay: number | null } {
-    const last = this.done.slice(-n).filter((c) => c.min && c.min > 0);
-    if (!last.length) return { cycles: 0, avgMin: null, perDay: null };
-    const avg = last.reduce((a, c) => a + c.min!, 0) / last.length;
-    return { cycles: last.length, avgMin: +avg.toFixed(1), perDay: Math.round(1440 / avg) };
-  }
-
-  format(n = 5): string {
-    const p = this.projection(n);
-    const marks = (c: CycleRecord) => CYCLE_MARKS.filter((m) => c.marks[m] != null).map((m) => `${m}@${c.marks[m]}`).join(' ') || '-';
-    const lines = [`  ciclo actual: ${marks(this.cur)}`];
-    for (const c of this.done.slice(-n)) lines.push(`  ciclo ${c.min} min (${Math.round(1440 / (c.min || 1))}/día): ${marks(c)}`);
-    lines.push(p.perDay != null ? `  proyección: ${p.perDay} resets/día (promedio ${p.avgMin} min, ${p.cycles} ciclo(s))` : '  proyección: sin ciclos completos todavía');
-    return lines.join('\n');
-  }
-}
-
+// Puntos de atributo
 // ---------------------------------------------------------------------------
 // Reparto de puntos del Dark Knight con Twisting Slash (agente web, planStats):
 //   daño del skill ≈ (fuerza/4) × (2 + energía/1000)
@@ -421,35 +79,24 @@ export function planStats(points: number, str: number, ene: number, p = STATS_PL
 }
 
 // ---------------------------------------------------------------------------
-// Personaje nuevo (sin resets, con pocos puntos): reparte apenas tiene puntos, según la clase. El
-// plan de arriba es para el DK con resets (Twisting Slash, decenas de miles de puntos); un DK recién
-// creado con 28 de fuerza y un Small Axe necesita fuerza para pegar y agilidad para defenderse.
-// Hume (2026-10-12) llegó a nivel 10 con 45 puntos sin repartir porque se esperaba a juntar 200.
+// Reparto por clase. El Dark Knight con Twisting Slash usa `planStats` (abajo, para Hume: energía hasta fuerza−2000 y
+// solo 5 % a vitalidad). Las demás clases reparten por porcentajes: el mago, con ese plan de DK, quedaba con ~3.500 de
+// vida a nivel 350 (Zamu) y moría en cualquier mapa. Los porcentajes son una estimación nuestra, no un dato del juego.
 // ---------------------------------------------------------------------------
-export const FRESH_STATS: Record<'knight' | 'wizard' | 'elf' | 'gladiator', Partial<StatValues>> = {
+export const CLASS_STATS: Record<'knight' | 'wizard' | 'elf' | 'gladiator', Partial<StatValues>> = {
   knight: { str: 0.55, agi: 0.25, vit: 0.2 },
-  wizard: { ene: 0.55, agi: 0.25, vit: 0.2 },
-  elf: { agi: 0.55, str: 0.2, vit: 0.25 },
-  gladiator: { str: 0.45, ene: 0.3, agi: 0.15, vit: 0.1 },
+  wizard: { ene: 0.5, vit: 0.3, agi: 0.2 },
+  elf: { agi: 0.5, vit: 0.3, str: 0.2 },
+  gladiator: { str: 0.4, ene: 0.25, vit: 0.25, agi: 0.1 },
 };
 /** Base de la clase por `classId` del CharacterList (DarkWizard 0, DarkKnight 4, FairyElf 8, MagicGladiator 12; +1/+2 evoluciones). */
-export function classFamily(classId: number | null | undefined): keyof typeof FRESH_STATS | null {
+export function classFamily(classId: number | null | undefined): keyof typeof CLASS_STATS | null {
   if (classId == null) return null;
   return (['wizard', 'knight', 'elf', 'gladiator'] as const)[classId >> 2] ?? null;
 }
-/**
- * ¿Personaje débil (nuevo)? Lo deciden los stats, no los resets: Hume con 1 reset tenía fuerza 121 y el
- * bot lo trataba como a Horaz (energía primero, grupos de 5, spots disputados) (2026-10-17). Los resets
- * solo cuentan mientras el server no mandó los stats (todo en 0).
- */
-export const FRESH_MAX_STATS = 3000;
-export function isFreshChar(resets: number | null | undefined, stats: StatValues): boolean {
-  const total = stats.str + stats.agi + stats.vit + stats.ene;
-  if (total === 0) return !(resets != null && resets > 0);
-  return total < FRESH_MAX_STATS;
-}
-export function planFreshStats(points: number, family: keyof typeof FRESH_STATS): StatValues {
-  const share = FRESH_STATS[family];
+/** Reparte `points` según los porcentajes de la clase. */
+export function planByClass(points: number, family: keyof typeof CLASS_STATS): StatValues {
+  const share = CLASS_STATS[family];
   const out: StatValues = { str: 0, agi: 0, vit: 0, ene: 0 };
   if (!(points > 0)) return out;
   const keys = (['str', 'agi', 'vit', 'ene'] as const).filter((k) => share[k]);
@@ -484,13 +131,6 @@ export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Loot valioso (agente web, isValuable): cajas (Box of Kundun 14/11), joyas
-// (Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31, Chaos
-// 12/15), ítems excelentes y los guantes 10/1 (le faltan al set de Horaz). El
-// zen y el equipo común NO se levantan: cada viaje a levantar es tiempo sin pelear.
-// ---------------------------------------------------------------------------
-export const VALUABLE_JEWELS_14 = new Set([11, 13, 14, 16, 22, 31]);
 export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean };
 
 // Lo que vale en este server (2026-10-23): las cajas (14/11, Box of Kundun) y los Cristales (14/31): la
@@ -505,8 +145,18 @@ export type DropInfo = { group: number; num: number; isMoney?: boolean; excellen
  * nada: Hume llegó a nivel 27 con 0.
  */
 export const JEWELS = new Set([13, 14, 16, 22, 31]);
-export function isValuableDrop(d: DropInfo, fresh = false, gear = false): boolean {
+/**
+ * Opinión opcional sobre el equipo (grupos 0-11) que cae, p. ej. `makeDropJudge` de item-score.ts: true =
+ * levantarlo, false = dejarlo, undefined = no opina (rige la regla de siempre). Solo se consulta con lugar
+ * en la bolsa (`gear`). Sin juez (el default) el comportamiento no cambia.
+ */
+export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
+export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?: DropJudge): boolean {
   if (d.isMoney) return fresh;
+  if (judge && gear && d.group <= 11) {
+    const j = judge(d);
+    if (j !== undefined) return j;
+  }
   if (fresh && d.group === 14 && (d.num <= 3 || d.num === 15 || JEWELS.has(d.num))) return true;
   if (fresh && d.group === 12 && d.num === 15) return true; // Jewel of Chaos
   if (fresh && gear && d.group <= 11) return true;
@@ -521,11 +171,11 @@ export const CURRENCY_ITEMS: ReadonlySet<number> = new Set([11, 31, 7, 12, 20]);
 const LOOT_BOX_FIRST = 8;
 
 // El drop valioso más cercano a <= radius (o null).
-export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false): D | null {
+export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false, judge?: DropJudge): D | null {
   let best: D | null = null;
   let bd = Infinity;
   for (const d of drops) {
-    if (!isValuableDrop(d, fresh, gear)) continue;
+    if (!isValuableDrop(d, fresh, gear, judge)) continue;
     const dd = cheb(me, d);
     const score = dd - (d.group === 14 && d.num === 11 ? LOOT_BOX_FIRST : 0);
     if (dd <= radius && score < bd) {
@@ -535,3 +185,4 @@ export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, 
   }
   return best;
 }
+

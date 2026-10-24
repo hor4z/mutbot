@@ -1,36 +1,31 @@
 /**
- * Diario: cada acción de alto nivel (viaje, reset, reparto, loot, órdenes del panel, cambios de
- * modo) se anota al panel (`decision`/`history`) y, con --decision-log, a un JSONL. También el log
- * que va a consola y al panel a la vez.
+ * Diario: cada decisión de alto nivel (viaje, reset, reparto de puntos, cambio de modo) va al log y, las que sirven para
+ * aprender (decisiones, viajes, resets), a la base.
  */
-import { appendFile } from 'node:fs/promises';
-import { DECISION_LOG_PATH } from './config';
-import { bot } from './state';
 import { trackEvent } from './telemetry';
 import { log } from './util';
 
-// decide: una decisión del bot con su motivo, en una línea (la tarjeta "Decisiones" del panel).
 type JournalKind = 'pickup' | 'reset' | 'stat' | 'travel' | 'command' | 'mode' | 'decide';
 
-let journalSeq = 0;
-
 export function journal(kind: JournalKind, what: string, detail: Record<string, unknown> = {}) {
-  const entry = { seq: ++journalSeq, at: new Date().toISOString(), kind, what, detail, autoOk: true };
-  // appendFile (no Bun.write, que sobrescribe); si el archivo falla no frena el juego.
-  if (DECISION_LOG_PATH) void appendFile(DECISION_LOG_PATH, JSON.stringify(entry) + '\n').catch(() => {});
-  bot.statusServer?.broadcastDecision(entry);
-  // A la base, solo lo que sirve para aprender: decisiones, viajes y resets (no comandos ni modos).
   if (kind === 'decide' || kind === 'travel' || kind === 'reset' || kind === 'pickup') trackEvent(kind, what, 0, 0, detail);
 }
 
-/** Una decisión con su motivo: a la consola, al log del panel y al diario (tarjeta "Decisiones"). */
+/** Las últimas decisiones: van en el estado del panel y la estación las muestra como mensajes. */
+export type Note = { at: number; text: string };
+const NOTES_MAX = 20;
+const notes: Note[] = [];
+export const recentNotes = (): Note[] => notes;
+
+/** Una decisión con su motivo: al log, a los mensajes de la estación y al diario. */
 export function decide(what: string, detail: Record<string, unknown> = {}) {
-  panelLog(what);
+  log(what);
+  notes.push({ at: Date.now(), text: what.slice(0, 160) });
+  if (notes.length > NOTES_MAX) notes.shift();
   journal('decide', what, detail);
 }
 
-// Log a consola y al panel.
+/** Una línea al log. */
 export function panelLog(text: string) {
   log(text);
-  bot.statusServer?.broadcastLog(text);
 }
