@@ -465,11 +465,11 @@ function orchestrate() {
   const power = (s: Slot) => (s.state!.char.resets ?? 0) * 1000 + s.state!.char.level;
   const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
+  for (const s of on) if (leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(leader) - power(s) >= SHADOW_MARGIN) shadowOf.set(s.cfg.key, leader.cfg.char);
+  // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
   for (const s of on) {
-    const follows = leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(leader) - power(s) >= SHADOW_MARGIN;
-    if (follows) shadowOf.set(s.cfg.key, leader!.cfg.char);
     const mine = [...shadowOf].filter(([, l]) => l === s.cfg.char).map(([k]) => slots.get(k)!.cfg.char);
-    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: follows ? leader!.cfg.char : null, s: mine })), busPort(s), '127.0.0.1');
+    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: shadowOf.get(s.cfg.key) ?? null, s: mine })), busPort(s), '127.0.0.1');
   }
 }
 
