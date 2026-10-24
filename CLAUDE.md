@@ -12,7 +12,7 @@ Leé ese archivo antes de tocar `headless-bot.ts`. Contiene:
 - la estructura y por qué `net/`, `packets/` y `data/` son copias del cliente
 - las trampas de protocolo: packets donde los parsers generados están mal para
   0.97d y el bot queda ciego sin avisar
-- la estación, el panel y la esquina de Arena 2
+- la estación y el panel
 - lo pendiente (en PLAN-SIN-NAVEGADOR.md)
 
 Foco: **bot sin navegador + estación/panel**. Para "correlo", "arrancalo", "ponelo a jugar":
