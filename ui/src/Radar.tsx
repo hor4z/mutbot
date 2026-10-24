@@ -43,6 +43,9 @@ const bearing = (dx: number, dy: number) => {
   return names[Math.round(((Math.atan2(dy, dx) + 2 * Math.PI) % (2 * Math.PI)) / (Math.PI / 4)) % 8]!;
 };
 
+// Capas que se ofrecen: las que se usan. Zonas, celdas letales y niebla siguen existiendo pero no se listan.
+const SHOWN_LAYERS: string[] = ["monsters", "golds", "players", "squad", "loot", "route"];
+
 export function Radar({ state, onRequestWarp }: { state: PanelState | null; onRequestWarp?: () => void }) {
   const host = useRef<HTMLDivElement>(null),
     stage = useRef<HTMLDivElement>(null),
@@ -55,7 +58,7 @@ export function Radar({ state, onRequestWarp }: { state: PanelState | null; onRe
     [follow, setFollowState] = useState(true),
     [layers, setLayers] = useState<Layers>(loadLayers),
     [showObjects, setShowObjects] = useState(true),
-    [legend, setLegend] = useState(true),
+    [legend, setLegend] = useState(false),
     [status, setStatus] = useState("Esperando posición"),
     [error, setError] = useState(false),
     [hover, setHover] = useState<{ i: Info; px: number; py: number } | null>(null),
@@ -427,7 +430,7 @@ export function Radar({ state, onRequestWarp }: { state: PanelState | null; onRe
             Capas
           </button>
           {legend &&
-            LAYER_META.filter((l) => view === "2d" || l.key !== "fog").map((l) => (
+            LAYER_META.filter((l) => SHOWN_LAYERS.includes(l.key)).map((l) => (
               <button key={l.key} className="hud-chip" aria-pressed={layers[l.key]} onClick={() => toggle(l.key)} title={l.hint}>
                 <i style={{ background: css(l.color) }} />
                 {l.label}

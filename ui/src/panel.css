@@ -1508,8 +1508,7 @@
   display: flex;
   gap: 5px;
   padding: 8px 10px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  flex-wrap: wrap;
   background: linear-gradient(0deg, rgba(12, 16, 19, 0.92), rgba(12, 16, 19, 0));
   align-items: center;
 }

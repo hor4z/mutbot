@@ -22,7 +22,8 @@ function Shell() {
   const actions = useActions(refresh);
   const chars = data.chars.filter((c) => c.account !== "blocked");
   const online = chars.filter((c) => isOnline(c) && c.panel);
-  const msgs = [...data.alerts].sort((a, b) => b.at - a.at).slice(0, 60);
+  // Sin los avisos de subida de nivel: tapaban los dorados, los pedidos y las muertes.
+  const msgs = data.alerts.filter((a) => a.kind !== "level").sort((a, b) => b.at - a.at).slice(0, 60);
 
   return (
     <div className="simple">
