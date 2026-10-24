@@ -61,6 +61,8 @@ type Slot = {
   waiting: Map<number, (r: { ok: boolean; msg: string }) => void>;
   /** cuándo se lo desconectó desde la estación */
   stoppedAt: number;
+  /** código con que salió el último proceso (null = señal) */
+  exitCode: number | null;
   // conexión demorada (recién desconectado)
   connectTimer: ReturnType<typeof setTimeout> | null;
 };
@@ -105,7 +107,7 @@ function refreshSlots() {
     while (used.has(port)) port++;
     slots.set(cfg.key, {
       cfg, port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
-      state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0, connectTimer: null,
+      state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0, exitCode: null, connectTimer: null,
     });
   }
 }
@@ -326,6 +328,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
     ownExits.delete(proc.pid);
     if (s.pid !== proc.pid) return;
     const st = exitStatus(code);
+    s.exitCode = code;
     s.pid = null;
     s.status = st.status;
     s.msg = st.msg;
@@ -426,7 +429,8 @@ function keepAlive() {
       lastProgress.delete(k);
       r.okSince = 0;
       retry.set(k, r);
-      if (s.status === 'failed' || s.status === 'in-use' || s.cfg.status === 'blocked' || s.connectTimer) continue;
+      // No se reintenta lo que no se arregla reintentando: cuenta bloqueada, login rechazado, personaje inexistente, flag mal, sesión abierta afuera.
+      if (s.status === 'in-use' || s.cfg.status === 'blocked' || [2, 4, 5, 6].includes(s.exitCode ?? -1) || s.connectTimer) continue;
       if (now - r.at < Math.min(10 * 60_000, 30_000 * 2 ** r.n)) continue;
       r.at = now;
       r.n++;
