@@ -16,6 +16,9 @@ export type Character = {
   panel: boolean;
   routine: Routine | null;
   stuck: boolean;
+  /** a quién sigue como sombra (el orquestador de la estación lo decide) y si el usuario lo apagó */
+  shadowOf: string | null;
+  shadowOff: boolean;
   game: null | {
     mode: string;
     doing: string;
@@ -86,7 +89,9 @@ async function post(body: StationRequest): Promise<Result> {
   }
 }
 
-export type Actions = Record<"connect" | "disconnect" | "pause" | "resume", (c: Character) => Promise<Result>>;
+export type Actions = Record<"connect" | "disconnect" | "pause" | "resume", (c: Character) => Promise<Result>> & {
+  shadow: (c: Character, on: boolean) => Promise<Result>;
+};
 
 export function useActions(refresh: () => void): Actions {
   return useMemo(() => {
@@ -100,6 +105,7 @@ export function useActions(refresh: () => void): Actions {
       disconnect: (c) => run({ action: "disconnect", char: c.key }),
       pause: (c) => run({ action: "routine", char: c.key, routine: { kind: "pause" } }),
       resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
+      shadow: (c, on) => run({ action: "shadow", char: c.key, on }),
     };
   }, [refresh]);
 }

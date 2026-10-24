@@ -368,6 +368,7 @@ function view() {
     const st = s.state;
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
+      shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
@@ -404,9 +405,28 @@ const BUS_STATION_PORT = 9090;
 const busPort = (s: Slot) => s.port + 300;
 const goldShown = new Map<string, number>();
 
+// Orquestador: el más fuerte de los conectados (resets × 1000 + nivel) es el líder; los demás con una ventaja de al menos
+// SHADOW_MARGIN lo siguen como sombra por todos los mapas, salvo los que el usuario apagó (`shadowOff`). Cada segundo la estación
+// manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
+const SHADOW_MARGIN = 60;
+const shadowOff = new Set<string>();
+const shadowOf = new Map<string, string>();
+function orchestrate() {
+  const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
+  const power = (s: Slot) => (s.state!.char.resets ?? 0) * 1000 + s.state!.char.level;
+  const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
+  shadowOf.clear();
+  for (const s of on) {
+    const follows = leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(leader) - power(s) >= SHADOW_MARGIN;
+    if (follows) shadowOf.set(s.cfg.key, leader!.cfg.char);
+    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: follows ? leader!.cfg.char : null })), busPort(s), '127.0.0.1');
+  }
+}
+
 const addAlert = (a: Omit<Alert, 'id'>) => pushAlert(alerts, a);
 
 // Oyente del canal de los bots: un dorado avisado sale en Mensajes (una vez por minuto por dorado y personaje).
+let busSock: { send(data: Uint8Array, port: number, address: string): boolean } | null = null;
 void Bun.udpSocket({
   hostname: '127.0.0.1',
   port: BUS_STATION_PORT,
@@ -423,7 +443,7 @@ void Bun.udpSocket({
       } catch { /* paquete que no es nuestro */ }
     },
   },
-}).catch((err) => say('no pude abrir el canal de los bots:', (err as Error).message));
+}).then((s) => { busSock = s as unknown as typeof busSock; }).catch((err) => say('no pude abrir el canal de los bots:', (err as Error).message));
 
 /** Mira a todos los personajes y anota lo que cambió (muertes, bloqueos, bolsa llena, trabados) y las invasiones. */
 // Hasta qué decisión de cada bot ya pasó a los mensajes.
@@ -471,6 +491,7 @@ const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { sta
 refreshSlots();
 syncRunning();
 setInterval(() => { refreshSlots(); syncRunning(); trackAlerts(); }, 2000);
+setInterval(orchestrate, 1000);
 
 Bun.serve({
   hostname: '127.0.0.1',
@@ -502,6 +523,10 @@ Bun.serve({
       refreshSlots();
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
+      if (r.action === 'shadow') {
+        if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
+        return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
+      }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
       return json(res, res.ok ? 200 : 409);
     }

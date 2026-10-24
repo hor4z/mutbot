@@ -14,6 +14,10 @@ const FRESH_MS = 3000;
 const STATE_EVERY_MS = 250;
 
 const members = new Map<string, TeamMember>();
+// Orden de la estación (orquestador): a quién seguir. Vale mientras llegue; si deja de llegar, el bot vuelve a decidir solo.
+let directive: { leader: string; at: number } | null = null;
+const DIRECTIVE_FRESH_MS = 3000;
+const STATION_PORT = Number(process.env.MUBOT_BUS_STATION) || 9090;
 let notices: GoldNotice[] = [];
 const announcedAt = new Map<string, number>();
 let peers: number[] = [];
@@ -22,9 +26,14 @@ let sock: { send(data: Uint8Array, port: number, address: string): boolean } | n
 const num = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 const name = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_]{1,10}$/.test(v);
 
-function onPacket(buf: Uint8Array) {
+function onPacket(buf: Uint8Array, fromPort: number) {
   let m: Record<string, unknown>;
   try { m = JSON.parse(Buffer.from(buf).toString('utf8')); } catch { return; }
+  // Las órdenes solo valen si salen del puerto de la estación (loopback: ningún otro programa del usuario las manda).
+  if (m.t === 'o' && fromPort === STATION_PORT) {
+    directive = typeof m.l === 'string' && name(m.l) ? { leader: m.l, at: Date.now() } : null;
+    return;
+  }
   if (!name(m.c) || m.c.toLowerCase() === bot.charName.toLowerCase()) return;
   if (m.t === 's' && num(m.l, 0, 1000) && num(m.m, 0, 255) && num(m.x, 0, 255) && num(m.y, 0, 255)) {
     members.set(m.c.toLowerCase(), { char: m.c, level: m.l, resets: num(m.r, 0, 100_000) ? m.r : undefined, map: m.m, x: m.x, y: m.y, mode: typeof m.d === 'string' ? m.d.slice(0, 10) : '', at: Date.now() });
@@ -46,7 +55,7 @@ export async function startBus() {
   if (!port || sock) return;
   peers = (process.env.MUBOT_BUS_PEERS ?? '').split(',').map(Number).filter((p) => p > 0 && p !== port);
   try {
-    sock = (await Bun.udpSocket({ hostname: '127.0.0.1', port, socket: { data: (_s, buf) => onPacket(buf) } })) as unknown as typeof sock;
+    sock = (await Bun.udpSocket({ hostname: '127.0.0.1', port, socket: { data: (_s, buf, p) => onPacket(buf, p) } })) as unknown as typeof sock;
   } catch {
     return; // puerto ocupado: el bot sigue solo
   }
@@ -76,4 +85,10 @@ export function drainGold(): GoldNotice[] {
   const out = notices;
   notices = [];
   return out;
+}
+
+/** El compañero al que la estación me mandó seguir (si la orden es reciente y lo veo), o null. */
+export function directedLeader(): TeamMember | null {
+  if (!directive || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return null;
+  return teammates().find((m) => m.char.toLowerCase() === directive!.leader.toLowerCase()) ?? null;
 }

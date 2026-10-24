@@ -53,6 +53,12 @@ function Shell() {
                 <span className={`simple-dot ${st.tone}`} title={st.text} />
                 <small>{c.game ? `Nv. ${c.game.level} · ${c.game.map} · ${fmtExp(c.game.expPerMin)}` : st.text}</small>
               </div>
+              {isOnline(c) && (c.shadowOf || c.shadowOff) && (
+                <label className="simple-shadow" title="El orquestador manda al más débil a seguir al más fuerte por todos los mapas">
+                  <input type="checkbox" checked={!c.shadowOff} onChange={(e) => void actions.shadow(c, e.target.checked)} />
+                  {c.shadowOf ? `Sombra de ${c.shadowOf}` : "Seguir al más fuerte"}
+                </label>
+              )}
               {c.game && (
                 <>
                   <div className="simple-hp" title={`Vida ${c.game.hp[0]} / ${c.game.hp[1]}`}><i style={{ width: `${c.game.hp[1] > 0 ? Math.max(0, Math.min(100, (100 * c.game.hp[0]) / c.game.hp[1])) : 0}%` }} /></div>

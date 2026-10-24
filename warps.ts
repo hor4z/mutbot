@@ -4,14 +4,18 @@ import { waitFor } from './connection';
 import { bot } from './state';
 import { log } from './util';
 
-export type Warp = { index: number; name: string; reqLevel: number; map: number };
+/** `arrival`: dónde deja el warp (medido), para elegir la entrada más cercana a un compañero. */
+export type Warp = { index: number; name: string; reqLevel: number; map: number; arrival?: { x: number; y: number } };
 
 export const WARPS: readonly Warp[] = [
   { index: 2, name: 'Lorencia', reqLevel: 10, map: 0 },
   { index: 1, name: 'Arena', reqLevel: 50, map: 6 },
-  { index: 5, name: 'Devias 2', reqLevel: 20, map: 2 },
-  { index: 6, name: 'Devias 3', reqLevel: 20, map: 2 },
-  { index: 7, name: 'Devias 4', reqLevel: 20, map: 2 },
+  { index: 3, name: 'Noria', reqLevel: 10, map: 3 },
+  { index: 5, name: 'Devias 2', reqLevel: 20, map: 2, arrival: { x: 24, y: 25 } },
+  { index: 6, name: 'Devias 3', reqLevel: 20, map: 2, arrival: { x: 226, y: 228 } },
+  { index: 7, name: 'Devias 4', reqLevel: 20, map: 2, arrival: { x: 70, y: 179 } },
+  { index: 11, name: 'Atlans', reqLevel: 70, map: 7 },
+  { index: 21, name: 'Tarkan', reqLevel: 140, map: 8 },
   { index: 24, name: 'Arena 2', reqLevel: 100, map: 83 },
   { index: 25, name: 'Arena 3', reqLevel: 200, map: 84 },
   { index: 26, name: 'Arena 4', reqLevel: 300, map: 85 },

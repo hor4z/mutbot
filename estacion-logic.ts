@@ -117,6 +117,8 @@ export type StationRequest =
   | { action: 'connect'; char: string; routine: Routine }
   | { action: 'disconnect'; char: string }
   | { action: 'routine'; char: string; routine: Routine }
+  // Sombra: el orquestador manda (o no) a este personaje a seguir al más fuerte.
+  | { action: 'shadow'; char: string; on: boolean }
   ;
 
 
@@ -126,6 +128,7 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
+  if (r.action === 'shadow') return keys.length === 3 && typeof r.on === 'boolean' ? { action: 'shadow', char: r.char, on: r.on } : null;
   if (r.action === 'connect' || r.action === 'routine') {
     if (keys.length !== 3 || !isRoutine(r.routine)) return null;
     return { action: r.action, char: r.char, routine: r.routine };

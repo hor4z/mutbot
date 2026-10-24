@@ -53,3 +53,5 @@
 .simple-msg.good time { color: #4cd18a; opacity: 1; }
 .simple-msg.warn time { color: #e6b450; opacity: 1; }
 .simple-msg.bad time { color: #ff6b6b; opacity: 1; }
+
+.simple-shadow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; opacity: .85; cursor: pointer; }
