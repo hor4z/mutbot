@@ -100,7 +100,7 @@ export async function postAlta(a: { user: string; char: string; pass: string; cr
   }
 }
 
-export type Actions = Record<"connect" | "disconnect" | "pause" | "resume", (c: Character) => Promise<Result>> & {
+export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;
 };
 
@@ -114,6 +114,7 @@ export function useActions(refresh: () => void): Actions {
     return {
       connect: (c) => run({ action: "connect", char: c.key, routine: { kind: "farm" } }),
       disconnect: (c) => run({ action: "disconnect", char: c.key }),
+      retry: (c) => run({ action: "retry", char: c.key }),
       pause: (c) => run({ action: "routine", char: c.key, routine: { kind: "pause" } }),
       resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
       shadow: (c, on) => run({ action: "shadow", char: c.key, on }),

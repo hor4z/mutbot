@@ -356,6 +356,22 @@ function disconnect(s: Slot): { ok: boolean; msg: string } {
   return { ok: true, msg: `desconectando a ${s.cfg.char}` };
 }
 
+/** "Reintentar ahora": solo para un bot que todavía no entró al juego (espera cupo). Corta el intento y lanza otro sin el backoff. */
+async function retryNow(s: Slot): Promise<{ ok: boolean; msg: string }> {
+  syncRunning();
+  if (s.pid != null && s.state && s.state.mode !== 'connecting') return { ok: false, msg: `${s.cfg.char} ya está en el juego: no hace falta reintentar` };
+  if (s.pid != null) {
+    disconnect(s);
+    for (let i = 0; i < 40 && s.pid != null; i++) await Bun.sleep(250);
+    if (s.pid != null) return { ok: false, msg: `no pude cortar el intento de ${s.cfg.char}` };
+  }
+  s.stoppedAt = 0; // nunca abrió sesión en el server: no hay sesión vieja que esperar
+  wanted.add(s.cfg.key);
+  saveWanted();
+  retry.delete(s.cfg.key);
+  return connect(s, s.routine ?? { kind: 'farm' });
+}
+
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
   if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
   if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
@@ -600,6 +616,10 @@ Bun.serve({
       if (r.action === 'shadow') {
         if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
         return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
+      }
+      if (r.action === 'retry') {
+        const res = await retryNow(s);
+        return json(res, res.ok ? 200 : 409);
       }
       if (r.action === 'connect') { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
       if (r.action === 'disconnect') { wanted.delete(s.cfg.key); saveWanted(); }

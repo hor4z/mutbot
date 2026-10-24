@@ -132,7 +132,8 @@ async function session(deadline: number): Promise<LoopResult> {
 }
 
 async function main() {
-  console.log(`\nBot headless contra proxy=${PROXY} connectServer=${CS_HOST}:${CS_PORT}`);
+  // Con el proxy del worker el token va en la ruta (/p/<token>/ws): no se escribe en el log.
+  console.log(`\nBot headless contra proxy=${PROXY.replace(/\/p\/[^/]+\//, '/p/***/')} connectServer=${CS_HOST}:${CS_PORT}`);
   console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
 
   if (WS_PORT_ARG) {

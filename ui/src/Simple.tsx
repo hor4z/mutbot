@@ -112,8 +112,12 @@ function Shell() {
                     {isPaused(c) ? "Reanudar" : "Pausar"}
                   </button>
                 )}
-                <button className={isOnline(c) ? "stop" : "go"} disabled={st.tone === "wait"} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
-                  {isOnline(c) ? "Desconectar" : "Conectar"}
+                {/* Mientras espera cupo ("Conectando…") se puede reintentar ya o dejar de intentar. */}
+                {c.status === "starting" && c.game?.mode === "connecting" && (
+                  <button className="pause" onClick={() => void actions.retry(c)} title="Corta el intento actual y vuelve a probar sin esperar">Reintentar ahora</button>
+                )}
+                <button className={isOnline(c) ? "stop" : "go"} disabled={st.tone === "wait" && c.status !== "starting"} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
+                  {c.status === "starting" ? "Cancelar" : isOnline(c) ? "Desconectar" : "Conectar"}
                 </button>
               </div>
             </div>

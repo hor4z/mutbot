@@ -408,6 +408,8 @@ El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un wor
   (`MUBOT_PROXY` lo activa).
 - **Secretos:** `bun run alta:keys` genera claves y tokens en `~/.mubot/alta/` (0600, no los imprime); `MUBOT_ALTA_URL` va en `.env.alta`
   (git lo ignora). Pasos de despliegue en `workers/edge/README.md`.
+- **Control de la conexión:** mientras un bot espera cupo, la tarjeta ofrece "Cancelar" (deja de intentar y sale de `wanted.json`) y "Reintentar ahora" (`POST /api/do {action:'retry'}`: corta el intento y lanza otro sin el backoff; se niega si el bot ya está en el juego).
+- **Proxy en uso:** se activa arrancando la estación con `MUBOT_PROXY=wss://<worker>/p/$(cat ~/.mubot/alta/proxy-token)/ws`; vale para los bots que se lancen después. `net/socket.ts` (copia del cliente) imprime la URL del WebSocket, así que el token queda en los logs de los bots: limpiarlos o rotar el token. En la prueba del 2026-10-24 un tercer personaje entró por el proxy mientras Hume y Zamu estaban directos: el límite de 2 conexiones parece ser por dirección de origen.
 - **Límite del servidor:** deja 2 conexiones a la vez (`ServerIsFull` al tercero). El panel muestra el motivo en la tarjeta ("Servidor
   lleno: reintento en N s") y no dibuja el mapa de un personaje que todavía no entró al juego.
 
