@@ -22,6 +22,7 @@ import { farmMiddleware, statPower } from './farm-middleware';
 import { ownAreaSkill, ownTargetedSkill } from './protocol097';
 import { GOLDEN_TYPES, isMate } from './state';
 import { askForHelp, helpStep, onHelpRequest, skipHelp } from './help';
+import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
 import { pin } from './intent';
 import { readVault, runEquip } from './vault';
 import { toBytes } from './util';
@@ -37,7 +38,7 @@ import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
 import { doReset, investStatPointsInBackground } from './progress';
 import { SAVE_EVERY_MS, dryAt, maybeChangeSpot, persistLearning, seedRouteFromDb, warpAndWait } from './route';
-import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world } from './state';
+import { bot, expLog, expTracker, hotGrid, isGolden, learned, monsterName, pkGuard, typeStats, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
@@ -248,7 +249,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // Ciego: el server a veces deja de mandar el scope de monstruos, o la sesión queda "fantasma" (monstruos pero
     // ninguna exp). Reconectar lo arregla.
-    const farming = !bot.paused && !bot.resetting && bot.inGameAt > 0 && !pin.has('help');
+    const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0 && !pin.has('help');
     const sinceIn = nowT - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
     if (noExp || nowT - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
@@ -271,7 +272,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       ctx.walkStuck = 0;
       ctx.stuckSince = 0;
-      if (learned.camps.camp) learned.camps.leave(nowT, world.level, 'trabado caminando', true, expLog);
+      if (bot.hunting) { bot.hunting.explorer.reset(); bot.hunting.zonesVisited = new Set(); }
+      else if (learned.camps.camp) learned.camps.leave(nowT, world.level, 'trabado caminando', true, expLog);
       skipHelp();
       if (ctx.stuckStrikes >= 2 && bot.currentSpot && !bot.pendingWarp) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
       continue;
@@ -340,12 +342,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       continue;
     }
-    // Ayuda entre compañeros (help.ts): el débil pide, el fuerte va, invita a party y pelea a su lado.
-    askForHelp();
-    for (const r of newRequests()) {
-      if (r.kind === 'help' || r.kind === 'golden') onHelpRequest(r);
-    }
-    if (await helpStep(ctx)) continue;
     // Órdenes del panel que mueven: leer el baúl / equiparse desde él.
     if (bot.pendingVault) {
       bot.pendingVault = false;
@@ -372,8 +368,18 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const weak = isFreshChar(world.resets, world.stats) || profile.limited;
     const me = weak ? fighterNow() : null;
 
-    // Reset al llegar al nivel (lo más importante para progresar), salvo con un dorado en juego.
-    const goldHold = golden.holding(nowT);
+    // Ayuda entre compañeros (help.ts): el débil pide, el fuerte va, invita a party y pelea a su lado.
+    askForHelp();
+    for (const r of newRequests()) {
+      if (r.kind === 'help') onHelpRequest(r);
+      else if (r.kind === 'golden') onGoldenRequest(r, weak);
+    }
+    if (await helpStep(ctx)) continue;
+    // Cacería de dorados (hunt.ts): arrancar con la invasión o un aviso, cortar, viajar al mapa.
+    if (await huntStep(ctx, weak)) continue;
+
+    // Reset al llegar al nivel, salvo cazando o con un dorado en juego.
+    const goldHold = !!bot.hunting || golden.holding(nowT);
     if (!goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
       if (await doReset()) {
         resets++;
@@ -409,7 +415,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // Elegir / mantener objetivo: un dorado a la vista manda (dragones primero); si no, campamento (camp.ts) por exp/s.
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
-    const gold = golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowT, ctx.target);
+    let gold: ScopedNpc | null = null;
+    if (bot.hunting) {
+      const hp = await huntPick(ctx, unreachable);
+      if (hp.walked) continue;
+      gold = hp.gold;
+      // Cazando no se pelea con comunes: cada golpe frena y lo único que importa es llegar al próximo dorado.
+      if (!gold && ctx.target != null && !isGolden(ctx.npcs.get(ctx.target)!)) ctx.target = null;
+    } else gold = golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowT, ctx.target);
     if (gold && ctx.target !== gold.id) {
       if (!goldAnnounced.has(gold.id)) {
         goldAnnounced.add(gold.id);
@@ -419,7 +432,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       pickTarget(gold);
-    } else if (ctx.target == null) {
+    } else if (ctx.target == null && !bot.hunting) {
       const pick = learned.camps.pick({
         now: nowT, map: world.map, me: { x: world.x, y: world.y }, level: world.level,
         monsters: [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)),
@@ -478,7 +491,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
-    // Sin objetivo. a) Mapa vacío 90 s: otra entrada del tramo.
+    // Sin objetivo. Cazando: al dorado recordado, a una zona o recorrer el mapa.
+    if (bot.hunting && (await huntWander(ctx))) continue;
+    // a) Mapa vacío 90 s: otra entrada del tramo.
     if (explorer.isDry(nowT)) {
       log(`Mapa sin monstruos hace ${EXPLORE.DRY_MAP_MS / 1000} s en ${bot.currentSpot?.name ?? `map ${world.map}`}: busco otro spot.`);
       if (bot.currentSpot) dryAt.set(bot.currentSpot.index, nowT);

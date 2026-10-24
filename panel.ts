@@ -16,6 +16,7 @@ import type { BotMode, EquipPlanView, EventTimer, PanelCommand, PanelState } fro
 import { describeStep, summarizePlan } from './equip-plan';
 import { equipPlanNow } from './vault';
 import { runCommerce, runShops, shopsView } from './commerce';
+import { startHunt, stopHunt } from './hunt';
 import { WARP_SPOTS } from './route';
 import { isFreshChar } from './farming';
 import { GOLDEN_TYPES, bot, expLog, isMate, learned, monsterName, world } from './state';
@@ -28,7 +29,7 @@ export function currentMode(): BotMode {
   if (bot.resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
   if (bot.paused) return 'paused';
-  return 'farm';
+  return bot.hunting ? 'hunt' : 'farm';
 }
 
 // Señales de dorados a la estación (GOLD_URL): cada dorado que ve, con posición; POST con timeout
@@ -58,9 +59,10 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
     case 'resume':
       if (!bot.paused) return { ok: true, msg: 'no estaba en pausa' };
       bot.paused = false;
-      return { ok: true, msg: 'sigo con el farmeo normal' };
+      return { ok: true, msg: bot.hunting ? `sigo cazando en ${bot.hunting.hunt.name}` : 'sigo con el farmeo normal' };
     case 'farm': {
       const was = [pin.current() && `spot fijo (${pin.current()!.name}) liberado`, bot.paused && 'pausa levantada'].filter(Boolean);
+      if (bot.hunting) stopHunt('orden del panel');
       pin.clearAll('orden farm del panel');
       bot.pendingWarp = null;
       bot.paused = false;
@@ -105,8 +107,17 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
     case 'commerce':
       return runCommerce(c.op);
     case 'scout':
-    case 'hunt':
-      return { ok: false, msg: 'la cacería y la exploración automáticas se quitaron: los bots se avisan los dorados y se ayudan solos' };
+      return { ok: false, msg: 'la exploración se quitó: los bots se avisan los dorados que ven' };
+    case 'hunt': {
+      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
+      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
+      const ch = chooseHuntMap({ invasion: bot.invasion, level: world.level, map: c.map });
+      if (!ch.ok) return { ok: false, msg: ch.msg };
+      if (bot.invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
+      bot.paused = false;
+      startHunt(ch.hunt);
+      return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
+    }
   }
 }
 

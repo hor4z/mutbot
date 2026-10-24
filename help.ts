@@ -21,8 +21,6 @@ export const HELP_MARGIN = 60;
 const ASK_EVERY_MS = 90_000;
 /** Sin pedidos nuevos del compañero durante esto, se deja de ayudar. */
 const GIVE_UP_MS = 4 * 60_000;
-/** Un dorado avisado vale este tiempo. */
-const GOLD_HELP_MS = 3 * 60_000;
 const NEAR = 8;
 const FAR = 18;
 const WARP_RETRY_MS = 30_000;
@@ -32,12 +30,11 @@ const WALK_GIVE_UP_MS = 25_000;
 export const power = (level: number, resets?: number | null) => (resets ?? 0) * 1000 + level;
 const myPower = () => power(world.level, world.resets);
 
-/** `place`: ayuda a un punto fijo (un dorado avisado) en vez de a un compañero: sin party y por poco tiempo. */
-type Helping = { place?: { map: number; x: number; y: number }; name: string; lastAt: number; warpTriedAt: number; joined: boolean; invitedAt: number; bestD: number; progressAt: number };
+type Helping = { name: string; lastAt: number; warpTriedAt: number; joined: boolean; invitedAt: number; bestD: number; progressAt: number };
 let helping: Helping | null = null;
 export const helpingWho = () => helping?.name ?? null;
 
-const busy = () => bot.resetting || bot.paused || !bot.inGameAt;
+const busy = () => bot.hunting || bot.resetting || bot.paused || !bot.inGameAt;
 
 /** El débil pide ayuda mientras haya un compañero conectado bastante más fuerte. */
 export function askForHelp() {
@@ -52,7 +49,6 @@ export function askForHelp() {
 
 /** El fuerte contesta un pedido de ayuda. */
 export function onHelpRequest(r: TeamRequest) {
-  if (r.kind === 'golden') return onGoldenRequest(r);
   const them = teammates().find((m) => m.char.toLowerCase() === r.from.toLowerCase());
   if (!them) return;
   if (helping) { if (helping.name.toLowerCase() === r.from.toLowerCase()) helping.lastAt = Date.now(); return; }
@@ -74,14 +70,6 @@ export function skipHelp() {
   if (helping) { helping.bestD = 0; helping.progressAt = 0; }
 }
 
-/** Un compañero vio un dorado: si estoy libre y llego a ese mapa, voy (el loop ataca lo que tenga delante). */
-function onGoldenRequest(r: TeamRequest) {
-  if (helping || busy() || world.level >= RESET_LEVEL || pin.owner() === 'panel') return;
-  if (!WARP_SPOTS.some((s) => s.map === r.map && s.reqLevel <= world.level) && world.map !== r.map) return;
-  helping = { name: r.from, place: { map: r.map, x: r.x, y: r.y }, lastAt: Date.now() - (GIVE_UP_MS - GOLD_HELP_MS), warpTriedAt: 0, joined: false, invitedAt: Infinity, bestD: Infinity, progressAt: Date.now() };
-  decide(`${r.from} avisa un dorado (${r.note}): voy a ayudarlo.`);
-}
-
 function stop(why: string) {
   if (!helping) return;
   decide(`Dejo de ayudar a ${helping.name}: ${why}.`);
@@ -95,7 +83,7 @@ export async function helpStep(ctx: LoopCtx): Promise<boolean> {
   if (!h) return false;
   const now = Date.now();
   const found = teammates().find((m) => m.char.toLowerCase() === h.name.toLowerCase());
-  const them = h.place ?? found;
+  const them = found;
   if (!them) { stop('se desconectó'); return false; }
   if (now - h.lastAt > GIVE_UP_MS) { stop('ya no pide'); return false; }
   if (busy() || world.level >= RESET_LEVEL || pin.owner() === 'panel') { stop('tengo otra cosa que hacer'); return false; }

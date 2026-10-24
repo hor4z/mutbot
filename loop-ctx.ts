@@ -66,6 +66,8 @@ export async function walkTowards(ctx: LoopCtx, x: number, y: number, smooth = f
 export function castOnTheWay(ctx: LoopCtx): boolean {
   const now = Date.now();
   if (now - ctx.lastCastAt < SKILL_PACE_MS) return false;
+  // Cazando no: el skill frena la caminata y lo que importa es llegar al dorado.
+  if (bot.hunting) return false;
   // Cazando no: el skill frena la caminata y lo que importa es llegar al dorado (2026-10-23).
   const skill = pickAttackSkill();
   if (!skill || !AREA_SKILLS.has(skill.number)) return false;
