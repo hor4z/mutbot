@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { PanelState } from "../../panel-protocol";
 import { cheb, tileKind, TILE_LABEL } from "./hud-logic";
-import { getTerrain } from "./map-assets";
+import { getTerrain } from "./terrain-client";
 import { KIND_COLOR, css, describe, entities, type Ent, type Info, type Layers } from "./radar-model";
 
 export type TacticalApi = {

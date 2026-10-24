@@ -14,7 +14,6 @@ import { decide, journal, panelLog } from './journal';
 import { type LoopCtx, walkTowards, castOnTheWay } from './loop-ctx';
 import { AUTO_HUNT, HUNT_MAPS, HuntExplorer, RED_HUNT_MS, autoHuntChoice, huntDryOut, invasionKey, mapName, pickHuntMap, shouldStopHunt } from './panel-logic';
 import { WARP_COOLDOWN_MS, warpAndWait, type Warp } from './warps';
-import { AUTO_HUNT_ON } from './config';
 import { GOLDEN_TYPES, bot, isGolden, monsterName, world, type ScopedNpc } from './state';
 import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, log } from './util';
@@ -82,7 +81,7 @@ export function onGoldenRequest(r: TeamRequest, weak: boolean) {
 export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
   const now = Date.now();
   if (!bot.hunting) {
-    if (!AUTO_HUNT_ON || bot.paused || bot.resetting || world.level < minLevelFor(weak)) return false;
+    if (bot.paused || bot.resetting || world.level < minLevelFor(weak)) return false;
     // Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
     if (!weak && bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
       lastRedAt = bot.redDragon.at;

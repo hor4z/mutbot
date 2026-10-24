@@ -10,7 +10,6 @@ import {
   chooseHuntMap, mapName } from './panel-logic';
 import type { BotMode, PanelCommand, PanelState } from './panel-protocol';
 import { startHunt, stopHunt } from './hunt';
-import { isFreshChar } from './farming';
 import { GOLDEN_TYPES, bot, expLog, isMate, monsterName, world } from './state';
 import { chebyshev } from './util';
 import { dragonZones } from './zones';

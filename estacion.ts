@@ -1,4 +1,3 @@
-import { serveRadarAsset } from './radar-assets';
 /**
  * Estación: un panel para conectar y desconectar a los personajes sin navegador y ponerlos en una
  * rutina (farmear, spot fijo, explorar, pausa). Cada personaje es un bot `headless-bot.ts` aparte,
@@ -16,13 +15,12 @@ import { serveRadarAsset } from './radar-assets';
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  */
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
-import { isFreshChar } from './farming';
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
-  CHAR_CLASSES, parseEnvFile, type NewCharRequest,
+  parseEnvFile,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
@@ -32,7 +30,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 import { classFamily } from './farming';
 import { isSafeZone, walkableFor } from './terrain';
 import { mapName } from './panel-logic';
-import type { EventTimer, PanelServerMessage, PanelState } from './panel-protocol';
+import type { PanelServerMessage, PanelState } from './panel-protocol';
 
 const ROOT = import.meta.dir;
 const PORT = Number(process.env.ESTACION_PORT ?? 8787);
@@ -308,7 +306,6 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
   // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
   env.MUBOT_PASS = pass;
-  if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
   const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
@@ -352,92 +349,6 @@ function disconnect(s: Slot): { ok: boolean; msg: string } {
   return { ok: true, msg: `desconectando a ${s.cfg.char}` };
 }
 
-// --- Personaje nuevo -------------------------------------------------------------------------
-// Registro de cuentas del server: el mismo endpoint que el formulario "Crear cuenta" del cliente web
-// (su perfil no trae dominio propio, así que usa `/api/register` del mismo host, como el ranking).
-const REGISTER_URL = process.env.MUBOT_REGISTER_URL ?? `https://${new URL(SERVER.proxy).host}/api/register`;
-
-/**
- * Registra la cuenta (salvo que ya exista), guarda cuenta y personaje en la base y lo conecta en
- * pausa: el bot crea el personaje al entrar (MUBOT_CREATE_CLASS). La clave no se loguea ni vuelve
- * al navegador.
- */
-async function createChar(r: NewCharRequest): Promise<{ ok: boolean; msg: string }> {
-  if (slots.has(r.char.toLowerCase())) return { ok: false, msg: `ya hay un personaje ${r.char} en la estación` };
-  const busy = [...slots.values()].find((x) => x.pid != null && x.cfg.user.toLowerCase() === r.user.toLowerCase());
-  if (busy) return { ok: false, msg: `la cuenta ${r.user} está jugando con ${busy.cfg.char}: desconectalo primero` };
-  if (!r.existing) {
-    try {
-      const res = await fetch(REGISTER_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: r.user, password: r.pass }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      const j = (await res.json().catch(() => ({}))) as { code?: string; error?: string };
-      if (!res.ok) {
-        const why = j.code === 'taken' ? 'esa cuenta ya existe (si es tuya, marcá "ya tengo la cuenta")'
-          : j.code === 'throttled' ? 'el server frenó los registros por un rato: probá en unos minutos'
-          : (j.error ?? `HTTP ${res.status}`);
-        say(`registro de ${r.user}: ${why}`);
-        return { ok: false, msg: `No se pudo crear la cuenta: ${why}` };
-      }
-      say(`cuenta ${r.user} registrada`);
-    } catch {
-      return { ok: false, msg: 'No se pudo crear la cuenta: el registro del server no contesta' };
-    }
-  }
-  const err = db.addChar(r.user, r.pass, r.char, r.cls);
-  if (err) return { ok: false, msg: r.existing ? err : `Cuenta creada, pero no guardé el personaje: ${err}` };
-  refreshSlots();
-  const s = slots.get(r.char.toLowerCase());
-  if (!s) return { ok: false, msg: `guardé a ${r.char} pero no lo encuentro en la base` };
-  say(`personaje ${r.char} (${r.cls ? CHAR_CLASSES[r.cls].label : 'ya existente'}) en la cuenta ${r.user}`);
-  const c = connect(s, { kind: 'pause' });
-  const what = r.cls ? 'el bot lo crea al entrar y lo deja en pausa' : 'entra con el personaje que ya tenés y queda en pausa';
-  return { ok: c.ok, msg: c.ok ? `${r.existing ? 'Guardado' : 'Cuenta creada'}. Conectando a ${r.char}: ${what}.` : c.msg };
-}
-
-/**
- * Personajes de una cuenta, preguntándole al server: lanza el bot con --list-chars (entra, lista y
- * sale; no elige personaje ni entra al mundo). Uno por vez. La clave va por MUBOT_PASS.
- */
-let probing = false;
-async function probeAccount(user: string, pass: string | null): Promise<{ ok: boolean; msg: string; chars?: { name: string; level: number }[] }> {
-  if (!pass) return { ok: false, msg: `no tengo la clave de ${user}` };
-  const busy = [...slots.values()].find((x) => x.pid != null && x.cfg.user.toLowerCase() === user.toLowerCase());
-  if (busy) return { ok: false, msg: `la cuenta ${user} está jugando con ${busy.cfg.char}: desconectalo primero` };
-  if (probing) return { ok: false, msg: 'ya estoy consultando otra cuenta, probá en unos segundos' };
-  probing = true;
-  try {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
-    env.MUBOT_PASS = pass;
-    const proc = Bun.spawn([process.execPath, '--env-file=/dev/null', 'run', 'headless-bot.ts', '--list-chars', '--allow-remote',
-      '--proxy', SERVER.proxy, '--cs-host', SERVER.csHost, '--cs-port', String(SERVER.csPort), '--user', user], {
-      cwd: ROOT, env, stdin: 'ignore', stdout: 'pipe', stderr: 'ignore',
-    });
-    const timer = setTimeout(() => proc.kill(), 30_000);
-    const out = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    clearTimeout(timer);
-    const line = out.split('\n').find((l) => l.startsWith('MUBOT_CHARS '));
-    if (code === 0 && line) {
-      const chars = JSON.parse(line.slice('MUBOT_CHARS '.length)) as { name: string; level: number }[];
-      if (db.hasAccount(user)) db.setAccountStatus(user, 'active');
-      return { ok: true, msg: chars.length ? `${user}: ${chars.length} personaje${chars.length === 1 ? '' : 's'}` : `${user} no tiene personajes todavía`, chars };
-    }
-    if (code === 4 && db.hasAccount(user)) db.setAccountStatus(user, 'blocked');
-    const why = code === 3 ? 'la cuenta está abierta en otro lado (¿el navegador?): cerrala y probá de nuevo'
-      : code === 4 ? 'el server tiene la cuenta bloqueada'
-      : code === 5 ? 'cuenta o clave incorrecta'
-      : 'el server no contestó a tiempo';
-    return { ok: false, msg: `No pude ver los personajes de ${user}: ${why}` };
-  } finally {
-    probing = false;
-  }
-}
-
 async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
   if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
   if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
@@ -454,11 +365,11 @@ function view() {
   return [...slots.values()].map((s) => {
     const st = s.state;
     return {
-      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, cls: s.cfg.cls ?? null, lastRoutine: s.cfg.lastRoutine,
+      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
-        mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets, cls: st.char.cls ?? null,
+        mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets,
         map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
         zen: st.char.zen, nearby: st.nearby,
         session: st.session ? { since: st.session.since, kills: st.session.kills, deaths: st.session.deaths, exp: st.session.exp } : null,
@@ -492,7 +403,6 @@ function team() {
   for (const [k, r] of teamRequests) if (now - r.at > TEAM_REQUEST_TTL_MS) teamRequests.delete(k);
   const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
     char: s.cfg.char, level: s.state!.char.level, resets: s.state!.char.resets ?? undefined, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
-    fresh: isFreshChar(s.state!.char.resets, s.state!.char.stats),
   }));
   return { members, requests: [...teamRequests.values()] };
 }
@@ -535,8 +445,6 @@ Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
   async fetch(req) {
-    const visualAsset = await serveRadarAsset(req);
-    if (visualAsset) return visualAsset;
     const url = new URL(req.url);
     if (req.method === 'GET') {
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
@@ -580,16 +488,6 @@ Bun.serve({
       const r = parseStationRequest(raw);
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
       refreshSlots();
-      if (r.action === 'probe') {
-        const res = await probeAccount(r.user, r.pass ?? db.passOfAccount(r.user));
-        return json(res, res.ok ? 200 : 409);
-      }
-      if (r.action === 'create' || r.action === 'add') {
-        const pass = r.action === 'add' ? db.passOfAccount(r.user) : null;
-        if (r.action === 'add' && !pass) return json({ ok: false, msg: `no tengo la cuenta ${r.user} en la base` }, 404);
-        const res = await createChar(r.action === 'add' ? { action: 'create', user: r.user, pass: pass!, char: r.char, cls: r.cls, existing: true } : r);
-        return json(res, res.ok ? 200 : 409);
-      }
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);

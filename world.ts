@@ -18,14 +18,11 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
-import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
+import { CHAR_EXPLICIT, CHAR_NAME, PASSWORD, USERNAME } from './config';
 import { journal } from './journal';
-import { classFamily, isFreshChar } from './farming';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
 import { drops } from './loot';
 import { EventBus } from './net/eventBus';
-import { PARTY_MATES } from './config';
 import { parsePositionFix } from './protocol097';
 import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
@@ -456,7 +453,7 @@ export function trackWorld() {
     const from = world.players.get(id)?.name;
     // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
     // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
-    const mate = (PARTY_MATES && from != null && isMate(from)) || isFreshChar(world.resets, world.stats);
+    const mate = from != null && isMate(from);
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
       sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
@@ -478,16 +475,6 @@ export function watchMoney() {
 // ---------------------------------------------------------------------------
 // Entrada al mundo: login -> lista de personajes -> elegir -> CharacterInformation.
 // ---------------------------------------------------------------------------
-/** Personajes de la cuenta, sin elegir ninguno (--list-chars). */
-export async function listCharacters() {
-  login(USERNAME, PASSWORD);
-  const loginResp = new LoginResponsePacket(await waitFor('LoginResponse'));
-  if (loginResp.Success !== LoginResponseLoginResultEnum.Okay) throw new LoginError(loginResp.Success);
-  const listWaiter = waitFor('CharacterList');
-  requestCharacterList();
-  return parseCharacterList097(await listWaiter).map((c) => ({ name: c.Name, level: c.Level }));
-}
-
 export async function loginAndSelectCharacter() {
   login(USERNAME, PASSWORD);
   const loginBytes = await waitFor('LoginResponse');
@@ -500,30 +487,8 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
-/** El personaje pedido no está en la cuenta, o el server no dejó crearlo (nombre tomado, clase bloqueada, cuenta llena). No se reintenta. */
-export class CreateCharacterError extends Error {}
-
-/**
- * Crea el personaje en la cuenta: `C1 0F F3 01 <nombre 10 bytes> <clase << 2>`, igual que el
- * cliente web (el adaptador del 0.97d no lo reescribe). Contesta F3/01 con el resultado en el
- * byte 4 (1 = creado); éxito y error comparten código, así que llegan los dos como
- * `CharacterCreationSuccessful` (el primero de la tabla). Máximo 5 personajes por cuenta.
- */
-async function createCharacter(name: string, cls: CharClassKey, count: number) {
-  if (count >= 5) throw new CreateCharacterError(`La cuenta ya tiene 5 personajes: no puedo crear a ${name}.`);
-  const p = new Uint8Array(15);
-  p.set([0xc1, 15, 0xf3, 0x01]);
-  for (let i = 0; i < name.length; i++) p[4 + i] = name.charCodeAt(i);
-  p[14] = CHAR_CLASSES[cls].id << 2;
-  log(`${name} no está en la cuenta: lo creo (${CHAR_CLASSES[cls].label}).`);
-  const reply = waitFor(['CharacterCreationSuccessful', 'CharacterCreationFailed']);
-  sendToGS(new DataView(p.buffer));
-  const bytes = toBytes(await reply);
-  if (bytes[4] !== 1) throw new CreateCharacterError(`El server no dejó crear a ${name} (respuesta ${bytes[4]}): nombre tomado o clase bloqueada.`);
-  log(`Personaje ${name} creado.`);
-  journal('decide', `Personaje nuevo: ${name} (${CHAR_CLASSES[cls].label})`);
-  return { SlotIndex: bytes[15] ?? count, Name: name, Level: 1, ClassId: CHAR_CLASSES[cls].id };
-}
+/** El personaje pedido no está en la cuenta. No se reintenta. */
+export class CharNotFoundError extends Error {}
 
 export async function selectCharacter(charListBytes: any) {
   const characters = parseCharacterList097(charListBytes);
@@ -532,9 +497,8 @@ export async function selectCharacter(charListBytes: any) {
   );
 
   let target = characters.find((c: any) => c.Name === CHAR_NAME);
-  if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
   if (!target && CHAR_EXPLICIT && characters.length) {
-    throw new CreateCharacterError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}) y no tengo clase para crearlo.`);
+    throw new CharNotFoundError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}).`);
   }
   target ??= characters[0];
   if (!target) throw new Error('La cuenta no tiene personajes');

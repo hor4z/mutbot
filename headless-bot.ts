@@ -54,7 +54,7 @@
 import { startTeamPolling } from './team';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
-import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, LIST_CHARS, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
+import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
 import { trackPanelPackets } from './events';
@@ -66,7 +66,7 @@ import { Backoff } from './protocol097';
 import { watchLiveness } from './liveness';
 import { bot, world } from './state';
 import { log, sleep } from './util';
-import { CreateCharacterError, listCharacters, loginAndSelectCharacter, trackWorld } from './world';
+import { CharNotFoundError, loginAndSelectCharacter, trackWorld } from './world';
 import { startStatusServer } from './ws-server';
 
 // ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ const EXIT_IN_USE = 3;
 // Login rechazado sin arreglo reintentando: 4 = cuenta bloqueada, 5 = clave, cuenta o versión mal.
 const EXIT_BLOCKED = 4;
 const EXIT_LOGIN_REFUSED = 5;
-// No se pudo crear el personaje nuevo (MUBOT_CREATE_CLASS): la estación lo muestra.
+// El personaje no está en la cuenta: la estación lo muestra.
 const EXIT_CREATE_FAILED = 6;
 
 // Tras una sesión trabada (ciego), esto antes de volver a entrar.
@@ -131,31 +131,7 @@ async function session(deadline: number): Promise<LoopResult> {
   return autonomousLoop(deadline);
 }
 
-/**
- * --list-chars: entra, imprime `MUBOT_CHARS <json>` con los personajes de la cuenta y sale (0). La
- * estación lo usa para mostrar los personajes de una cuenta que ya existe. Login rechazado: 3
- * (conectada en otro lado), 4 (bloqueada) o 5 (clave/cuenta).
- */
-async function listAndExit(): Promise<never> {
-  let code = 0;
-  try {
-    await connectToConnectServer();
-    const { ip, port } = await getGameServerAddress();
-    await connectToGameServer(ip, port);
-    console.log(`MUBOT_CHARS ${JSON.stringify(await listCharacters())}`);
-  } catch (e) {
-    const r = e instanceof LoginError ? e.result : -1;
-    code = r === LoginResponseLoginResultEnum.AccountAlreadyConnected ? EXIT_IN_USE
-      : r === LoginResponseLoginResultEnum.AccountBlocked ? EXIT_BLOCKED
-      : e instanceof LoginError && FATAL_LOGIN.has(r) ? EXIT_LOGIN_REFUSED : 1;
-    console.error(`No pude leer los personajes: ${(e as Error).message}`);
-  }
-  closeSockets();
-  process.exit(code);
-}
-
 async function main() {
-  if (LIST_CHARS) await listAndExit();
   console.log(`\nBot headless contra proxy=${PROXY} connectServer=${CS_HOST}:${CS_PORT}`);
   console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
 
@@ -190,7 +166,7 @@ async function main() {
       const r = await session(deadline);
       for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
     } catch (e) {
-      if (e instanceof CreateCharacterError) {
+      if (e instanceof CharNotFoundError) {
         console.error(`${e.message} No reintento.`);
         closeSockets();
         process.exit(EXIT_CREATE_FAILED);

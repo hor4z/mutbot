@@ -2,10 +2,10 @@
  * Progreso del personaje: repartir los puntos de atributo con /add y el /reset encadenado
  * (ver AGENTS.md, "Reset y stats" y "Reset encadenado").
  */
-import { BUILD_ARG, BUILD_WEIGHTS, CHAR_NAME, CHAT_PACE_MS, MAX_STAT, STAT_BATCH_MIN, type StatName } from './config';
+import { CHAR_NAME, CHAT_PACE_MS, STAT_BATCH_MIN, type StatName } from './config';
 import { requestCharacterList, waitFor } from './connection';
 import { sayChat } from './actions';
-import { capStats, planStats, classFamily, isFreshChar, planFreshStats } from './farming';
+import { capStats, planStats, planByClass, classFamily } from './farming';
 import { journal } from './journal';
 import { warp, warpAndWait } from './warps';
 import { bot, world } from './state';
@@ -38,9 +38,7 @@ export function resetStatTracking() {
 export async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   const family = classFamily(world.classId);
-  // Personaje nuevo: reparte apenas tiene puntos (no espera a juntar STAT_BATCH_MIN).
-  const fresh = !BUILD_ARG && family != null && isFreshChar(world.resets, world.stats);
-  if (points <= 0 || (!force && !fresh && points < STAT_BATCH_MIN)) return 0;
+  if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
   if (!force && Date.now() < statOffUntil) return 0;
   // Si subió de nivel desde el reparto, los puntos que hay son nuevos (no es que el server no lo tomó):
   // a un personaje nuevo que sube varios niveles por minuto lo frenaba 15 min sin repartir.
@@ -50,26 +48,12 @@ export async function investStatPoints(force = false): Promise<number> {
     log(`Stats: el server no tomó el reparto (siguen ${points} puntos libres; ¿stats en el tope?): no reparto por 15 min.`);
     return 0;
   }
-  let plan: Array<[StatName, number]>;
-  if (fresh) {
-    const capped = capStats(planFreshStats(points, family!), world.stats);
-    plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
-    if (!plan.length) return 0;
-  } else if (!BUILD_ARG) {
-    // Energía hasta fuerza − 2000, después mitad/mitad; 5% vitalidad. Fuerza y
-    // energía reales vienen de CharacterInformation (al entrar) y se llevan a mano.
-    // Tope de 65535 por stat como el navegador (capStats): lo que no entra va a agilidad y vitalidad.
-    // Todo en el tope: no se reparte (si no, /add rechazado y los puntos no bajan).
-    const capped = capStats(planStats(points, world.stats.str, world.stats.ene), world.stats);
-    plan = (['ene', 'str', 'agi', 'vit'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
-    if (!plan.length) return 0;
-  } else {
-    const active = BUILD_WEIGHTS.filter(([name]) => world.stats[name] < MAX_STAT);
-    const total = active.reduce((acc, [, w]) => acc + w, 0);
-    if (!total) return 0;
-    plan = active.map(([name, w]) => [name, Math.floor((points * w) / total)] as [StatName, number]);
-    plan[0][1] += points - plan.reduce((acc, [, n]) => acc + n, 0);
-  }
+  // DK: energía hasta fuerza − 2000, después mitad/mitad; 5 % vitalidad. Las demás clases, por porcentajes (farming.ts).
+  // Tope de 65535 por stat (capStats): lo que no entra va a agilidad y vitalidad. Todo en el tope: no se reparte.
+  const raw = family === 'knight' || family == null ? planStats(points, world.stats.str, world.stats.ene) : planByClass(points, family);
+  const capped = capStats(raw, world.stats);
+  const plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
+  if (!plan.length) return 0;
   journal('stat', plan.filter(([, n]) => n > 0).map(([name, n]) => `+${n} ${name}`).join(', '), { points, plan: Object.fromEntries(plan) });
   statTry = { points, at: Date.now(), level: world.level };
   let spent = 0;

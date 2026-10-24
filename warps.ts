@@ -1,7 +1,7 @@
 /** Los warps del menú del juego (a los que se puede ir) y el viaje: un warp, esperar el cambio de mapa, anotarlo. */
 import { warpTo } from './actions';
 import { waitFor } from './connection';
-import { bot, pkGuard } from './state';
+import { bot } from './state';
 import { log } from './util';
 
 export type Warp = { index: number; name: string; reqLevel: number; map: number };
@@ -28,7 +28,6 @@ export async function warpAndWait(w: Warp): Promise<boolean> {
   warpTo(w.index);
   bot.lastWarpAt = Date.now();
   const ok = !!(await waiter);
-  pkGuard.onWarp(ok, Date.now());
   if (ok) bot.currentSpot = w;
   else log(`Warp a ${w.name} sin respuesta (¿nivel, zen o PK?).`);
   return ok;

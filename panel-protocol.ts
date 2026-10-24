@@ -15,20 +15,6 @@ export type BotMode = 'farm' | 'hunt' | 'paused' | 'resetting' | 'connecting' | 
 
 export type MapName = string; // "Lorencia", "Devias", "Arena 4", ... (o "mapa N")
 
-export type EventKey = 'devilSquare' | 'bloodCastle' | 'chaosCastle';
-
-/** Respuesta a la pregunta 0x91 (MiniGameOpeningState). */
-export type EventTimer = {
-  key: EventKey;
-  /** minutos para que abra la entrada; 0 = abierta; null = más de 4 h / desconocido */
-  minutes: number | null;
-  /** hora absoluta estimada de apertura (ms epoch), o null */
-  opensAt: number | null;
-  users: number;
-  /** cuándo se recibió la respuesta (ms epoch) */
-  at: number;
-};
-
 /** Paquete propio 0xFD (InvasionMonsters). */
 export type Invasion = {
   status: 'active' | 'defeated' | 'none';
@@ -37,15 +23,6 @@ export type Invasion = {
   at: number;
   /** próxima invasión según el calendario fijo (todas las horas a los :50, 15 min) */
   nextAt: number;
-};
-
-export type CycleRecord = {
-  start: number;
-  /** duración en minutos (null mientras corre) */
-  min: number | null;
-  /** minuto del ciclo en que llegó a cada nivel hito (20, 50, 100, 200, 300, 350, 400) */
-  marks: Record<string, number>;
-  tag?: string | null;
 };
 
 export type PanelState = {
@@ -105,10 +82,7 @@ export const PANEL_COMMANDS = ['pause', 'resume', 'farm', 'hunt'] as const;
 export type PanelServerMessage =
   | { type: 'hello'; botVersion: string; commands: readonly string[] }
   | { type: 'panel-state'; state: PanelState }
-  | { type: 'log'; at: number; text: string }
-  | { type: 'command-result'; id: number; ok: boolean; msg: string }
-  /** una línea de chat (recibida o mandada por el bot) o un aviso del server */
-  | { type: 'chat'; at: number; kind: 'normal' | 'party' | 'guild' | 'whisper' | 'server'; from: string; text: string; mine?: boolean };
+  | { type: 'command-result'; id: number; ok: boolean; msg: string };
 
 // Campos permitidos por orden: una orden con campos de más se rechaza entera.
 const COMMAND_KEYS: Record<(typeof PANEL_COMMANDS)[number], readonly string[]> = {

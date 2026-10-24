@@ -1,7 +1,7 @@
 /**
  * Lo que el bot mide y reparte, sin estado de red (lógica pura):
  *  - `ExpLog`: exp ganada por segundo; todo "exp/min" del bot sale de acá.
- *  - Reparto de puntos de atributo (`planStats`, `planFreshStats`, `capStats`) y qué es un personaje "nuevo".
+ *  - Reparto de puntos de atributo (`planStats` del DK, `planByClass` del resto, `capStats`).
  *  - Qué ítems del piso vale la pena levantar (`pickLoot`).
  */
 
@@ -79,35 +79,24 @@ export function planStats(points: number, str: number, ene: number, p = STATS_PL
 }
 
 // ---------------------------------------------------------------------------
-// Personaje nuevo (sin resets, con pocos puntos): reparte apenas tiene puntos, según la clase. El
-// plan de arriba es para el DK con resets (Twisting Slash, decenas de miles de puntos); un DK recién
-// creado con 28 de fuerza y un Small Axe necesita fuerza para pegar y agilidad para defenderse.
-// Hume (2026-10-12) llegó a nivel 10 con 45 puntos sin repartir porque se esperaba a juntar 200.
+// Reparto por clase. El Dark Knight con Twisting Slash usa `planStats` (abajo, para Hume: energía hasta fuerza−2000 y
+// solo 5 % a vitalidad). Las demás clases reparten por porcentajes: el mago, con ese plan de DK, quedaba con ~3.500 de
+// vida a nivel 350 (Zamu) y moría en cualquier mapa. Los porcentajes son una estimación nuestra, no un dato del juego.
 // ---------------------------------------------------------------------------
-export const FRESH_STATS: Record<'knight' | 'wizard' | 'elf' | 'gladiator', Partial<StatValues>> = {
+export const CLASS_STATS: Record<'knight' | 'wizard' | 'elf' | 'gladiator', Partial<StatValues>> = {
   knight: { str: 0.55, agi: 0.25, vit: 0.2 },
-  wizard: { ene: 0.55, agi: 0.25, vit: 0.2 },
-  elf: { agi: 0.55, str: 0.2, vit: 0.25 },
-  gladiator: { str: 0.45, ene: 0.3, agi: 0.15, vit: 0.1 },
+  wizard: { ene: 0.5, vit: 0.3, agi: 0.2 },
+  elf: { agi: 0.5, vit: 0.3, str: 0.2 },
+  gladiator: { str: 0.4, ene: 0.25, vit: 0.25, agi: 0.1 },
 };
 /** Base de la clase por `classId` del CharacterList (DarkWizard 0, DarkKnight 4, FairyElf 8, MagicGladiator 12; +1/+2 evoluciones). */
-export function classFamily(classId: number | null | undefined): keyof typeof FRESH_STATS | null {
+export function classFamily(classId: number | null | undefined): keyof typeof CLASS_STATS | null {
   if (classId == null) return null;
   return (['wizard', 'knight', 'elf', 'gladiator'] as const)[classId >> 2] ?? null;
 }
-/**
- * ¿Personaje débil (nuevo)? Lo deciden los stats, no los resets: Hume con 1 reset tenía fuerza 121 y el
- * bot lo trataba como a Horaz (energía primero, grupos de 5, spots disputados) (2026-10-17). Los resets
- * solo cuentan mientras el server no mandó los stats (todo en 0).
- */
-export const FRESH_MAX_STATS = 3000;
-export function isFreshChar(resets: number | null | undefined, stats: StatValues): boolean {
-  const total = stats.str + stats.agi + stats.vit + stats.ene;
-  if (total === 0) return !(resets != null && resets > 0);
-  return total < FRESH_MAX_STATS;
-}
-export function planFreshStats(points: number, family: keyof typeof FRESH_STATS): StatValues {
-  const share = FRESH_STATS[family];
+/** Reparte `points` según los porcentajes de la clase. */
+export function planByClass(points: number, family: keyof typeof CLASS_STATS): StatValues {
+  const share = CLASS_STATS[family];
   const out: StatValues = { str: 0, agi: 0, vit: 0, ene: 0 };
   if (!(points > 0)) return out;
   const keys = (['str', 'agi', 'vit', 'ene'] as const).filter((k) => share[k]);

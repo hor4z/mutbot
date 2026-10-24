@@ -11,7 +11,6 @@ import { ExpLog } from './farming';
 import type { Warp } from './warps';
 import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
 import type { Invasion } from './panel-protocol';
-import { PkRecovery } from './recovery';
 import type { StatusServer } from './ws-server';
 import monstersData from './data/monsters.json';
 
@@ -163,10 +162,6 @@ export const bot = {
 
 // Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de exp/min salen de acá.
 export const expLog = new ExpLog(Date.now());
-
-// Auto-recuperación del PK (recovery.ts): la alimentan el chat (avisos del server) y los warps (route.ts);
-// el loop manda /pkclear cuando toca.
-export const pkGuard = new PkRecovery();
 
 // Personajes propios (compañeros): no son rivales (esquina, lados, defensa) y con ellos sí hay party.
 // La estación los pasa en MUBOT_MATES (todos sus personajes); sin eso, Horaz y Melu.

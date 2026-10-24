@@ -6,8 +6,6 @@
  * Cada paso puede cortar el tick con `continue`. Todo a ritmo mínimo seguro (config.ts): no se baja.
  */
 import { askHelp, newRequests, teammates } from './team';
-import { sendServerCommand } from './chat';
-import { PK_RECOVERY } from './recovery';
 import { track, trackEvent } from './telemetry';
 import { closeSockets } from './connection';
 import { ATTACK_PACE_MS, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
@@ -27,7 +25,7 @@ import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
 import { choosePlace, farFrom, fighterNow, isStrong, travelTo, type Place } from './place';
 import { doReset, investStatPointsInBackground } from './progress';
-import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, pkGuard, world, type ScopedNpc } from './state';
+import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
 import { warpAndWait } from './warps';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
@@ -235,21 +233,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(500);
       continue;
     }
-    // Auto-recuperación del PK (recovery.ts): con el aviso del server o varios warps sin respuesta, manda /pkclear.
-    {
-      const act = pkGuard.next(nowT);
-      if (act && 'send' in act) {
-        if (sendServerCommand(act.send, nowT)) {
-          pkGuard.sent(nowT);
-          decide(`PK: mando ${act.send} (intento ${act.tryNo}/${PK_RECOVERY.maxTries}): ${act.why}.`, { tryNo: act.tryNo });
-          trackEvent('pk_clear', act.why, act.tryNo);
-        }
-      } else if (act && 'giveUp' in act) {
-        decide(`PK: ${act.giveUp}.`);
-        trackEvent('pk_clear', act.giveUp, -1);
-      }
-    }
-
     // --- 2. Compañeros y cacería de dorados ------------------------------------------------------------------------
     partyUp();
     const strong = isStrong();

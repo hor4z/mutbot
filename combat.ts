@@ -4,7 +4,7 @@
  * (campamentos, cacería) y corner-step.ts (la esquina).
  */
 import { ConsumeItemRequest075Packet } from './packets';
-import { ATTACK_SKILLS, ATTACK_SKILL_POOL, HEAL_AT_PCT } from './config';
+import { ATTACK_SKILL_POOL, HEAL_AT_PCT } from './config';
 import { sendToGS } from './connection';
 import { sendAreaSkill, sendTargetedSkill } from './actions';
 import { isMate, world, type ItemSlot, type SkillInfo } from './state';
@@ -125,7 +125,7 @@ export function pickAttackSkill(prefer: number | undefined = isMage() && mageNee
   if (preferred) return preferred;
   // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
   // así que no se filtra por nivel.
-  for (const num of ATTACK_SKILLS.length ? ATTACK_SKILLS : isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
+  for (const num of isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
     const known = world.skills.get(num);
     if (known) return known;
   }

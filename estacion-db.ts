@@ -23,7 +23,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isCharClass, type CharClassKey, type CharConfig, type GameServer, type Routine } from './estacion-logic';
+import { type CharConfig, type GameServer, type Routine } from './estacion-logic';
 import { validCharName } from './util';
 
 /** Personajes por cuenta en el 0.97d. */
@@ -115,7 +115,6 @@ export class EstacionDb {
         WHERE a.server_id = ? ORDER BY c.name`,
     ).all(this.serverId).map((r) => ({
       key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name,
-      ...(isCharClass(r.class) ? { cls: r.class } : {}),
       status: r.status, lastRoutine: parseRoutine(r.last_routine),
     }));
   }
@@ -127,11 +126,8 @@ export class EstacionDb {
     ).get(char, this.serverId)?.password ?? null;
   }
 
-  /**
-   * Suma un personaje a una cuenta (la crea si no está). Devuelve el motivo si no se puede.
-   * `cls` null = un personaje que ya existe en el server (importado de un `.env`).
-   */
-  addChar(user: string, pass: string, name: string, cls: CharClassKey | null, envFile: string | null = null): string | null {
+  /** Suma un personaje que ya existe en el server a una cuenta (la crea si no está). Devuelve el motivo si no se puede. */
+  addChar(user: string, pass: string, name: string, envFile: string | null = null): string | null {
     if (!validCharName(name)) return `nombre inválido: ${name}`;
     return this.db.transaction((): string | null => {
       if (this.db.query('SELECT 1 FROM characters WHERE name = ?').get(name)) return `ya hay un personaje ${name} en la estación`;
@@ -145,7 +141,7 @@ export class EstacionDb {
       }
       const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
       if (n >= MAX_CHARS_PER_ACCOUNT) return `${acc.username} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
-      this.db.query('INSERT INTO characters (account_id, name, class, env_file) VALUES (?, ?, ?, ?)').run(acc.id, name, cls, envFile);
+      this.db.query('INSERT INTO characters (account_id, name, env_file) VALUES (?, ?, ?)').run(acc.id, name, envFile);
       return null;
     })();
   }
@@ -158,20 +154,12 @@ export class EstacionDb {
     const out: string[] = [];
     for (const e of list) {
       if (this.db.query('SELECT 1 FROM characters WHERE name = ?').get(e.char)) continue;
-      if (!this.addChar(e.user, e.pass, e.char, null, e.envFile)) out.push(e.char);
+      if (!this.addChar(e.user, e.pass, e.char, e.envFile)) out.push(e.char);
     }
     return out;
   }
 
-  hasAccount(user: string): boolean {
-    return !!this.db.query('SELECT 1 FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
-  }
-
   /** Clave guardada de una cuenta (para sumarle personajes sin volver a pedirla). */
-  passOfAccount(user: string): string | null {
-    return this.db.query<{ password: string }, [number, string]>('SELECT password FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user)?.password ?? null;
-  }
-
   setAccountStatus(user: string, status: 'active' | 'blocked') {
     this.db.query("UPDATE accounts SET status = ?, updated_at = datetime('now') WHERE server_id = ? AND username = ?").run(status, this.serverId, user);
   }

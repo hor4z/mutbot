@@ -6,7 +6,7 @@
  * offline (`panel-tests.ts`): importar el bot lo arranca.
  */
 import itemsData from './data/items.json';
-import type { CycleRecord, EventKey, EventTimer, Invasion, MapName } from './panel-protocol';
+import type { Invasion, MapName } from './panel-protocol';
 
 const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
   raw instanceof Uint8Array ? raw : raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw);
@@ -28,9 +28,6 @@ export const mapName = (n: number): MapName => MAP_NAMES[n] ?? `mapa ${n}`;
 // jugadores, [6] byte bajo de los minutos (solo Chaos Castle: b4<<8 | b6).
 // Minutos 0 = abierto; >= 255 (CC: >= 65535) = más de 4 h / desconocido.
 // ---------------------------------------------------------------------------
-export const EVENT_TYPES: Record<EventKey, number> = { devilSquare: 1, bloodCastle: 2, chaosCastle: 4 };
-export const EVENT_KEYS = Object.keys(EVENT_TYPES) as EventKey[];
-const KEY_BY_TYPE = new Map<number, EventKey>(EVENT_KEYS.map((k) => [EVENT_TYPES[k], k]));
 
 // ---------------------------------------------------------------------------
 // Invasión dorada: paquete propio del server `C1 len FD`.
