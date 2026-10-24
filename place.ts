@@ -62,6 +62,15 @@ function shadowSpotNear(leader: Pos): Pos {
   return shadowSpot;
 }
 
+/**
+ * ¿Sigo a un líder que vale la pena (está en la esquina o cazando)? Entonces no salgo a cazar por mi cuenta: en una invasión
+ * cazo como su sombra, en party y detrás de él (cobro la parte de cada dorado que mata); solo no aguantaría ni un dragón.
+ */
+export function followsLeader(): boolean {
+  const lead = directedLeader();
+  return !!lead && (lead.level >= CORNER.minLevel || lead.mode === 'hunt');
+}
+
 /** El líder baja a buscar a su sombra como mucho una vez cada tanto (le cuesta exp: no está en la esquina). */
 const FETCH_COOLDOWN_MS = 3 * 60_000;
 let fetchedAt = 0;

@@ -15,7 +15,7 @@ import { CORNER, inCorner, nextRoutePoint } from './corner';
 import { GoldenRule } from './golden';
 import { canFarmMonster, canFight } from './power';
 import { partyUp } from './help';
-import { huntPick, huntStep, huntWander, onGoldenRequest } from './hunt';
+import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
 import { decide, journal, panelLog } from './journal';
 import { drops, lootState, lootStep, watchDrops } from './loot';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
@@ -23,7 +23,7 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { choosePlace, farFrom, fighterNow, isStrong, travelTo, type Place } from './place';
+import { choosePlace, farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
 import { warpAndWait } from './warps';
@@ -237,7 +237,9 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     partyUp();
     const strong = isStrong();
     for (const r of drainGold()) onGoldenRequest(r, strong === false);
-    if (strong != null && (await huntStep(ctx, strong === false))) continue;
+    if (bot.hunting && strong === false && followsLeader()) stopHunt('sigo a mi líder');
+    // El débil con un líder que vale la pena no sale a cazar solo: lo sigue (place.ts) y caza como su sombra.
+    if (strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
 
     // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
     const goldHold = !!bot.hunting || golden.holding(nowT);
