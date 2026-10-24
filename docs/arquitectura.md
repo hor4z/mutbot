@@ -21,8 +21,7 @@ interfaz (ui/): lista + mapas en vivo + mensajes        ClickHouse (db/): histor
 | `hunt.ts` | Cacería de dorados: arrancar con la invasión (0xFD) o un aviso, viajar, elegir dorado, recorrer el mapa, encadenar. |
 | `corner.ts` | La esquina de Arena 2 (mejor spot conocido, ~300-550M exp/min): viajar, camino, objetivo dentro del radio. |
 | `help.ts` | Party: el más fuerte invita al compañero cercano. |
-| `team.ts` | Canal con la estación: dónde está cada compañero, avisos de dorados (`askHelp`), `postInsight`. |
-| `intent.ts` | Quién fija el spot (`panel` > `town`) y `requestWarp` (un solo warp pendiente). |
+| `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
 | `route.ts` + `learning.ts` | Ruta fija por tramo de nivel (`maybeChangeSpot`), warps, lo aprendido por personaje (`~/.mubot/learning.json`). |
 | `farm-middleware.ts` + `power.ts` | Modelo de poder: ¿puede este personaje con este monstruo / mapa? Decide si es "limitado" y qué mapa le sirve. |
 | `camp.ts`, `farming.ts`, `explore.ts` | Objetivo por exp/segundo, campamentos aprendidos, exploración del mapa vacío. |
@@ -59,10 +58,25 @@ En orden; cada paso puede cortar el tick con `continue`:
 10. **Loot**. 11. **Elegir objetivo**: dorado a la vista (cazando, `huntPick`), esquina, o campamento por exp/s.
 12. **Pelear** (skill de área / golpe) o caminar hacia el objetivo. 13. Sin objetivo: dorado recordado, campamento, explorar.
 
-## 3. Cómo cooperan
-- **Avisos**: al ver un dorado, el bot manda `askHelp('golden', mapa, x, y)`; la estación lo muestra en Mensajes y lo reparte; el compañero libre y capaz va a ese mapa recordando el punto.
-- **Party**: si dos compañeros están a ≤ 20 tiles, el de más poder (`resets × 1000 + nivel`) invita al otro.
-- **No se arrastran**: cada uno sigue su mejor spot. Acompañar al débil costaba ~35× la exp del fuerte (medido).
+## 3. Cómo cooperan (canal directo + orquestador)
+- **Canal directo entre bots (`bus.ts`, UDP en loopback):** cada bot escucha en su puerto (`puerto de su panel + 300`) y manda a los
+  demás su posición 4 veces por segundo y, al instante, cada dorado que ve. Sin servidor en el medio ni consulta periódica
+  (latencia de milisegundos). La estación escucha en el 9090 solo para mostrar los avisos en Mensajes.
+- **Orquestador (en `estacion.ts`, cada segundo):** el más fuerte de los conectados (resets × 1000 + nivel) es el **líder**; los que
+  le llevan al menos 60 de poder son su **sombra**, salvo los que el usuario apague (casilla "Sombra de X"). Manda a cada uno por
+  el canal `{l: a quién sigue, s: quiénes lo siguen}`. El bot obedece mientras la orden llegue (3 s); si deja de llegar, vuelve a
+  decidir solo.
+- **La sombra (`place.ts`):** sigue al líder por todos los mapas, pero solo si él está en la esquina (nivel >= 100) o cazando. Va a
+  la entrada de su mapa más cercana a él; se para a ~7 tiles, en el lado con menos monstruos, y pelea solo lo que se le acerca.
+  En party cobra parte de cada kill: en la esquina rinde ~200M exp/min contra ~2M solo.
+- **Recogida:** una Arena que la sombra no puede cruzar sola (Deathvim/Phantom/Gaint) la hace esperar en la entrada; el líder baja a
+  buscarla (como mucho cada 3 min), se juntan y cruzan juntos.
+- **Dorados:** al ver uno, el bot lo anuncia por el canal; el compañero libre y capaz va a ese mapa (`hunt.ts`).
+- **Party:** el de más poder invita al compañero que tiene cerca (`help.ts`).
+- **Mantener vivos (`keepAlive`, la estación):** los personajes "deseados" (los que conectó el usuario) se reconectan solos si caen
+  (30 s, 1 min, 2 min... hasta 10) y se reinician si pasan 10 min sin sumar exp ni moverse.
+- **Datos:** `bun --env-file=.env.db scripts/report.ts [minutos]` resume niveles, resets, exp/min por mapa (en party o solo), muertes y
+  dorados. `bun run scripts/watch.ts` muestra la flota en consola cada 5 s.
 
 ## 4. Decisiones que importan (y por qué)
 - **Esquina de Arena 2**: ~300-550M exp/min contra ~15M en Devias y ~50M en Arena 3/4. Solo la usa quien `farmMiddleware` deja (`profile.corner`).
