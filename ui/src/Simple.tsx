@@ -6,6 +6,8 @@
 import { ToastProvider, isOnline, isPaused, useActions, useStationData, type Character } from "./station-data";
 import "./simple.css";
 
+// Personajes que no se muestran aunque la cuenta esté activa (el server ya no deja conectar 3 a la vez).
+const HIDDEN = new Set(["mortael"]);
 const fmtExp = (n: number) => (n >= 1e6 ? `${Math.round(n / 1e6)}M/min` : n >= 1e3 ? `${Math.round(n / 1e3)}k/min` : "0");
 const hhmm = (t: number) => new Date(t).toTimeString().slice(0, 8);
 
@@ -28,7 +30,7 @@ function Invasion({ inv, now }: { inv: NonNullable<ReturnType<typeof useStationD
 function Shell() {
   const { data, loaded, error, refresh } = useStationData();
   const actions = useActions(refresh);
-  const chars = data.chars.filter((c) => c.account !== "blocked");
+  const chars = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
   const online = chars.filter((c) => isOnline(c) && c.panel);
   // Sin los avisos de subida de nivel: tapaban los dorados, los pedidos y las muertes.
   const msgs = data.alerts.filter((a) => a.kind !== "level").sort((a, b) => b.at - a.at).slice(0, 60);
