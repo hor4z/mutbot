@@ -3,6 +3,7 @@
  * entre ellos (dorados vistos, pedidos de ayuda, muertes). Los personajes con la cuenta bloqueada (baneados) no se
  * muestran. Cada mapa es el radar del propio bot (`/panel?mapa` en su puerto): no repite lógica.
  */
+import type { Alert } from "../../estacion-logic";
 import { isOnline, isPaused, useActions, useStationData, type Character } from "./station-data";
 import "./simple.css";
 
@@ -32,8 +33,10 @@ function Shell() {
   const actions = useActions(refresh);
   const chars = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
   const online = chars.filter((c) => isOnline(c) && c.panel);
-  // Sin los avisos de subida de nivel: tapaban los dorados, los pedidos y las muertes.
-  const msgs = data.alerts.filter((a) => a.kind !== "level").sort((a, b) => b.at - a.at).slice(0, 60);
+  // Las subidas de nivel tapaban lo importante: de ellas queda solo la última de cada personaje.
+  const lastLevel = new Map<string, Alert>();
+  for (const a of data.alerts) if (a.kind === "level" && a.char && (lastLevel.get(a.char)?.at ?? 0) < a.at) lastLevel.set(a.char, a);
+  const msgs = [...data.alerts.filter((a) => a.kind !== "level"), ...lastLevel.values()].sort((a, b) => b.at - a.at).slice(0, 60);
 
   return (
     <div className="simple">
