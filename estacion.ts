@@ -19,7 +19,7 @@ import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, TEAM_REQUEST_TTL_MS, parseTeamRequest, type TeamRequest, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   parseEnvFile,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
@@ -303,7 +303,9 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
-  env.MUBOT_TEAM_URL = `http://127.0.0.1:${PORT}/api/team`;
+  // Canal directo entre bots (bus.ts, UDP): su puerto y los de todos los demás, más el de la estación (que solo escucha).
+  env.MUBOT_BUS_PORT = String(busPort(s));
+  env.MUBOT_BUS_PEERS = [...[...slots.values()].filter((x) => x !== s).map(busPort), BUS_STATION_PORT].join(',');
   // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
   env.MUBOT_PASS = pass;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
@@ -396,18 +398,32 @@ function tail(path: string, lines: number, maxBytes = 64 * 1024): string {
 }
 
 
-// Equipo: pedidos de ayuda vigentes (uno por personaje y tipo, vencen a los 2 min).
-const teamRequests = new Map<string, TeamRequest>();
-function team() {
-  const now = Date.now();
-  for (const [k, r] of teamRequests) if (now - r.at > TEAM_REQUEST_TTL_MS) teamRequests.delete(k);
-  const members = [...slots.values()].filter((s) => s.state && s.pid != null).map((s) => ({
-    char: s.cfg.char, level: s.state!.char.level, resets: s.state!.char.resets ?? undefined, map: s.state!.where.map, x: s.state!.where.x, y: s.state!.where.y, mode: s.state!.mode,
-  }));
-  return { members, requests: [...teamRequests.values()] };
-}
+// Canal directo entre bots (bus.ts): cada bot tiene su puerto UDP (el de su panel + 300) y la estación escucha en el suyo para
+// mostrar los avisos de dorados en Mensajes. Los bots se hablan entre sí sin pasar por acá.
+const BUS_STATION_PORT = 9090;
+const busPort = (s: Slot) => s.port + 300;
+const goldShown = new Map<string, number>();
 
 const addAlert = (a: Omit<Alert, 'id'>) => pushAlert(alerts, a);
+
+// Oyente del canal de los bots: un dorado avisado sale en Mensajes (una vez por minuto por dorado y personaje).
+void Bun.udpSocket({
+  hostname: '127.0.0.1',
+  port: BUS_STATION_PORT,
+  socket: {
+    data(_s, buf) {
+      try {
+        const m = JSON.parse(Buffer.from(buf).toString('utf8')) as { t?: string; c?: string; n?: string; m?: number };
+        if (m.t !== 'g' || typeof m.c !== 'string' || typeof m.n !== 'string') return;
+        const key = `${m.c}:${m.n}`;
+        const now = Date.now();
+        if (now - (goldShown.get(key) ?? 0) < 60_000) return;
+        goldShown.set(key, now);
+        addAlert({ at: now, kind: 'gold', tone: 'good', char: m.c, text: `${m.c} avisa: ${m.n}` });
+      } catch { /* paquete que no es nuestro */ }
+    },
+  },
+}).catch((err) => say('no pude abrir el canal de los bots:', (err as Error).message));
 
 /** Mira a todos los personajes y anota lo que cambió (muertes, bloqueos, bolsa llena, trabados) y las invasiones. */
 // Hasta qué decisión de cada bot ya pasó a los mensajes.
@@ -465,31 +481,12 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
-      // Equipo: dónde está cada personaje y los pedidos de ayuda vigentes (los bots lo consultan).
-      if (url.pathname === '/api/team') return json(team());
       if (url.pathname === '/api/state') return json({
         chars: view(), alerts, invasion: invasion(), now: Date.now(),
       });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       return new Response('No encontrado.', { status: 404 });
-    }
-    if (url.pathname === '/api/team' && req.method === 'POST') {
-      // Solo los bots (sin Origin): ninguna página del navegador pide ayuda en su nombre.
-      if (req.headers.get('origin')) return json({ ok: false, msg: 'origen no permitido' }, 403);
-      const body = await req.text();
-      if (body.length > 1024) return json({ ok: false }, 413);
-      let raw: unknown;
-      try { raw = JSON.parse(body); } catch { return json({ ok: false }, 400); }
-      const r = parseTeamRequest(raw, Date.now());
-      if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
-      const prev = teamRequests.get(`${r.from}:${r.kind}`);
-      teamRequests.set(`${r.from}:${r.kind}`, r);
-      // Al feed de mensajes de la interfaz (una vez por minuto por pedido).
-      if (!prev || r.at - prev.at > 60_000)
-        addAlert({ at: r.at, kind: r.kind === 'golden' ? 'gold' : 'status', tone: r.kind === 'golden' ? 'good' : 'info', char: r.from, text: r.kind === 'golden' ? `${r.from} avisa: ${r.note}` : `${r.from} pide ayuda (${r.note})` });
-      say(`${r.from} pide ayuda (${r.kind}): ${r.note}`);
-      return json({ ok: true });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.

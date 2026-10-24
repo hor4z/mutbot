@@ -8,7 +8,7 @@ import { sendToGS } from './connection';
 import { decide } from './journal';
 import { buildPartyInvite } from './protocol097';
 import { bot, world } from './state';
-import { teammates } from './team';
+import { teammates } from './bus';
 import { dist } from './util';
 
 const NEAR = 20;

@@ -5,7 +5,7 @@
  *   5. loot;  6. pegarle a un dorado a la vista o, si no hay, a lo más cercano dentro del lugar.
  * Cada paso puede cortar el tick con `continue`. Todo a ritmo mínimo seguro (config.ts): no se baja.
  */
-import { askHelp, newRequests, teammates } from './team';
+import { announceGold, drainGold, teammates } from './bus';
 import { track, trackEvent } from './telemetry';
 import { closeSockets } from './connection';
 import { ATTACK_PACE_MS, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
@@ -236,7 +236,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // --- 2. Compañeros y cacería de dorados ------------------------------------------------------------------------
     partyUp();
     const strong = isStrong();
-    for (const r of newRequests()) onGoldenRequest(r, strong === false);
+    for (const r of drainGold()) onGoldenRequest(r, strong === false);
     if (strong != null && (await huntStep(ctx, strong === false))) continue;
 
     // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
@@ -301,7 +301,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         goldAnnounced.add(gold.id);
         decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
         // Avisar a los compañeros: si pueden, vienen (hunt.ts).
-        if (teammates().length && askHelp('golden', world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`))
+        if (teammates().length && announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`))
           decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       pickTarget(gold);

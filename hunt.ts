@@ -1,12 +1,12 @@
 /**
  * Cacería de dorados: lo más importante del bot. Una invasión dorada (0xFD) con vivos en un mapa al alcance manda al bot
  * ahí (`autoHuntChoice`); al irse los dorados encadena al mejor mapa que quede (`pickHuntMap`, con los datos de la base);
- * un dorado que ve un compañero (`askHelp('golden')`) también lo manda. Cazando solo se pega a dorados (dragones primero,
+ * un dorado que ve un compañero (`announceGold`, bus.ts) también lo manda. Cazando solo se pega a dorados (dragones primero,
  * `stickyGolden`); sin dorado a la vista va al último visto, a las zonas de dragones de la base o recorre el mapa en celdas.
  * Lo llama farm-loop.ts en cuatro puntos: `huntStep` (arrancar, cortar, viajar), `huntPick` (qué pegar), `huntWander`
  * (a dónde ir sin objetivo) y `onGoldenRequest` (aviso de un compañero).
  */
-import { askHelp, type TeamRequest } from './team';
+import { announceGold, type GoldNotice } from './bus';
 import { trackEvent } from './telemetry';
 import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES, stickyGolden } from './golden';
@@ -62,7 +62,7 @@ export function startHunt(hunt: (typeof HUNT_MAPS)[number], now = Date.now()) {
 }
 
 /** Un compañero vio un dorado: si puedo con ellos y estoy libre, voy a ese mapa recordando dónde estaba. */
-export function onGoldenRequest(r: TeamRequest, weak: boolean) {
+export function onGoldenRequest(r: GoldNotice, weak: boolean) {
   const now = Date.now();
   const spot = { x: r.x, y: r.y, type: 0, at: now };
   if (bot.hunting && bot.hunting.hunt.map === r.map) {
@@ -170,7 +170,7 @@ export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boo
       if (!isGolden(n)) continue;
       h.lastSeenAt = now;
       if (!spots.has(n.id)) {
-        askHelp('golden', world.map, n.x, n.y, monsterName(n.type), SHARE_MS);
+        announceGold(world.map, n.x, n.y, monsterName(n.type), SHARE_MS);
         trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
       }
       spots.set(n.id, { x: n.x, y: n.y, type: n.type, at: now });

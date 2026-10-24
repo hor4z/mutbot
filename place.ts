@@ -13,7 +13,7 @@ import { power } from './help';
 import { canFarmMonster, type Fighter } from './power';
 import { classFamily } from './farming';
 import { bot, world } from './state';
-import { teammates } from './team';
+import { teammates } from './bus';
 import { dist, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
