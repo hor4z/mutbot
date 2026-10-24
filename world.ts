@@ -206,13 +206,8 @@ export function trackWorld() {
 
   EventBus.on('CurrentHealthAndShield', (raw: any) => {
     const p = new CurrentHealthAndShieldPacket(raw);
-    const before = hpTracker.events;
     world.hp = hpTracker.feed(p.Health, world.maxHp);
     world.maxHp = hpTracker.maxFor(world.maxHp);
-    if (hpTracker.events !== before) {
-      log(`HP: la lectura de 16 bits se dio vuelta (${hpTracker.wraps ? 'pasó' : 'volvió abajo'} de 65.535): vida real ≈ ${world.hp}, máximo ≈ ${world.maxHp}.`);
-      trackEvent('hp_wrap', `${p.Health}`, world.hp, world.maxHp);
-    }
   });
 
   EventBus.on('CurrentManaAndAbility', (raw: any) => {

@@ -29,7 +29,7 @@ for (const r of S2C_ROUTES) (routesByCode[r.Code] ??= []).push(r);
 const HEADERS = new Set<number>([0xc1, 0xc2, 0xc3, 0xc4]);
 
 const DEBUG_LOG = false;
-const INFO_LOG = true;
+const INFO_LOG = process.env.MUBOT_PACKET_LOG === '1'; // una línea por paquete: apagado (llenaba el disco); 1 para depurar
 
 const DUMP_CODES = new Set((process.env.DUMP_CODES ?? '').split(',').filter(Boolean).map((h) => parseInt(h, 16)));
 const dumped = new Map<number, number>();
