@@ -369,6 +369,8 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
 
 function disconnect(s: Slot): { ok: boolean; msg: string } {
   syncRunning();
+  // Una conexión diferida pendiente (connect() espera a que el server suelte la sesión vieja) también se cancela.
+  if (s.connectTimer) { clearTimeout(s.connectTimer); s.connectTimer = null; s.pending = null; }
   if (s.pid == null) return { ok: true, msg: `${s.cfg.char} no estaba conectado` };
   try { process.kill(s.pid, 'SIGTERM'); } catch (e) { return { ok: false, msg: `no pude cortarlo: ${(e as Error).message}` }; }
   s.stoppedAt = Date.now();
