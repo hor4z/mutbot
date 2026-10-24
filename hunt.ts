@@ -22,6 +22,8 @@ import { chebyshev, log } from './util';
 import type { Spot } from './learning';
 import { pin } from './intent';
 
+// Nivel mínimo para salir a cazar: el chequeo de poder (`weak`, stats por detrás del nivel) ya frena al recién reseteado.
+const HUNT_MIN_LEVEL = 300;
 // Un dorado visto se recuerda 3 min (para volver tras morir); a los compañeros se les avisa como mucho cada 15 s.
 const SPOT_TTL_MS = 3 * 60_000;
 const SHARE_MS = 15_000;
@@ -78,7 +80,7 @@ export function onGoldenRequest(r: TeamRequest, weak: boolean) {
     decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
     return;
   }
-  if (bot.hunting || bot.resetting || bot.paused || weak || world.level < AUTO_HUNT.minLevel) return;
+  if (bot.hunting || bot.resetting || bot.paused || weak || world.level < HUNT_MIN_LEVEL) return;
   const hm = HUNT_MAPS.find((h) => h.map === r.map);
   if (!hm || world.level < hm.reqLevel) return;
   bot.hunting = newHunt(hm, now, { auto: true, spots: new Map([[-r.at, spot]]) });
@@ -89,7 +91,7 @@ export function onGoldenRequest(r: TeamRequest, weak: boolean) {
 export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
   const now = Date.now();
   if (!bot.hunting) {
-    if (!AUTO_HUNT_ON || weak || bot.paused || bot.resetting || world.level < AUTO_HUNT.minLevel || pin.owner() === 'panel') return false;
+    if (!AUTO_HUNT_ON || weak || bot.paused || bot.resetting || world.level < HUNT_MIN_LEVEL || pin.owner() === 'panel') return false;
     // Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
     if (bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
       lastRedAt = bot.redDragon.at;
@@ -103,7 +105,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
       }
     }
     // Invasión dorada con vivos en un mapa al alcance → a cazar, una vez por invasión.
-    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
+    const ch = autoHuntChoice({ invasion: bot.invasion, level: world.level, minLevel: HUNT_MIN_LEVEL, lastKey: lastAutoHuntKey, dragonMap: freshDragonMap(now), knownMaps: knownMaps(now), ...huntData(now) });
     if (ch?.ok) {
       lastAutoHuntKey = invasionKey(bot.invasion!);
       bot.hunting = newHunt(ch.hunt, now, { auto: true });

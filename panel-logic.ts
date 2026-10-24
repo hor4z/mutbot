@@ -327,13 +327,13 @@ export const AUTO_HUNT = { startAlive: 25, stopAlive: 20, freshMs: 2 * 60_000, n
 /** Clave de la invasión (la hora en la que empezó): una cacería automática por invasión. */
 export const invasionKey = (inv: Invasion) => Math.floor(inv.at / 3_600_000);
 
-export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
+export function autoHuntChoice(inp: { invasion: Invasion | null; level: number; now: number; lastKey: number | null; minLevel?: number; dragonMap?: number | null; knownMaps?: ReadonlySet<number>;
   factor?: (map: number) => number; predictedDragon?: number | null; dragonAt?: number | null }): HuntChoice | null {
   const inv = inp.invasion;
   if (!inv || inv.status !== 'active' || inp.now - inv.at > AUTO_HUNT.freshMs) return null;
   if (inp.lastKey === invasionKey(inv)) return null;
   // Recién reseteado no le gana a un dorado (usuario, 2026-10-23): sigue farmeando hasta el 400.
-  if (inp.level < AUTO_HUNT.minLevel) return null;
+  if (inp.level < (inp.minLevel ?? AUTO_HUNT.minLevel)) return null;
   const ch = pickHuntMap({ invasion: inv, level: inp.level, dragonMap: inp.dragonMap, knownMaps: inp.knownMaps, factor: inp.factor, predictedDragon: inp.predictedDragon, dragonAt: inp.dragonAt, now: inp.now });
   return ch.ok ? ch : null;
 }
