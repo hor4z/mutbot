@@ -11,7 +11,7 @@ import { journal } from './journal';
 import { CROWDED_SPOT_MS, CROWD_FALLBACK, activeDryExclusions, chooseFixedRoute, loadLearning, saveLearningChar, type Spot } from './learning';
 import { pin } from './intent';
 import { isPriorityChar } from './knowledge';
-import { farmMiddleware } from './farm-middleware';
+import { farmMiddleware, statPower } from './farm-middleware';
 import { bot, hotGrid, learned, pkGuard, typeStats, world } from './state';
 import { queryDb } from './telemetry';
 import { log } from './util';
@@ -196,6 +196,9 @@ type SpotSignals = { mapDead?: boolean; crowded?: boolean };
 export async function maybeChangeSpot(sig: SpotSignals = {}): Promise<boolean> {
   const now = Date.now();
   if (now - bot.lastWarpAt < WARP_COOLDOWN_MS || bot.pendingWarp) return false; // un warp pedido ya viaja: no duplicarlo
+  // Sin stats ni vida todavía (primer tick tras entrar al mundo) el chequeo de "personaje limitado" está apagado y la ruta
+  // lo mandaba al tramo de su nivel (Zamu, nivel 353 con 1.300 de vida, a Arena 4: 6 muertes). Se espera a conocerlos.
+  if (!(world.maxHp > 0) || !(statPower({ family: classFamily(world.classId) ?? 'knight', stats: world.stats, maxHp: world.maxHp }) > 0)) return false;
   // Spot fijado por la orden `warp` del panel: la ruta no lo cambia hasta la orden `farm`. Si murió
   // o lo sacaron, vuelve ahí.
   const pinnedSpot = pin.current();

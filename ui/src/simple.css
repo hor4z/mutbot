@@ -31,3 +31,10 @@
 .maponly { height: 100vh; }
 .maponly .radar { height: 100%; }
 @media (max-width: 800px) { .simple { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } }
+
+.simple-btns { display: flex; flex-direction: column; gap: 6px; }
+.simple-row button.pause { background: transparent; color: inherit; border: 1px solid rgba(255,255,255,.2); }
+.simple-hp { grid-column: 1 / -1; height: 5px; border-radius: 3px; background: rgba(255,255,255,.1); overflow: hidden; margin-top: 4px; }
+.simple-hp i { display: block; height: 100%; background: #4cd18a; }
+.simple-inv { font-size: 12.5px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.05); margin-bottom: 4px; }
+.simple-inv.on { background: rgba(230,180,80,.18); border: 1px solid rgba(230,180,80,.5); }

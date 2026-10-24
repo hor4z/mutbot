@@ -3,7 +3,7 @@
  * entre ellos (dorados vistos, pedidos de ayuda, muertes). Los personajes con la cuenta bloqueada (baneados) no se
  * muestran. Cada mapa es el radar del propio bot (`/panel?mapa` en su puerto): no repite lógica.
  */
-import { ToastProvider, isOnline, useActions, useStationData, type Character } from "./station-data";
+import { ToastProvider, isOnline, isPaused, useActions, useStationData, type Character } from "./station-data";
 import "./simple.css";
 
 const fmtExp = (n: number) => (n >= 1e6 ? `${Math.round(n / 1e6)}M/min` : n >= 1e3 ? `${Math.round(n / 1e3)}k/min` : "0");
@@ -15,6 +15,14 @@ function stateOf(c: Character): { text: string; tone: "on" | "wait" | "off" } {
   if (c.status === "stopping") return { text: "Desconectando…", tone: "wait" };
   if (c.status === "in-use") return { text: "Cuenta abierta en otro lado", tone: "off" };
   return { text: "Desconectado", tone: "off" };
+}
+
+function Invasion({ inv, now }: { inv: NonNullable<ReturnType<typeof useStationData>["data"]["invasion"]> | null; now: number }) {
+  if (inv?.status === "active")
+    return <div className="simple-inv on">Invasión: {inv.total} dorados vivos{inv.maps.length ? ` · ${inv.maps.map((m) => `${m.name} ${m.alive}`).join(" · ")}` : ""}</div>;
+  const next = inv?.nextAt ?? 0;
+  const mins = next > now ? Math.ceil((next - now) / 60_000) : null;
+  return <div className="simple-inv">{mins != null ? `Próxima invasión en ${mins} min (a las :50)` : "Sin invasión activa"}</div>;
 }
 
 function Shell() {
@@ -29,6 +37,7 @@ function Shell() {
     <div className="simple">
       <aside className="simple-list">
         <h1>MU / Estación</h1>
+        <Invasion inv={data.invasion} now={data.now || Date.now()} />
         {error && <div className="simple-err">{error}</div>}
         {chars.map((c) => {
           const st = stateOf(c);
@@ -39,10 +48,23 @@ function Shell() {
                 <span className={`simple-dot ${st.tone}`} title={st.text} />
                 <small>{c.game ? `Nv. ${c.game.level} · ${c.game.map} · ${fmtExp(c.game.expPerMin)}` : st.text}</small>
                 {c.game && <small className="simple-doing">{c.game.doing}</small>}
+                {c.game && (
+                  <>
+                    <div className="simple-hp" title={`Vida ${c.game.hp[0]} / ${c.game.hp[1]}`}><i style={{ width: `${c.game.hp[1] > 0 ? Math.max(0, Math.min(100, (100 * c.game.hp[0]) / c.game.hp[1])) : 0}%` }} /></div>
+                    <small>{c.game.resets != null ? `${c.game.resets} resets · ` : ""}{c.game.session ? `${c.game.session.kills} kills · ${c.game.session.deaths} muertes` : ""}</small>
+                  </>
+                )}
               </div>
-              <button className={isOnline(c) ? "stop" : "go"} disabled={st.tone === "wait"} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
-                {isOnline(c) ? "Desconectar" : "Conectar"}
-              </button>
+              <div className="simple-btns">
+                {isOnline(c) && (
+                  <button className="pause" disabled={st.tone === "wait"} onClick={() => void (isPaused(c) ? actions.resume(c) : actions.pause(c))}>
+                    {isPaused(c) ? "Reanudar" : "Pausar"}
+                  </button>
+                )}
+                <button className={isOnline(c) ? "stop" : "go"} disabled={st.tone === "wait"} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
+                  {isOnline(c) ? "Desconectar" : "Conectar"}
+                </button>
+              </div>
             </div>
           );
         })}
