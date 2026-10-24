@@ -1,6 +1,5 @@
 import * as T from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { demoMode, demoTerrain } from "./demo";
 
 // The server's custom arenas use Stadium, as do terrain.ts and the reference client.
 export const mapWorld = (map: number) =>
@@ -351,13 +350,11 @@ export async function loadRealMap(
 }
 
 // Atributos de celdas (256×256) de un mapa: los pide una vez y los comparten el radar 3D y el mapa 2D.
-// En `?demo` salen de un terreno sintético (sin red).
 const terrainCache = new Map<number, Uint8Array | null>();
 export async function getTerrain(map: number, signal?: AbortSignal): Promise<Uint8Array | null> {
   if (terrainCache.has(map)) return terrainCache.get(map)!;
   let out: Uint8Array | null = null;
-  if (demoMode()) out = demoTerrain();
-  else {
+  {
     try {
       const r = await fetch(`/terrain/${map}`, { signal });
       if (r.ok) {

@@ -21,7 +21,7 @@ import { cheb } from "./hud-logic";
 import { counts, css, LAYER_META, loadLayers, saveLayers, type Info, type LayerKey, type Layers } from "./radar-model";
 import { makeRadar, type RadarApi } from "./radar-engine";
 import { Tactical, type TacticalApi } from "./Tactical";
-import { Segments } from "./components";
+import { Segments } from "./Segments";
 
 type View = "3d" | "2d";
 // Alcance en tiles del ancho de la vista 2D para cada preset (el 3D usa su propio encuadre).

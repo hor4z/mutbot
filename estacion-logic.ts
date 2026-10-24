@@ -69,18 +69,16 @@ export type Routine =
   | { kind: 'spot'; warp: number }
   /** cazar dorados (donde haya más vivos según 0xFD) */
   | { kind: 'hunt' }
-  /** explorar sin pelear y publicar lo que se ve (scout.ts) */
-  | { kind: 'scout' }
   | { kind: 'pause' };
 
-export const ROUTINE_KINDS = ['farm', 'spot', 'hunt', 'scout', 'pause'] as const;
+export const ROUTINE_KINDS = ['farm', 'spot', 'hunt', 'pause'] as const;
 
 export function isRoutine(v: unknown): v is Routine {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   const keys = Object.keys(r);
   if (r.kind === 'spot') return keys.every((k) => k === 'kind' || k === 'warp') && Number.isInteger(r.warp) && (r.warp as number) >= 0 && (r.warp as number) < 256;
-  return (r.kind === 'farm' || r.kind === 'hunt' || r.kind === 'scout' || r.kind === 'pause') && keys.length === 1;
+  return (r.kind === 'farm' || r.kind === 'hunt' || r.kind === 'pause') && keys.length === 1;
 }
 
 /** Órdenes del panel que ponen al bot en esa rutina (todas pasan por isPanelCommand). */
@@ -89,7 +87,6 @@ export function routineCommands(r: Routine): PanelCommand[] {
     case 'farm': return [{ cmd: 'farm' }];
     case 'spot': return [{ cmd: 'warp', warp: r.warp }];
     case 'hunt': return [{ cmd: 'hunt' }];
-    case 'scout': return [{ cmd: 'scout' }];
     case 'pause': return [{ cmd: 'pause' }];
   }
 }
@@ -99,7 +96,6 @@ export function routineLabel(r: Routine): string {
     case 'farm': return 'farmear por la ruta';
     case 'spot': return `farmear fijo en el warp ${r.warp}`;
     case 'hunt': return 'cazar dorados';
-    case 'scout': return 'explorar sin pelear y avisar';
     case 'pause': return 'en pausa';
   }
 }
@@ -132,15 +128,7 @@ export type StationRequest =
   | { action: 'add'; user: string; char: string; cls: CharClassKey | null }
   // Personajes de una cuenta del server (el bot entra con --list-chars y sale). Sin `pass`, la de la base.
   | { action: 'probe'; user: string; pass?: string }
-  // Órdenes puntuales al bot (solo las de BOT_ORDERS): calcular el plan de equipo, ejecutarlo, limpiar el PK.
-  | { action: 'bot'; char: string; command: PanelCommand }
   ;
-
-/** Lo único que la estación le reenvía a un bot por /api/do { action: 'bot' } (la interfaz pide confirmación antes de las que mueven o tocan algo). */
-export function isBotOrder(c: unknown): c is PanelCommand {
-  if (!isPanelCommand(c)) return false;
-  return c.cmd === 'equipplan' || c.cmd === 'equip' || (c.cmd === 'say' && c.text === '/pkclear');
-}
 
 /**
  * Personaje nuevo desde la estación: cuenta (se registra en el server salvo `existing`), nombre y
@@ -197,7 +185,6 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   }
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
-  if (r.action === 'bot') return keys.length === 3 && isBotOrder(r.command) ? { action: 'bot', char: r.char, command: r.command } : null;
   if (r.action === 'role') return keys.length === 3 && isRoleAssign(r.role) ? { action: 'role', char: r.char, role: r.role } : null;
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
   if (r.action === 'connect' || r.action === 'routine') {
@@ -244,8 +231,6 @@ export function isRoleAssign(v: unknown): v is RoleAssign {
 export function roleRoutine(a: RoleAssign): Routine {
   switch (a.role) {
     case 'golden': return { kind: 'hunt' };
-    // Explorador: la orden `scout` del bot recorre mapas seguros sin pelear y publica (POST /api/team kind 'scout').
-    case 'explorer': return { kind: 'scout' };
     case 'spot': return { kind: 'spot', warp: a.warp };
     default: return { kind: 'farm' };
   }
@@ -258,50 +243,13 @@ export function roleLabel(a: RoleAssign): string {
 /** Estrategia que corresponde a una rutina vieja (personajes sin rol guardado). */
 export function roleFromRoutine(r: Routine | null): RoleAssign {
   if (r?.kind === 'hunt') return { role: 'golden' };
-  if (r?.kind === 'scout') return { role: 'explorer' };
   if (r?.kind === 'spot') return { role: 'spot', warp: r.warp };
   return { role: 'route' };
 }
 
-// --- Exploración: lo que un explorador publica ------------------------------------------------------
-
-/** Reporte de un explorador sobre un mapa (POST /api/team con kind 'scout'). */
-export type ScoutReport = { from: string; map: number; x: number; y: number; players: number; monsters: number; golds: number; /** tipos de dorado vistos (opcional) */ goldTypes?: string[]; note: string; at: number };
-export const SCOUT_TTL_MS = 10 * 60_000;
-
-/** Valida `{ from, kind: 'scout', map, x, y, players?, monsters?, golds?, note? }`; null si no sirve. */
-export function parseScoutReport(body: unknown, now: number): ScoutReport | null {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-  const b = body as Record<string, unknown>;
-  const from = typeof b.from === 'string' ? b.from.replace(/[^A-Za-z0-9_]/g, '').slice(0, 10) : '';
-  if (!from || b.kind !== 'scout' || !num(b.map, 0, 255) || !num(b.x, 0, 255) || !num(b.y, 0, 255)) return null;
-  const opt = (v: unknown, hi: number) => (v === undefined ? 0 : num(v, 0, hi) ? v : -1);
-  const players = opt(b.players, 999), monsters = opt(b.monsters, 9999), golds = opt(b.golds, 99);
-  if (players < 0 || monsters < 0 || golds < 0) return null;
-  // Tipos de dorado (opcional, aditivo): hasta 8 textos cortos; lo que no sea una lista de textos se ignora.
-  const goldTypes = Array.isArray(b.goldTypes) ? b.goldTypes.filter((t): t is string => typeof t === 'string' && t.length > 0).slice(0, 8).map((t) => t.slice(0, 30)) : [];
-  return { from, map: b.map, x: b.x, y: b.y, players, monsters, golds, ...(goldTypes.length ? { goldTypes } : {}), note: String(b.note ?? '').slice(0, 80), at: now };
-}
-
-/** Guarda el último reporte de cada explorador por mapa (clave from:map). */
-export function applyScout(scouts: Map<string, ScoutReport>, r: ScoutReport) {
-  scouts.set(`${r.from}:${r.map}`, r);
-}
-
-/** Reportes vigentes, los más recientes primero. */
-export function freshScouts(scouts: Map<string, ScoutReport>, now: number): ScoutReport[] {
-  for (const [k, r] of scouts) if (now - r.at > SCOUT_TTL_MS) scouts.delete(k);
-  return [...scouts.values()].sort((a, b) => b.at - a.at);
-}
-
-/** Competencia en el campo: libre (0-1 jugadores), con gente (2-4) o llena (5+). */
-export function scoutHeat(r: Pick<ScoutReport, 'players'>): 'free' | 'busy' | 'crowded' {
-  return r.players <= 1 ? 'free' : r.players <= 4 ? 'busy' : 'crowded';
-}
-
 // --- Alertas de la flota ----------------------------------------------------------------------------
 
-export type AlertKind = 'gold' | 'invasion' | 'death' | 'pk' | 'blocked' | 'bagfull' | 'stuck' | 'status' | 'scout' | 'level';
+export type AlertKind = 'gold' | 'invasion' | 'death' | 'pk' | 'blocked' | 'bagfull' | 'stuck' | 'status' | 'level';
 export type AlertTone = 'info' | 'good' | 'warn' | 'bad';
 export type Alert = { id: number; at: number; kind: AlertKind; tone: AlertTone; char: string | null; text: string };
 export const MAX_ALERTS = 120;
@@ -403,7 +351,7 @@ export function processRunsAccount(cmdline: string[], environ: string[], c: Char
 }
 
 // Sanity: las órdenes de las rutinas tienen que pasar el filtro del bot.
-for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'hunt' }, { kind: 'scout' }, { kind: 'pause' }] as Routine[])
+for (const r of [{ kind: 'farm' }, { kind: 'spot', warp: 26 }, { kind: 'hunt' }, { kind: 'pause' }] as Routine[])
   for (const c of routineCommands(r)) if (!isPanelCommand(c)) throw new Error(`rutina ${r.kind}: orden inválida ${JSON.stringify(c)}`);
 
 /** Tras desconectar desde la estación, cuánto se considera que la sesión vieja puede seguir abierta. */

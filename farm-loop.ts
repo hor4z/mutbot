@@ -25,7 +25,6 @@ import { GOLDEN_TYPES, isMate } from './state';
 import { partyUp } from './help';
 import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
 import { pin } from './intent';
-import { readVault, runEquip } from './vault';
 import { toBytes } from './util';
 import { EXPLORE, Explorer } from './explore';
 import { classFamily, isFreshChar } from './farming';
@@ -350,22 +349,6 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       continue;
     }
-    // Órdenes del panel que mueven: leer el baúl / equiparse desde él.
-    if (bot.pendingVault) {
-      bot.pendingVault = false;
-      panelLog(`Baúl: ${(await readVault()).msg}`);
-      bot.currentSpot = null;
-      ctx.target = null;
-      continue;
-    }
-    if (bot.pendingEquip) {
-      bot.pendingEquip = false;
-      panelLog(`Equipo: ${(await runEquip()).msg}`);
-      bot.currentSpot = null;
-      ctx.target = null;
-      continue;
-    }
-
     const profile = farmMiddleware.profile(fighterNow(), world.level, world.skills.has(41), nowT);
     learned.camps.setPower(statPower(fighterNow()), profile.spot != null);
     const seedKey = `${world.resets}:${Math.floor(world.level / 80)}`;

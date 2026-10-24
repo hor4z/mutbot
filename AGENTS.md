@@ -43,6 +43,8 @@ la sesión vieja del propio bot). Lo pasa la estación.
 
 ## Estructura
 
+La explicación completa (partes, flujo de un tick, cómo se coopera, cómo mejorar un bot) está en **`docs/arquitectura.md`**. Resumen:
+
 El bot es un loop corto (`farm-loop.ts`, ~500 líneas) sobre módulos de protocolo y de decisión pura. Cada bot es un proceso;
 la estación (`estacion.ts`) los lanza y los muestra. Los bots no tienen jefe: farmean por su cuenta y se ayudan por `team.ts`.
 
@@ -84,21 +86,6 @@ nació). `net/`, `packets/` y `data/` son copias de su `src/`:
   nombres de evento son idénticos (varias trampas de abajo dependen de eso).
 - Para regenerar `packets/` hace falta el cliente clonado:
   `MU_SRC=~/self/mu/src bun run extract` (por defecto busca `../mu/src`).
-
-## Diario de acciones
-
-Cada acción de alto nivel (viaje, reset, reparto de puntos, loot, órdenes del panel, cambios de
-modo) pasa por `journal()`: va al panel (`decision`/`history`) y, con `--decision-log`, a un JSONL
-(`appendFile`, no `Bun.write`, que sobrescribía). Ya no hay "capa de decisión" que pida permiso:
-siempre aprobaba y nadie la usaba.
-
-## Lo que aprende y guarda
-
-`~/.mubot/learning.json` (`--learn-file`), por personaje, escritura atómica (tmp + rename) y
-tolerante a archivo corrupto: memoria de campamentos, exp y segundos de kill por tipo de monstruo,
-spots calientes, registro de tramos por ciclo y la referencia de exp/min por tramo del "hambre". Se
-guarda cada ~2 min, al cambiar de spot, al morir y al terminar. Las "samples" del elegidor de spots
-viejo (UCB1, `--free-route`) se ignoran al leer: esa lógica se sacó, la ruta es fija.
 
 ## Farmeo por exp/segundo (`farming.ts`, port del agente web)
 
@@ -162,116 +149,6 @@ aprendido por tipo de monstruo se conservan; el rendimiento por mapa
 exp/s, exp partida, jugadores en scope, ruta de spots con Arena 1-4, reset
 encadenado). La lógica viene del agente web, que sí juega con el usuario, y
 está testeada offline.
-
-## Port del agente web
-
-Lo que el agente web aprendió jugando con el usuario, portado al headless con
-tests offline. **Nada de esto se corrió todavía contra el server desde el
-headless** (la cuenta estaba jugando en el navegador); ver "Qué falta verificar
-en vivo" al final de la sección.
-
-1. **Registro de exp por segundo** (`ExpLog`, `farming.ts`). Los kills grandes
-   llegan partidos en tramos de 65535 (~60 `ExperienceGained` por kill). Un
-   registro por evento con tope fijo cubría ~30 s y toda medición de 1-3 min
-   salía truncada. Ahora hay un bucket por segundo (6 h de tope) y todas las
-   mediciones por ventana salen de ahí y dividen por la ventana REAL cubierta:
-   informe (`SelfReport`), campamentos (exp/min desde que llegó), memoria de
-   campamentos y hambre. `SpotMeter`/`routeScores` (`learning.ts`) y la estadía
-   en el spot (`stayExp`) ya eran sumas acumuladas con su duración real: no
-   truncaban.
-2. **Ruta fija por tramo** (`chooseFixedRoute`, `learning.ts`): Lorencia (warp
-   2) solo < 20; Devias 3/4/2 (6, 7, 5) de 20 a 99; Arena 2 (24) ≥ 100; Arena 3
-   (25) ≥ 200; Arena 4 (26) ≥ 300. Devias 1 (4) nunca; Arena 1 (1) solo como
-   plan B si todas las Devias están llenas de gente (nivel 50-99; una entrada
-   llena no se vuelve a probar en 5 min). Cambia de mapa solo al cruzar un
-   tramo, con el mapa vacío 90 s o por competencia que bajó la exp (campamentos
-   abandonados por gente, o hambre). Si el bot entra al mundo ya parado en el
-   mapa del tramo, lo **adopta sin warpear** (`adopt`); tras morir vuelve a
-   warpear a la misma entrada (`prefer`). Desde el 100 manda la esquina de Arena 2 (`corner.ts`).
-3. **Correa en Devias** (`CampManager.leashFor`): los 4 Devias son el mismo mapa
-   (2). Tras cada `MapChanged075` (y al entrar al mundo) se registra la
-   llegada; en el mapa 2, campamentos, objetivos, spots calientes, memoria y
-   exploración solo a ≤ 25 tiles de ella (las salidas del explorador se ponen
-   alrededor de la llegada, empezando "arriba"). Spot inicial: 12 tiles
-   "arriba" de la llegada (−x, +y). Recién llegado (3 s) no elige campamento,
-   solo pelea a ≤ 6; el loop está bloqueado durante el warp, así que no puede
-   elegir campamento con monstruos del mapa anterior.
-4. **Arenas (83/84/85)**: al llegar va a la "zona de abajo". El headless **no
-   tiene grilla de caminables**: los `.att` de estos mapas custom no están en
-   `~/self/mu/public/game-assets` (solo World1-11, 34, 52), y bajarlos del host
-   es red. Queda `downZone()` portado y testeado (recibe un `isWalkable`) y, como
-   default por mapa (`DOWN_ZONE_DEFAULT`), lo que dio el agente web en vivo:
-   **(91,13)** en Arena 3 y 4; Arena 2 asume lo mismo (SIN VERIFICAR). Para
-   tener la grilla: bajar `EncTerrain83.att`/`84`/`85` del host (game-assets
-   v097d) y parsearlo como `src/common/terrain/parseTerrainAttribute.ts` del
-   cliente (XOR de mapa + BUX, 256×256); con eso `downZone` reemplaza al default.
-5. **Campamentos** (`camp.ts`): elegir un centro (más exp/s a ≤ 10, penalizado
-   0.3 por jugador y por distancia), pelear solo a ≤ 10, quedarse mientras
-   rinda. La vara del mapa es el **promedio móvil** (0.7/0.3) de lo que
-   rindieron sus campamentos, no el máximo. Mudarse si tras 90 s rinde < 50% de
-   la vara, si está vacío 12 s (el reloj corre solo desde que llegó), o por
-   competencia (≥ 3 jugadores 20 s **y** exp < 70% de la vara). Un campamento
-   al que no llega en 60 s (sin contar lo peleado en el camino) se abandona.
-6. **En el camino**: pelea con lo que esté a ≤ 8; si hay ≥ 3 monstruos juntos a
-   ≤ 8, acampa ahí. **Skill de área con cualquier monstruo a ≤ 3**, también
-   caminando (`castCandidate`): respeta `SKILL_PACE_MS` entre casts y no frena
-   la caminata (el paso sale en la misma iteración). Con < 15% de maná no.
-7. **Memoria de campamentos** (`CampMemory`, en `learning.json` → `camps`):
-   posición + exp/min real desde que llegó + nivel + n (EMA 0.6/0.4 si es el
-   mismo a ≤ 4 tiles; estadías < 45 s no cuentan). Al llegar a un mapa va
-   primero al mejor aprendido a ±60 niveles; sin campamento, al mejor conocido
-   a ≤ 40 tiles. Las reglas fijas (cripta (132,200), "arriba", zona de abajo)
-   solo si no conoce nada.
-8. **Curiosidad**: tipos con < 3 kills medidos a ≤ 8 se atacan primero.
-9. **Skill**: Twisting Slash (41) primero en `DEFAULT_ATTACK_SKILLS`; Rageful
-   Blow (42) fuera del pool (el usuario lo descartó: lento).
-10. **Stats** (`planStats`): energía hasta fuerza − 2000, después mitad/mitad;
-    5% vitalidad. Usa fuerza/energía reales de `CharacterInformation`. Se
-    reparte de a 200 puntos (`--stat-batch`). `--build` sigue como override.
-11. **Party**: `PartyRequest` (C1 05 40, id BE en el byte 3) se rechaza siempre
-    con `C1 06 41 00 <id BE>` tras 0.6-1.5 s.
-12. **Loot valioso** (`isValuableDrop`): siempre cajas 14/11 (primero, aunque otra cosa esté hasta 8
-    tiles más cerca), **Cristales 14/31** (la moneda del Mercado del server y del Alquimista) y
-    talismanes 14/7, 14/12 y 14/20; con 12 casillas libres o más, los excelentes (6 bits bajos del byte
-    3 del ItemData; se cristalizan). Las joyas no (no valen nada para comerciar). Con poco lugar avisa
-    "Bolsa casi llena" cada 10 min.
-    El zen, las pociones y el equipo común no (salvo personaje nuevo). Las cajas no se abren: lo hace
-    el usuario. Camina hasta el drop (≤ 12 tiles) y a ≤ 1 pide el pickup cada 0,6 s mientras siga en el
-    piso (8 s; 20 s una caja): el server no deja levantar cajas, excelentes ni cristales los primeros 2 s
-    ("The item is still falling") y los sortea. `ItemDropRemoved` (C2 21) o el ítem agregado lo sacan
-    del registro.
-13. **Registro de tramos por ciclo** (`CycleLog`, en `learning.json` →
-    `cycles`, con el ciclo en curso para retomarlo): minuto al llegar a
-    20/50/100/200/300/350/400. El informe muestra los últimos ciclos y la
-    **proyección resets/día** (1440 / promedio de los últimos 5). Solo cierran
-    los ciclos que llegaron al 400.
-14. **Reconexión** (`main`/`session` en `headless-bot.ts`, `Backoff` en `protocol097.ts`): si se corta
-    la conexión (kick, red, timeout) vuelve a conectar con backoff 5 s → 5 min
-    (vuelve a 5 s tras una sesión > 5 min; ≥ 60 s si la cuenta figura
-    conectada). Nunca dos sesiones: reconecta con la anterior cerrada. Login con
-    contraseña/cuenta/versión inválida = no reintenta. Retoma desde el estado
-    real: elegir personaje → nivel/mapa/puntos de `CharacterInformation` → la
-    ruta adopta el mapa o warpea, y a 400 resetea. Los handlers del EventBus se
-    registran una sola vez y `sendToGS` no manda nada con el socket cerrado.
-15. **Hambre** (`Hunger`, `camp.ts`; apagada en el arranque, ver "Reglas del farmeo"): si en los últimos 45 s la exp/min es < 25%
-    de la referencia del tramo (promedio móvil 0.95/0.05 por tier, a lo sumo una
-    actualización por segundo, sin contar el primer minuto tras un warp; se
-    persiste como `tierRef`) —o < 5M/min sin referencia— y hay ≥ 1 jugador a
-    ≤ 12 tiles, cambia YA de entrada (Devias 3/4/2) o de mapa, sin esperar a las
-    reglas del campamento. Si no hay a dónde (Arenas), al menos cambia de
-    campamento. Pasó en vivo: 2M exp/min con un jugador a 1 tile y el agente no
-    se movía.
-
-**Qué falta verificar en vivo:** que `MapChanged075` llegue tras cada warp con la
-posición de llegada (la correa depende de eso) y qué pasa al respawnear tras
-morir; que `AddCharactersToScope` (layout 0.95d) traiga bien a los jugadores
-(sin eso no hay competencia ni hambre); que el skill de área a 2-3 tiles pegue
-de verdad y que castear y caminar en la misma iteración no dispare el
-anti-cheat; que (91,13) sirva en Arena 2; que levantar a ≤ 1 tile alcance para
-el server; los layouts de `PartyRequest`/`ItemDropRemoved` y el byte de
-excelentes en drops; la reconexión con la sesión vieja todavía abierta del
-lado server; y que el bot no se trabe caminando contra muros hacia un
-campamento sin grilla de caminables (lo corta el plazo de 60 s).
 
 ## Combate: historia de tres bugs
 
@@ -491,22 +368,6 @@ congelado (Hume, 2026-10-12). Ahora actualiza posición/mapa y cuenta como llega
 - Cifrado: el cliente 0.97d tiene **su propio xor32 key**. Con el default de
   season6 el server no descifra el login y lo descarta **en silencio**.
 
-## Economía
-
-El bot **no compra ni vende** (pedido del usuario). Solo lleva el zen para el panel. El código de
-merchants (venta de basura, compra de pociones, catálogo, descubrimiento) se sacó: la venta tenía un
-bucle sin espera con más de 24 ítems y vendía las cajas (grupo 14).
-
-**Comercio (capacidad, no automatismo; detalle y fuentes en `docs/comercio.md`):** el loop sigue sin
-comprar ni vender. Hay órdenes del panel: `shops` (solo lectura: catálogos de NPC y tiendas personales a la
-vista, sin precios en los NPC) y `commerce` (comprar/vender a un NPC, mi tienda, comprar en tienda, trade),
-cada una con `confirm` = `commerceToken(op)` armado por la UI tras un resumen con ítem, cantidad y total, y con
-el bot **en pausa**. Nunca se venden cajas ni Cristales (`neverSell`); el trade sí los pasa (mulas) y nunca
-acepta solo. `commerce-plan.ts` (`planSales`) solo propone. Archivos: `commerce-packets.ts` (bytes, tests en
-`commerce-tests.ts`), `commerce-plan.ts`, `commerce.ts`, `ui/src/Commerce.tsx` (pestaña "Comercio" del panel;
-demo `?demo&view=comercio`). **SIN VERIFICAR EN VIVO**: nada se corrió contra el server; tienda personal y
-trade son layouts de memoria de OpenMU (el hex de lo que llegue queda en las notas del panel).
-
 ## Anti-cheat
 
 `SpeedHackDetectPlugIn`: delay base de ataque 450ms + token bucket de 5.
@@ -519,8 +380,7 @@ vaya más rápido.** El objetivo es saber si el server valida, no hacerlo pasar.
 
 ## Limitaciones y pendientes
 
-Están en **[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)** (estado, lo aprendido y lo que falta
-portar del agente del navegador). Las secciones de arriba sobre combate y protocolo son historia
+Ver `docs/arquitectura.md`.
 de cómo se llegó acá: el código gana si difieren.
 
 ## Archivos externos
@@ -563,198 +423,3 @@ quedan fijas en el C#.
   el dúo de la esquina (decideParty: 30 min medidos de cada lado, margen 5 %), con experimento ~10 % de
   bloques de 30 min (`experimentSlot`). El DK disuelve la party con PartyPlayerKick índice 0 cuando los
   datos dicen que no. Cada cambio sale en Decisiones. Borrar `knowledge.json` vuelve atrás.
-
-## Estación (conectar personajes desde el navegador)
-
-`bun run estacion` → `http://127.0.0.1:8787/panel` (también `/`). Lista los personajes, los conecta o desconecta sin
-navegador, les pone una rutina y muestra adentro el panel de cada bot (iframe a su `--ws-port`) o
-su consola.
-
-- **Personajes:** salen de la base SQLite `~/.mubot/mubot.db` (`estacion-db.ts`, ver "Base de cuentas"
-  en README.md): `servers`, `accounts` (con `status` active/blocked) y `characters`. Los `.env` /
-  `.env.<nombre>` de la raíz se importan solos al arrancar (idempotente; `.env.example` no cuenta) y
-  después manda la base. La estación lanza `bun --env-file=/dev/null run headless-bot.ts --user <u> --char
-  <C> --allow-remote --proxy … --auto-seconds 0 --ws-port 879x --exit-if-in-use` con `MUBOT_PASS` (y
-  `MUBOT_CREATE_CLASS` si tiene clase) por entorno, sin heredar ningún `MUBOT_*` propio; `/dev/null`
-  evita que Bun cargue el `.env` de la raíz (otro personaje). Una cuenta juega con un solo personaje a
-  la vez (`connect` lo rechaza). Código 4 (AccountBlocked) marca la cuenta `blocked`; entrar al mundo,
-  `active`. Servidor por defecto el de PLAN-SIN-NAVEGADOR.md; `MUBOT_PROXY` / `MUBOT_CS_HOST` /
-  `MUBOT_CS_PORT` lo cambian.
-- **Flujo de la interfaz:** sin nada elegido al abrir; primero la cuenta (con su estado), después el
-  personaje (o uno nuevo), después el panel. Arriba, una miga de pan vuelve a cada paso.
-- **Personaje nuevo** (botón "Nuevo personaje" en Personajes; `POST /api/do {action:'create', user, pass, char, cls, existing}`):
-  - Registra la cuenta con el mismo endpoint que "Crear cuenta" del cliente web: `POST https://<host del
-    proxy>/api/register {username, password}` (`MUBOT_REGISTER_URL` lo cambia). Errores `taken` / `throttled`.
-    Con "ya tengo la cuenta" (`existing`) no registra.
-  - Validación del cliente web: cuenta de 4 a 10 letras o números; clave de 4 a 10 visibles. Nombre de 4
-    a 10 letras o números.
-  - **Buscar mis personajes** (`{action:'probe', user, pass?}`, sin `pass` usa la de la base): lanza
-    el bot con `--list-chars`, que entra, imprime `MUBOT_CHARS <json>` (nombre y nivel) y sale sin elegir
-    personaje ni entrar al mundo (3/4/5 si el login se rechaza; 4 marca la cuenta `blocked`). Uno por vez,
-    30 s de plazo. **Probado en vivo** (2026-10-12).
-  - **Personaje que ya existe** (cuenta existente + "El personaje ya existe"): `cls: null`, no se crea
-    nada; si el nombre no está en la cuenta el bot sale con código 6 en vez de entrar con otro
-    (`CHAR_EXPLICIT`: con `--char`/`MUBOT_CHAR` ya no cae al primero de la lista).
-  - Guarda cuenta y personaje en la base (clase dk, dw, elf, mg) y lo conecta en pausa. La clave no se
-    loguea ni vuelve al navegador. `{action:'add', user, char, cls}` suma un personaje a una cuenta ya
-    guardada (la clave la pone la estación).
-  - El bot (`world.ts:createCharacter`), si `MUBOT_CHAR` no está en la cuenta y hay `MUBOT_CREATE_CLASS`,
-    manda `C1 0F F3 01 <nombre 10 bytes> <clase << 2>` (número de red: DW 0, DK 4, Elf 8, MG 12; el
-    adaptador del 0.97d no lo toca) y espera F3/01: byte 4 = 1 creado. Éxito y error comparten código y
-    llegan como `CharacterCreationSuccessful`. Si falla sale con **código 6** y no reintenta. MG pide
-    desbloqueo (`UnlockFlags` del CharacterList). **Sin verificar en vivo.**
-  - `GET /api/names`: 8 nombres sugeridos (`names.ts`: raíces + finales de fantasía, siempre de 4 a 10
-    letras, sin repetir los personajes de la estación).
-- **Puertos:** estación 8787 (`ESTACION_PORT`), agente del navegador 8788, bots 8791, 8792…
-  (por orden alfabético del personaje).
-- **Rutinas** (`estacion-logic.ts:routineCommands`): se traducen a órdenes del panel y se mandan por
-  el WebSocket del bot cuando entra al mundo (`mode` ≠ `connecting` y nivel > 0). Farmear = `farm`;
-  spot fijo = `warp` (Arena 2/3/4, Devias 3/4, Lorencia); pausa = `pause`. Con el bot ya conectado, "Aplicar" las cambia. Cazar e ir a un spot puntual siguen en
-  el panel del bot.
-- **Los bots sobreviven a la estación:** corren con `Bun.spawn({ detached: true })` (macOS no tiene `setsid`) y escriben en
-  `~/.mubot/logs/<personaje>.log` (la pestaña Consola muestra las últimas 200 líneas; al lanzarlo, un log de más
-  de 50 MB se rota a `.log.1`). Al arrancar
-  (y cada 2 s) la estación busca en `/proc` los `headless-bot.ts` de cada cuenta (`--user`,
-  `--env-file`, `MUBOT_USER` o, sin nada, el `.env`) y los adopta con su `--ws-port`; uno sin
-  `--ws-port` solo se puede desconectar. Desconectar = `SIGTERM`.
-- **Nunca dos sesiones de una cuenta:** no lanza si ya corre un bot con esa cuenta, y con
-  `--exit-if-in-use` el bot no insiste si la cuenta está abierta en el navegador: la estación lo
-  muestra como "cuenta abierta". Igual cerrá la pestaña antes de conectar. Excepción: si se lo desconectó desde la
-  estación hace menos de 90 s, va sin `--exit-if-in-use` (la sesión vieja todavía figura abierta y
-  el bot reintenta con backoff).
-- **Seguridad:** solo 127.0.0.1. `POST /api/do` exige `Origin` de la propia estación (si no, 403),
-  `content-type: application/json` y un pedido de lista cerrada (`parseStationRequest`: `connect`,
-  `disconnect`, `routine`, sin campos de más). No exponerla con ngrok ni similares.
-
-**Flota, estrategias y alertas** (`estacion-logic.ts`, tests en `estacion-tests.ts`; interfaz en `ui/src`: Flota, Personaje, Estrategias, Dorados, Ranking, Consola, paleta Ctrl/Cmd+K):
-
-- **Estrategia (`RoleAssign`)** por personaje, guardada en `characters.role` (migración 2 de `estacion-db.ts`). `golden` (rutina `hunt`), `explorer` (rutina `scout`), `route` y `support` (rutina `farm`), `spot` (+`warp`). `POST /api/do {action:'role', char, role}` la guarda y, si el bot está en el juego, aplica `roleRoutine(role)`. La rutina `{kind:'hunt'}` es nueva (orden `hunt` del panel). `GET /api/team` suma `role` en cada miembro.
-- **Exploración:** un explorador publica `POST /api/team {from, kind:'scout', map, x, y, players?, monsters?, golds?, note?}` (sin Origin). La estación guarda el último por explorador y mapa 10 min (`ScoutReport`) y los devuelve en `GET /api/team` (`scouts`) y `/api/state`. `goldTypes?: string[]` (hasta 8 nombres, opcional y aditivo) dice qué dorados vio. Del lado del bot ver "Explorador" abajo.
-- **Alertas:** `/api/state` devuelve `alerts` (más nueva primero, ≤120, `Alert`), `invasion`, `scouts` y `now`. La estación detecta muertes, bloqueos, bolsa llena, subidas de nivel, entradas/salidas, bots trabados (5 min sin moverse farmeando o cazando) e invasiones (`diffAlerts`). Los bots pueden sumar avisos con `POST /api/alert {from, kind:'pk'|'bagfull'|'stuck', text}` (sin Origin). `view()` de cada personaje suma `role`, `roleSaved`, `stuck` y en `game`: `mp`, `zen`, `bag`, `nearby`, `resetsPerDay`, `session`.
-- **Demo de la interfaz:** `bun run ui:dev` y abrir `/?demo`: datos simulados, no sale ninguna orden (`ui/src/mock.ts`).
-
-**Probado:** tests offline, y la estación contra un server inexistente (lanzar, adoptar al reiniciar
-la estación, desconectar, Origin ajeno rechazado). **Falta en vivo:** conectar contra el server real
-y ver la rutina aplicada al entrar.
-
-**Ranking:** la estación expone `GET /api/ranking` (top de resets y ELO de Arena del server, la misma
-API que usa el cliente web para `/ranking`: `https://<host del proxy>/api/ranking`, o `MUBOT_RANKING_URL`),
-con caché de 1 min; la interfaz lo muestra en la pestaña "Ranking" con los personajes propios marcados.
-`/ranking` por el chat del juego NO existe (el server contesta "Comando desconocido").
-
-## Panel externo
-
-`panel.html` (el panel de cada bot; la estación lo muestra adentro) se conecta al
-WebSocket del bot y **todo lo saca del protocolo del juego**: anda igual sin
-navegador ni cliente web. El contrato está en `panel-protocol.ts`, la lógica pura
-en `panel-logic.ts` y el server en `ws-server.ts`.
-
-Lo normal es abrirlo desde la estación (cada bot en su puerto: 8791, 8792…). Suelto:
-`http://127.0.0.1:<--ws-port>/panel`. **Solo 127.0.0.1**: el server no escucha en
-otras interfaces y rechaza (403) un WebSocket cuyo `Origin` no sea
-`http://127.0.0.1:<puerto>` o `http://localhost:<puerto>` (sin esto, cualquier
-página abierta en el navegador podía mandarle órdenes al bot). Clientes sin
-`Origin` (un script local) se aceptan. No exponerlo con ngrok ni similares.
-
-**HTTP (mismo puerto, solo GET):** `/` y `/panel` sirven `panel.html` de la raíz
-(404 si no está; es generado, ver `ui/`); `/terrain/<mapa>` el terreno (256×256 bytes de atributos);
-`/radar-assets/...` los archivos del radar (`radar-assets.ts`).
-
-**WebSocket, bot → panel:** `hello` (`botVersion`, `commands`), `history`
-(decisiones), `panel-state` (cada 1 s), `log` (órdenes, cambios de modo,
-cacería), `command-result` y `decision` (el diario).
-
-`panel-state` sale de lo que el bot ya trackea:
-- `equipment` (slots 0-11) e `inventory` (12-75, grilla de 8×8): grupo, número, nivel, excelente, nombre
-  y tamaño (`itemInfo`, de `data/items.json`). El panel los dibuja en "Personaje" con los íconos de
-  `assets/items/item_<grupo>_<número>_<nivel>[_e].png` (servidos en `/radar-assets/items/...`; no van al
-  repo). Hay íconos por escalón de nivel (0, 3, 5…15): se prueba el nivel exacto, el escalón y el 0.
-- `char`: nivel, resets (contador local), HP/MP, stats, puntos, zen
-  (`CharacterInformation` + `InventoryMoneyUpdate`), `classId` (bits altos del
-  primer byte de apariencia del `CharacterList`, **sin verificar en 0.97d**).
-- `mode` (`farm`/`hunt`/`paused`/`resetting`/`connecting`/`dead`) y `doing`
-  (frase corta que pone el loop).
-- `exp.perMin1`/`perMin5` del `ExpLog`; `cycle`/`cycles`/`resetsPerDay` del
-  `CycleLog` (1440 / promedio de los últimos 5 ciclos sin tag).
-- `events`: el bot pregunta `C1 05 91 <tipo> 01` (1 DS, 2 BC, 4 CC) al entrar al
-  mundo y después cada ~60 s por evento, **nunca más de una pregunta cada 5 s**,
-  y parsea la respuesta (`MiniGameOpeningState`). Solo con `--ws-port`.
-- `invasion`: el 0xFD propio del server. No está en `packets/routes.ts`:
-  `net/socket.ts` emite todo code desconocido como `'UnroutedPacket'` (crudo) y
-  el bot lo parsea (ver EVENTOS.md). `nextAt` = próximo hh:50 local.
-- `tickets` (14/19 +N, 13/18 +N, 13/29, 14/11), `equipment` (slots 0-11 con
-  nivel y excelente; el inventario ahora guarda el +N del ítem), `trail`
-  (60 posiciones, una cada 2 s, se borra al cambiar de mapa), `camp` (punto al
-  que va), `nearby` (monstruos a ≤ 10 tiles, jugadores en scope).
-
-**Órdenes, panel → bot:** `{type:'command', id, command}`. `isPanelCommand`
-acepta solo las 10 órdenes (`pause`, `resume`, `farm`, `warp`, `hunt`, `say`, `vault`, `equipplan`, `equip`, `scout`) **con sus campos exactos** (un campo de más = rechazo);
-mensajes de más de 4 KB se ignoran; nada se evalúa. Toda orden contesta
-`command-result` con `{ok, msg}` en castellano y queda en el log del panel y en
-el `--decision-log` (`kind: 'command'`; los cambios de modo, `kind: 'mode'`).
-- `say {text, to?, channel?}`: chat del personaje. Con `to`, susurro; si no, `channel` normal (default), party (`~`) o guild (`@`). Texto de 1 a 60 caracteres imprimibles, sin comandos (`/...`), un mensaje cada 2 s. Lo recibido (y lo mandado, con `mine`) llega al panel como `{type:'chat', at, kind, from, text}`, incluidos susurros y avisos del server; al conectar se mandan los últimos 100.
-- `pause` / `resume`: en pausa el loop no camina, no pelea, no warpea ni
-  resetea; las pociones siguen.
-- `farm`: vuelve a la ruta normal (cancela la cacería, suelta el spot fijo y la pausa).
-- `warp {warp}`: solo índices de `WARP_SPOTS` (y de `--spots` si se pasó), con
-  su nivel; viaja con `warpTo` y el spot **queda fijo** (ni la ruta ni el
-  hambre lo cambian; si muere vuelve ahí) hasta `farm`.
-- `hunt {map?}`: cacería de dorados. Mapa pedido o el de más vivos según el
-  último 0xFD al que pueda entrar: Lorencia (warp 2), Noria (3, nivel 10),
-  Devias (6, nivel 20). Warpea, recorre el mapa en
-  celdas de 25 tiles (la sin visitar más cercana; **el headless no tiene la
-  grilla de caminables**, así que una celda a la que no llega en 45 s se da por
-  visitada), ataca siempre al dorado más cercano en scope (nombre con
-  "Gold"/"Golden" en `data/monsters.json`) y a los comunes solo a ≤ 3 tiles. La
-  Box of Luck la levanta el loot de siempre. **Corta sola** cuando un 0xFD
-  posterior al inicio dice 0 vivos en ese mapa (o el mapa ya no figura), la
-  invasión pasa a derrotada, o a los 15 min; vuelve a farmear. Cazando no resetea.
-- **Bug arreglado de paso:** los dorados grandes (Golden Dragon, Titan, Soldier,
-  Vepar...) tienen `Move` > 50 y el filtro de `MONSTER_TYPE_NUMBERS` los
-  descartaba: el bot no los veía. Ahora se suman aparte (`GOLDEN_TYPES`).
-
-**Sin verificar en vivo:** todo lo de arriba está probado offline
-(`panel-tests.ts`) y el server HTTP/WS con un cliente local, pero no contra el
-server real: falta confirmar que el server contesta 0x91 a esta pregunta, el
-layout del 0xFD, el `classId` y el nivel del ítem en 0.97d, y una cacería
-completa.
-
-### Ítems y baúl (`vault`, `equipplan`, `equip`)
-
-- `vault`: va a Baz (Lorencia), lee el baúl y escribe `~/.mubot/vault-<pj>.json` (ahora con `rawHex` por ítem).
-- `equipplan`: **solo calcula y muestra**. Usa el baúl de la última lectura viva o el archivo, y lo puesto/bolsa
-  de ahora; no camina ni mueve nada. Contesta con el resumen, deja los pasos en el log del panel y en
-  `panel-state.equipPlan` (`EquipPlanView`). Alcance: casco, armadura, pantalones, guantes y botas; armas, escudo,
-  alas y bijouterie no se tocan.
-- `equip`: **solo si alguien la manda** (nunca la dispara el loop). Va a Baz, relee el baúl, arma el plan con datos
-  de ahora, saca las piezas (`C3 0D 24 02 …`), cierra y las equipa de a una con pausa humana (900 ms ± ritmo). Para
-  en el primer fallo y lo cuenta. Rechazada si está cazando. **Sacar del baúl (de=2) NO está verificado en vivo**;
-  el resto del camino (equipar, hablar con Baz) sí.
-- El plan puntúa con `item-score.ts` (heurística: defensa + nivel + opción + excelentes + luck) y valida clase,
-  nivel y stats con `item-rules.ts`. Con el baúl real de Hume sale: Great Dragon casco, pantalones y botas,
-  Dragon Knight Armor +10 (219 puntos contra 211 de la Great Dragon armadura) y Scale Gloves.
-- `makeDropJudge` + `lootPolicy.judge` (`loot.ts`): hook para que `isValuableDrop` use el puntaje con el equipo
-  que cae. **Apagado por defecto**: nadie lo conecta, el loot se comporta como siempre.
-- Mezclas: ver `docs/items-y-maquinas.md`. **El bot no ejecuta ninguna**; `planCrafts` propone y cada mezcla
-  del Chaos Goblin la confirma una persona.
-
-### Dorados sin navegador
-
-Cada bot, farmeando, manda a la estación los dorados que ve (`GoldReporter` en `panel-logic.ts`,
-`POST` a `MUBOT_GOLD_URL`, que la estación pasa al lanzarlo: `http://127.0.0.1:8787/api/gold`):
-nuevo, movido (como mucho cada 2 s por id) e ido (`gone`). El navegador también puede mandar
-señales si el usuario juega ahí (CORS para `https://mu.mormon.garden`). La estación las guarda 1 min
-y las muestra en "Dorados vistos". Contrato:
-
-```ts
-{ from: 'Horaz', map: 3, x: 140, y: 60, name: 'Golden Goblin', id: 77, at: 1760000000000 } // visto / se movió
-{ from: 'Horaz', map: 3, id: 77, gone: true, at: 1760000000000 }                            // murió o salió del scope
-```
-
-El buscador (`--scout`), el explorador (`--atlas`) y el dúo se sacaron: eran del modo navegador.
-
-### Insights, órdenes y equipo en la estación (ronda 2)
-
-- `POST /api/team` acepta `{from,kind:'insight',topic,note,data,at}` (≤1 KB, sin Origin; `parseBotInsight`): `pk`/`stuck` entran al feed de alertas; `data` queda como último resumen por bot (vence a las 2 h) y sale en `/api/state` como `insights`.
-- `/api/state` suma `events` (la respuesta más reciente de cualquier bot por Devil Square/Blood Castle/Chaos Castle, de `panel-state.events`) y `equipPlan` por personaje.
-- `POST /api/do {action:'bot', char, command}` reenvía al bot solo `equipplan`, `equip` y `say '/pkclear'` (`isBotOrder`). La UI pide confirmación para `equip` y `/pkclear`.

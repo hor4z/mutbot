@@ -3,9 +3,9 @@
  * avisos (toasts) y utilidades de presentación que comparten las vistas.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Alert, InsightSummary, RoleAssign, ScoutReport, StationRequest, Routine } from "../../estacion-logic";
+import type { Alert, InsightSummary, RoleAssign, StationRequest, Routine } from "../../estacion-logic";
 import { roleRoutine } from "../../estacion-logic";
-import type { EquipPlanView, EventTimer, Invasion } from "../../panel-protocol";
+import type { EventTimer, Invasion } from "../../panel-protocol";
 
 export type Character = {
   key: string;
@@ -27,7 +27,6 @@ export type Character = {
   roleSaved: boolean;
   stuck: boolean;
   /** plan de equipo que calculó el bot con `equipplan` (estación vieja: no viene) */
-  equipPlan?: EquipPlanView | null;
   game: null | {
     mode: string;
     doing: string;
@@ -47,7 +46,6 @@ export type Character = {
   };
 };
 export type Gold = { id: number; from: string; name: string; mapName: string; x: number; y: number; at: number };
-export type Scout = ScoutReport & { mapName: string };
 export type StationData = {
   chars: Character[];
   golds: Gold[];
@@ -56,7 +54,6 @@ export type StationData = {
   events?: EventTimer[];
   /** resumen de datos que mandó cada bot (dragón probable, ladrones, celdas letales); estación vieja: [] */
   insights: InsightSummary[];
-  scouts: Scout[];
   now: number;
 };
 export type Result = { ok: boolean; msg: string; body?: Record<string, unknown> };
@@ -123,7 +120,7 @@ function withRole(c: Character): Character {
   return { ...c, role, roleSaved: false };
 }
 
-const EMPTY: StationData = { chars: [], golds: [], alerts: [], invasion: null, insights: [], scouts: [], now: 0 };
+const EMPTY: StationData = { chars: [], golds: [], alerts: [], invasion: null, insights: [], now: 0 };
 
 /** Estado de la estación cada 2 s (solo lectura: GET /api/state). */
 export function useStationData() {
@@ -151,7 +148,6 @@ export function useStationData() {
           invasion: s.invasion ?? null,
           events: Array.isArray(s.events) ? s.events : undefined,
           insights: Array.isArray(s.insights) ? s.insights : [],
-          scouts: s.scouts ?? [],
           now: s.now ?? Date.now(),
         });
         setLoaded(true);

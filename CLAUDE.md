@@ -13,12 +13,11 @@ Leé ese archivo antes de tocar `headless-bot.ts`. Contiene:
 - las trampas de protocolo: packets donde los parsers generados están mal para
   0.97d y el bot queda ciego sin avisar
 - la estación y el panel
-- lo pendiente (en PLAN-SIN-NAVEGADOR.md)
+- la arquitectura completa está en `docs/arquitectura.md`
 
 Foco: **bot sin navegador + estación/panel**. Para "correlo", "arrancalo", "ponelo a jugar":
 `bun run estacion` (`http://127.0.0.1:8787/panel`) y Conectar al personaje con su rutina (o
-`POST /api/do`, ver "Estación" en AGENTS.md). Estado y pendientes en
-**[PLAN-SIN-NAVEGADOR.md](PLAN-SIN-NAVEGADOR.md)**. Primero Horaz, después Melu.
+`POST /api/do`, ver "Estación" en AGENTS.md). Las partes y cómo mejorar un bot: **[docs/arquitectura.md](docs/arquitectura.md)**.
 
 El modo navegador se eliminó de `main` (tag `pre-cerebro` lo conserva). El usuario entra al navegador a jugar a mano cuando quiere.
 

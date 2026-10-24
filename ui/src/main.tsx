@@ -6,16 +6,10 @@ import "@fontsource/geist/latin-700.css";
 import "@fontsource/geist-mono/latin-400.css";
 import { SimpleStation } from "./Simple";
 import { MapOnly } from "./MapOnly";
-import { Panel } from "./Panel";
 import "./style.css";
-import "./station.css";
 import "./panel.css";
-import { installMock } from "./mock";
-import { CommerceDemo } from "./CommerceDemo";
-import { isCommerceDemo } from "./commerce-mock";
 
-installMock();
-// `panel.html` trae data-surface="panel"; en `ui:dev` se abre con `?panel` (y `&demo` para el bot simulado).
+// La estación (lista, mapas, mensajes) sirve `estacion.html`; el panel de cada bot (`panel.html`, o `?mapa` en dev) es solo su mapa.
 const q = new URLSearchParams(location.search);
-const panel = document.body.dataset.surface === "panel" || q.has("panel");
-createRoot(document.getElementById("root")!).render(isCommerceDemo() ? <CommerceDemo /> : q.has("mapa") ? <MapOnly /> : panel ? <Panel /> : <SimpleStation />);
+const botPanel = document.body.dataset.surface === "panel" || q.has("panel") || q.has("mapa");
+createRoot(document.getElementById("root")!).render(botPanel ? <MapOnly /> : <SimpleStation />);

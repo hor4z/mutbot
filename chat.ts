@@ -5,11 +5,11 @@
  */
 import { sendToGS } from './connection';
 import { EventBus } from './net/eventBus';
-import type { PanelCommand } from './panel-protocol';
 import { CHAT_MAX, buildPublicChat, buildWhisper, parseChatMessage, parseServerMessage, type ChatLine } from './protocol097';
 import { decide } from './journal';
 import { dragonMapFromServerMessage, redDragonMapFromServerMessage } from './panel-logic';
-import { SAY_COMMANDS } from './panel-protocol';
+/** Comandos del server que el bot manda solo (hoy `/pkclear`, ver recovery.ts). */
+const SAY_COMMANDS: readonly string[] = ['/pkclear'];
 import { bot, pkGuard } from './state';
 import { trackEvent } from './telemetry';
 import { log, toBytes } from './util';
@@ -61,17 +61,3 @@ export function sendServerCommand(text: string, now = Date.now()): boolean {
   return true;
 }
 
-/** Orden `say` del panel (ya validada por isPanelCommand). */
-export function sayFromPanel(c: Extract<PanelCommand, { cmd: 'say' }>): { ok: boolean; msg: string } {
-  if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-  const now = Date.now();
-  if (now - lastSentAt < CHAT_SEND_GAP_MS) return { ok: false, msg: 'despacio: un mensaje cada 2 s' };
-  const prefix = c.channel === 'party' ? '~' : c.channel === 'guild' ? '@' : '';
-  if (Buffer.byteLength(prefix + c.text, 'utf8') > CHAT_MAX) return { ok: false, msg: `muy largo: máximo ${CHAT_MAX} bytes (con acentos y el prefijo de party/guild cuentan más)` };
-  lastSentAt = now;
-  const bytes = c.to ? buildWhisper(c.to, c.text) : buildPublicChat(bot.charName, prefix + c.text);
-  sendToGS(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-  log(`Chat (panel)${c.to ? ` a ${c.to}` : c.channel && c.channel !== 'normal' ? ` [${c.channel}]` : ''}: ${c.text}`);
-  emit({ kind: c.to ? 'whisper' : (c.channel ?? 'normal'), from: c.to ? `→ ${c.to}` : bot.charName, text: c.text }, true);
-  return { ok: true, msg: c.to ? `susurro a ${c.to}` : 'mensaje enviado' };
-}

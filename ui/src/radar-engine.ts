@@ -4,7 +4,6 @@ import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer
 import type { PanelState } from "../../panel-protocol";
 import { tileKind, TILE_LABEL } from "./hud-logic";
 import { getTerrain, loadRealMap, type RealMap } from "./map-assets";
-import { demoMode } from "./demo";
 import { KIND_COLOR, describe, entities, type Ent, type Info, type Layers } from "./radar-model";
 
 export type RadarApi = {
@@ -329,8 +328,7 @@ export function makeRadar(el: HTMLDivElement, cb: RadarCallbacks): RadarApi {
       terrainAbort?.abort();
       terrainAbort = new AbortController();
       const thisMap = map;
-      if (demoMode()) onTerrain("Mapa de demostración · vista de colisiones");
-      else {
+      {
         realAbort = new AbortController();
         const controller = realAbort;
         onTerrain("Cargando mapa original…");
