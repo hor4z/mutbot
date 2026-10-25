@@ -20,6 +20,7 @@ export const ESQUEMA = {
   huntMinLevel: { def: 300, min: 0, max: 400, doc: 'Nivel mínimo para salir a cazar una invasión.' },
   cornerCrowdMax: { def: 4, min: 0, max: 99, doc: 'Jugadores cerca de la esquina a partir de los cuales se busca otra Arena (0: nunca se va de la esquina).' },
   cornerBanMin: { def: 8, min: 0, max: 120, doc: 'Minutos que busca otra Arena cuando la esquina está llena.' },
+  scoutShops: { def: false, doc: 'Recorrer las tiendas del pueblo (Lorencia) y anotar lo que vende cada NPC en la base; no compra ni vende. Corre una vez; para repetir, ponerla en false y de nuevo en true.' },
   shadows: { def: true, doc: 'La estación manda al débil a seguir al más fuerte (solo cuenta en la estación).' },
 } as const satisfies Record<string, Spec>;
 

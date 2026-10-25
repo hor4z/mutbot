@@ -26,6 +26,8 @@ import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
 import { farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
 import { strategy } from './strategy';
+import { D } from './directivas';
+import { scoutShopsStep } from './shop-scout';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
 import { warpAndWait } from './warps';
@@ -257,6 +259,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (bot.hunting && strong === false && followsLeader()) stopHunt('sigo a mi líder');
     // El débil con un líder que vale la pena no sale a cazar solo: lo sigue (place.ts) y caza como su sombra.
     if (strategy.hunts && strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
+
+    if (D.scoutShops && (await scoutShopsStep(ctx))) continue;
 
     // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
     const goldHold = !!bot.hunting || golden.holding(nowT);
