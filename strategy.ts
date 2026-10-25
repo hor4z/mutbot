@@ -5,8 +5,10 @@
  * Para sumar una decisión que difiere: un campo acá, las dos estrategias la definen y el bucle la lee por `strategy.<campo>`.
  */
 import { SERVER_KEY } from './config';
+import { world } from './state';
 import { lootPolicy, type StatValues } from './farming';
-import { choosePlace, isStrong, tierPlace, type Place } from './place';
+import { choosePlace, isStrong, type Place } from './place';
+import { warp } from './warps';
 
 export type Strategy = {
   server: 'fast' | 'slow';
@@ -39,9 +41,23 @@ export function slowStatPlan(points: number): StatValues {
   const agi = Math.floor(points * SLOW_STATS.agi);
   return { str: points - vit - agi, agi, vit, ene: 0 };
 }
+/**
+ * Spots del Slow, todos en Lorencia (mapa 0), medidos en la sesión del cliente web del 2026-10-25 (avistamientos de monstruos y exp por
+ * kill, `scripts/analyze-session.ts`): Spiders hasta el nivel ~12, Bull Fighters hasta el ~45 y Giants desde ahí (~26.000 exp por kill a
+ * los niveles 48-74). En este server los Giants viven en Lorencia, no en Devias: la v1 mandaba a Devias 4 y no había nada que matar.
+ */
+export const SLOW_SPOTS = [
+  { minLevel: 0, anchor: { x: 200, y: 137 }, radius: 20, name: 'Lorencia (Spiders)' },
+  { minLevel: 12, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
+  { minLevel: 45, anchor: { x: 30, y: 22 }, radius: 25, name: 'Lorencia (Giants)' },
+] as const;
+export function slowPlace(level: number): Place {
+  const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.minLevel)!;
+  return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
+}
 export const slowStrategy: Strategy = {
   server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan,
-  choosePlace: () => (isStrong() == null ? null : tierPlace()),
+  choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
 export const strategy: Strategy = SERVER_KEY === 'slow' ? slowStrategy : fastStrategy;

@@ -614,9 +614,13 @@ const shadowOf = new Map<string, string>();
 function orchestrate() {
   const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
   const power = (s: Slot) => statPower(s.state!.char.stats);
-  const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
-  for (const s of on) if (shadowsOn() && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
+  // Cada servidor tiene sus líderes y sus sombras: un personaje del Slow no sigue a uno del Fast (otro mundo, otro mapa).
+  for (const srv of new Set(on.map((s) => s.cfg.server))) {
+    const group = on.filter((s) => s.cfg.server === srv);
+    const leader = group.length > 1 ? group.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
+    for (const s of group) if (shadowsOn() && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
+  }
   // Quien sigue a un humano no es sombra de ningún bot.
   for (const k of followTargets.keys()) shadowOf.delete(k);
   // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
