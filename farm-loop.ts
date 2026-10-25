@@ -12,7 +12,7 @@ import { ATTACK_PACE_MS, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHA
 import { sendHit, sendTargetedSkill } from './actions';
 import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
 import { CORNER, inCorner, nextRoutePoint } from './corner';
-import { GoldenRule } from './golden';
+import { DRAGON_TYPES, GoldenRule } from './golden';
 import { canFarmMonster, canFight } from './power';
 import { partyUp } from './help';
 import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
@@ -303,10 +303,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         goldAnnounced.add(gold.id);
         decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
         // Avisar a los compañeros: si pueden, vienen (hunt.ts).
-        if (teammates().length && announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`))
+        if (teammates().length && announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`, 15_000, DRAGON_TYPES.has(gold.type)))
           decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
       }
       pickTarget(gold);
+    } else if (gold && DRAGON_TYPES.has(gold.type) && teammates().length) {
+      // Mientras dura la pelea con un dragón se repite el aviso (con su posición actual): llegan los que lo perdieron o se conectaron después.
+      announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`, 30_000, true);
     } else if (ctx.target == null && place) {
       const t = nearestIn(place, ctx.npcs.values(), unreachable.has);
       if (t) pickTarget(t);
