@@ -23,26 +23,34 @@ export type Strategy = {
   /** Levantar también el Zen, las pociones y el equipo (el modo "personaje nuevo" de lootStep). */
   lootAll: boolean;
   /** Reparto de puntos propio (null: el de siempre, progress.ts). */
-  statPlan: ((points: number) => StatValues) | null;
+  statPlan: ((points: number, stats: StatValues) => StatValues) | null;
+  /** Puntos que se juntan antes de repartir (null: el de config.ts, 200, pensado para el Fast con resets). */
+  statBatchMin: number | null;
   /** Cuánto vale matar a este tipo de monstruo (exp por kill estimada): elige el de más valor por distancia en vez del más cercano. null: el más cercano. */
   targetValue: ((type: number) => number) | null;
   /** Dónde pararse (null: esperar). */
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, targetValue: null, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, choosePlace };
 
 /**
  * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
  * pociones, joyas y equipo, y reparte los puntos pensando en aguantar (Str y Vit: sin pociones la vida es lo que más falta). Los lugares y
  * el reparto son una estimación hasta tener datos del Slow (`server = 'slow'` en ClickHouse); aprender cuánto rinde cada spot es lo que sigue.
  */
-export const SLOW_STATS = { str: 0.5, vit: 0.4, agi: 0.1 } as const;
-export function slowStatPlan(points: number): StatValues {
-  const vit = Math.floor(points * SLOW_STATS.vit);
-  const agi = Math.floor(points * SLOW_STATS.agi);
-  return { str: points - vit - agi, agi, vit, ene: 0 };
+export const SLOW_AGI_TARGET = 90; // velocidad de ataque = Agi / 15: con 90 pasa de 5 a 6 con muy pocos puntos
+export const SLOW_STATS = { str: 0.45, agi: 0.3, vit: 0.15, ene: 0.1 } as const;
+/** Primero Agi hasta 90; el resto 45 % Str, 30 % Agi, 15 % Vit, 10 % Ene (lo que sobra del redondeo, a Str). Estimado con lo medido, a ajustar con datos. */
+export function slowStatPlan(points: number, stats: StatValues): StatValues {
+  const agiFirst = Math.min(points, Math.max(0, SLOW_AGI_TARGET - stats.agi));
+  const rest = points - agiFirst;
+  const agi = agiFirst + Math.floor(rest * SLOW_STATS.agi);
+  const vit = Math.floor(rest * SLOW_STATS.vit);
+  const ene = Math.floor(rest * SLOW_STATS.ene);
+  return { str: points - agi - vit - ene, agi, vit, ene };
 }
+
 /**
  * Spots del Slow, todos en Lorencia (mapa 0), medidos en la sesión del cliente web del 2026-10-25 (avistamientos de monstruos y exp por
  * kill, `scripts/analyze-session.ts`): Spiders hasta el nivel ~12, Bull Fighters hasta el ~45 y Giants desde ahí (~26.000 exp por kill a
@@ -57,6 +65,7 @@ export function slowPlace(level: number): Place {
   const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.minLevel)!;
   return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
 }
+
 /**
  * Exp por kill medida en el Slow (`scripts/analyze-session.ts`, niveles 48-74): Giant ~26.000; el resto (Bull Fighter, Hound, Spider…)
  * rinde mucho menos. Los que no están medidos valen poco a propósito: se prefiere el Giant aunque esté más lejos.
@@ -66,7 +75,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, statBatchMin: 10, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 

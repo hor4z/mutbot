@@ -39,7 +39,7 @@ export function resetStatTracking() {
 export async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   const family = classFamily(world.classId);
-  if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  if (points <= 0 || (!force && points < (strategy.statBatchMin ?? STAT_BATCH_MIN))) return 0;
   if (!force && Date.now() < statOffUntil) return 0;
   // Si subió de nivel desde el reparto, los puntos que hay son nuevos (no es que el server no lo tomó):
   // a un personaje nuevo que sube varios niveles por minuto lo frenaba 15 min sin repartir.
@@ -51,7 +51,7 @@ export async function investStatPoints(force = false): Promise<number> {
   }
   // DK: energía hasta fuerza − 2000, después mitad/mitad; 5 % vitalidad. Las demás clases, por porcentajes (farming.ts).
   // Tope de 65535 por stat (capStats): lo que no entra va a agilidad y vitalidad. Todo en el tope: no se reparte.
-  const raw = strategy.statPlan ? strategy.statPlan(points) : family === 'knight' || family == null ? planStats(points, world.stats.str, world.stats.ene) : planByClass(points, family);
+  const raw = strategy.statPlan ? strategy.statPlan(points, world.stats) : family === 'knight' || family == null ? planStats(points, world.stats.str, world.stats.ene) : planByClass(points, family);
   const capped = capStats(raw, world.stats);
   const plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
   if (!plan.length) return 0;
