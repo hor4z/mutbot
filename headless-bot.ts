@@ -56,7 +56,7 @@ import { iniciarDirectivas } from './directivas';
 import { iniciarGanchos } from './ganchos';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
-import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
+import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, SERVER_KEY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
 import { trackPanelPackets } from './events';
@@ -123,7 +123,7 @@ async function session(deadline: number): Promise<LoopResult> {
     watchChat();
     watchLiveness();
     void startBus();
-    iniciarDirectivas(bot.charName, (m) => log(m));
+    iniciarDirectivas(bot.charName, (m) => log(m), 2000, SERVER_KEY);
     iniciarGanchos((m) => log(m));
     worldTracked = true;
   }
