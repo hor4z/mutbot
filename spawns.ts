@@ -1,0 +1,60 @@
+/**
+ * Dónde nacen los monstruos (data/spawns.json: copia de `packages/game-data/reference/spawns.json` del cliente, por mapa: tipo, rectángulo
+ * y cantidad). Con el terreno sirve para elegir un destino concreto en vez de explorar a ciegas: la celda más densa de monstruos que el
+ * personaje puede pelear, caminable y fuera de zona segura. Coincide con lo medido en el Slow (los Giants de Lorencia nacen en [8,11,60,80]).
+ */
+import spawnsData from './data/spawns.json';
+import monstersData from './data/monsters.json';
+import { isSafeZone, isWalkable, TERRAIN_SIZE } from './terrain';
+import { dist, type Pos } from './util';
+
+export type Spawn = { type: number; rect: [number, number, number, number]; qty: number };
+const BY_MAP = spawnsData as unknown as Record<string, Spawn[]>;
+const LEVEL = new Map<number, number>((monstersData as { Numb: number; Level: number }[]).map((m) => [m.Numb, m.Level]));
+
+export const spawnsOf = (map: number): Spawn[] => BY_MAP[String(map)] ?? [];
+/** Nivel del monstruo según la tabla del cliente (undefined: no está). */
+export const levelOf = (type: number) => LEVEL.get(type);
+/** Los tipos 200-299 son NPC de pueblo, no monstruos. */
+export const isMonster = (type: number) => !(type >= 200 && type <= 299);
+
+/** Un rectángulo de 1 tile (evento o spawn fijo) se trata como mínimo de este tamaño, para que no parezca densísimo. */
+const MIN_AREA = 100;
+const CELL = 8;
+
+export type Hotspot = { x: number; y: number; density: number; walkable: number };
+
+/** Celdas de CELL×CELL con la densidad esperada de monstruos que pasan `filter` (monstruos por tile), solo las caminables y fuera de zona segura. */
+export function hotspots(map: number, filter: (type: number) => boolean): Hotspot[] {
+  const spawns = spawnsOf(map).filter((s) => isMonster(s.type) && filter(s.type));
+  const out: Hotspot[] = [];
+  for (let cy = 0; cy < TERRAIN_SIZE; cy += CELL) {
+    for (let cx = 0; cx < TERRAIN_SIZE; cx += CELL) {
+      const mx = cx + CELL / 2, my = cy + CELL / 2;
+      let density = 0;
+      for (const s of spawns) {
+        const [x1, y1, x2, y2] = s.rect;
+        if (mx < x1 || mx > x2 || my < y1 || my > y2) continue;
+        density += s.qty / Math.max(MIN_AREA, (x2 - x1 + 1) * (y2 - y1 + 1));
+      }
+      if (density <= 0) continue;
+      let ok = 0;
+      for (let y = cy; y < cy + CELL; y++) for (let x = cx; x < cx + CELL; x++) if (isWalkable(map, x, y) && !isSafeZone(map, x, y)) ok++;
+      out.push({ x: mx, y: my, density, walkable: ok / (CELL * CELL) });
+    }
+  }
+  return out;
+}
+
+/** Densidad mínima que ya sabemos que rinde: la de los Giants de Lorencia (15 en [8,11,60,80]), unos 0,004 monstruos por tile. */
+export const MIN_DENSITY = 0.004;
+
+/**
+ * El destino concreto: la celda caminable más cercana a `from` con al menos `minDensity` monstruos por tile. (No la más densa del mapa:
+ * suele ser un evento lejano, como los 15 Yeti de Devias en (220,212), a 170 tiles de la puerta.) null si no hay datos de spawns o ninguna sirve.
+ */
+export function bestSpot(map: number, from: Pos, filter: (type: number) => boolean, minDensity = MIN_DENSITY): Hotspot | null {
+  return hotspots(map, filter)
+    .filter((c) => c.walkable >= 0.7 && c.density >= minDensity)
+    .reduce<Hotspot | null>((b, c) => (b == null || dist(c, from) < dist(b, from) ? c : b), null);
+}

@@ -70,6 +70,9 @@ function dataTick(ctx: LoopCtx) {
   }, now);
 }
 
+/** De camino a un lugar lejano, se pelea con lo que esté a este alcance (Strategy.fightOnTheWay). */
+const WAY_TILES = 8;
+
 /** Con valor por tipo (Slow): solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
 const CHASE_TILES = 12;
 
@@ -291,6 +294,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         castOnTheWay(ctx);
         await walkTowards(ctx, next.x, next.y);
         continue;
+      }
+      // Camino al lugar: si hay monstruos al paso (a 8 tiles), se pelea con ellos en vez de pasar entre medio (Slow).
+      if (strategy.fightOnTheWay && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+        const onTheWay = [...ctx.npcs.values()].filter((m) => !unreachable.has(m.id) && chebyshev(m.x, m.y, world.x, world.y) <= WAY_TILES);
+        const t = onTheWay.reduce<ScopedNpc | null>((b, m) => (b == null || chebyshev(m.x, m.y, world.x, world.y) < chebyshev(b.x, b.y, world.x, world.y) ? m : b), null);
+        if (t) pickTarget(t);
       }
       if (place.kind !== 'corner' && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
         bot.doing = `yendo a ${place.name}`;

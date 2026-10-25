@@ -10,6 +10,7 @@ import { monsterName, world } from './state';
 import type { Pos } from './util';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
+import { bestSpot, isMonster } from './spawns';
 import { isSafeZone } from './terrain';
 import { WARPS, warp } from './warps';
 
@@ -31,13 +32,15 @@ export type Strategy = {
   statBatchMin: number | null;
   /** Cuánto vale matar a este tipo de monstruo (exp por kill estimada): elige el de más valor por distancia en vez del más cercano. null: el más cercano. */
   targetValue: ((type: number) => number) | null;
+  /** Pelear con lo que haya al paso mientras camina al lugar (en vez de pasar entre los monstruos hasta el ancla). */
+  fightOnTheWay: boolean;
   /** Usar el warp también dentro del mismo mapa cuando el lugar queda lejos (place.ts, travelTo). El Fast sigue caminando. */
   sameMapWarp: boolean;
   /** Dónde pararse (null: esperar). */
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, sameMapWarp: false, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, sameMapWarp: false, fightOnTheWay: false, choosePlace };
 
 /**
  * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
@@ -85,7 +88,9 @@ function probePlace(index: number): Place {
   }
   if (!probe || probe.index !== index) {
     const home = { x: world.x, y: world.y };
-    probe = { index, home, anchor: home, found: false, leg: 0, legSince: Date.now() };
+    // Destino concreto de los datos de spawns (spawns.ts); solo si el mapa no los tiene se busca a ciegas.
+    const spot = bestSpot(w.map, home, isMonster);
+    probe = { index, home, anchor: spot ? { x: spot.x, y: spot.y } : home, found: !!spot, leg: 0, legSince: Date.now() };
   }
   if (!probe.found) {
     const visibles = [...world.npcs.values()].filter((n) => !isSafeZone(world.map, n.x, n.y));
@@ -119,7 +124,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, fightOnTheWay: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
