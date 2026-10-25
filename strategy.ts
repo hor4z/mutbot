@@ -6,13 +6,13 @@
  */
 import { SERVER_KEY } from './config';
 import { D } from './directivas';
-import { monsterName, world } from './state';
-import type { Pos } from './util';
+import { bot, monsterName, world } from './state';
+import { log, type Pos } from './util';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
 import { bestSpot, isMonster } from './spawns';
 import { isSafeZone } from './terrain';
-import { WARPS, warp } from './warps';
+import { warp, warpDePrueba } from './warps';
 
 export type Strategy = {
   server: 'fast' | 'slow';
@@ -94,7 +94,12 @@ type Probe = { index: number; home: Pos; anchor: Pos; found: boolean; leg: numbe
 let probe: Probe | null = null;
 const clamp = (n: number) => Math.max(2, Math.min(253, Math.round(n)));
 function probePlace(index: number): Place {
-  const w = warp(index);
+  let w = warpDePrueba(index);
+  // Warp fuera del catálogo: al llegar, el mapa donde quedó es el del warp.
+  if (w.map < 0 && bot.currentSpot?.index === index) {
+    w = { ...w, map: world.map };
+    if (probe?.index !== index) log(`Warp ${index} lleva al mapa ${world.map} (${world.x},${world.y})`);
+  }
   if (world.map !== w.map) {
     probe = null; // todavía no llegó (travelTo hace el warp)
     return { kind: 'tier', warp: w, anchor: w.arrival ?? { x: world.x, y: world.y }, radius: 25, name: `prueba en ${w.name}` };
@@ -122,7 +127,7 @@ function probePlace(index: number): Place {
 }
 
 export function slowPlace(level: number): Place {
-  if (D.slowProbarWarp > 0 && WARPS.some((w) => w.index === D.slowProbarWarp)) return probePlace(D.slowProbarWarp);
+  if (D.slowProbarWarp > 0) return probePlace(D.slowProbarWarp);
   probe = null;
   const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.from())!;
   return { kind: 'tier', warp: warp(t.warp), anchor: t.anchor(), radius: t.radius, name: t.name };
