@@ -112,7 +112,6 @@ export const postAlta = (a: { user: string; char: string; pass: string; cls?: st
 
 export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;
-  server: (c: Character, server: "fast" | "slow") => Promise<Result>;
 };
 
 export function useActions(refresh: () => void): Actions {
@@ -129,7 +128,6 @@ export function useActions(refresh: () => void): Actions {
       pause: (c) => run({ action: "routine", char: c.key, routine: { kind: "pause" } }),
       resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
       shadow: (c, on) => run({ action: "shadow", char: c.key, on }),
-      server: (c, server) => run({ action: "server", char: c.key, server }),
     };
   }, [refresh]);
 }

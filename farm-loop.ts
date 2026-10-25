@@ -278,7 +278,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const place = bot.hunting ? null : strategy.choosePlace();
     if (!bot.hunting && !place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
     if (place) {
-      if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
+      if (await travelTo(place, { sameMapWarp: strategy.sameMapWarp })) { ctx.target = null; await sleep(500); continue; }
       // La esquina tiene un camino desde la llegada (directo cortaba por los monstruos); el resto, en línea al ancla.
       if (place.kind === 'corner' && !inCorner({ x: world.x, y: world.y })) {
         ctx.target = null;

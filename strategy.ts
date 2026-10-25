@@ -29,11 +29,13 @@ export type Strategy = {
   statBatchMin: number | null;
   /** Cuánto vale matar a este tipo de monstruo (exp por kill estimada): elige el de más valor por distancia en vez del más cercano. null: el más cercano. */
   targetValue: ((type: number) => number) | null;
+  /** Usar el warp también dentro del mismo mapa cuando el lugar queda lejos (place.ts, travelTo). El Fast sigue caminando. */
+  sameMapWarp: boolean;
   /** Dónde pararse (null: esperar). */
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, sameMapWarp: false, choosePlace };
 
 /**
  * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
@@ -76,7 +78,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 

@@ -176,20 +176,12 @@ function Shell() {
                   {c.shadowOf ? `Sombra de ${c.shadowOf}` : "Seguir al más fuerte"}
                 </label>
               )}
-              <label className="simple-conn" title="Las cuentas valen en los dos servidores, pero cada personaje es de uno. Se aplica al próximo conectar.">
-                Servidor
-                <select value={c.server} onChange={(e) => void actions.server(c, e.target.value as "fast" | "slow")}>
-                  <option value="fast">Fast</option>
-                  <option value="slow">Slow</option>
-                </select>
-              </label>
               {sibling && <small className="simple-wait">La cuenta la usa {sibling.char}: desconectala para jugar con {c.char}.</small>}
               {c.stuck && <small className="simple-err">⚠ Trabado: no avanza hace rato.</small>}
               {c.status === "failed" && <small className="simple-err">{c.msg}</small>}
               {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
                 <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setCharOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
               )}
-              {c.serverUsed && c.serverUsed !== c.server && <small className="simple-wait">Ahora conectado al {c.serverUsed === "slow" ? "Slow" : "Fast"}; el cambio se aplica al reconectar.</small>}
               {c.game && !inGame(c) && isOnline(c) && <small className="simple-doing simple-wait">{c.game.doing}</small>}
               {c.game && inGame(c) && (
                 <>
