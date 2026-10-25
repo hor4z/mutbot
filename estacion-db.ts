@@ -23,7 +23,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type CharConfig, type GameServer, type Routine } from './estacion-logic';
+import { type CharClassKey, type CharConfig, type GameServer, type Routine, isCharClass } from './estacion-logic';
 import { validCharName } from './util';
 
 /** Personajes por cuenta en el 0.97d. */
@@ -114,7 +114,7 @@ export class EstacionDb {
          FROM characters c JOIN accounts a ON a.id = c.account_id
         WHERE a.server_id = ? ORDER BY c.name`,
     ).all(this.serverId).map((r) => ({
-      key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name,
+      key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name, cls: isCharClass(r.class) ? r.class : undefined,
       status: r.status, lastRoutine: parseRoutine(r.last_routine),
     }));
   }
@@ -127,10 +127,17 @@ export class EstacionDb {
   }
 
   /** Suma un personaje que ya existe en el server a una cuenta (la crea si no está). Devuelve el motivo si no se puede. */
-  addChar(user: string, pass: string, name: string, envFile: string | null = null): string | null {
+  addChar(user: string, pass: string, name: string, envFile: string | null = null, cls: CharClassKey | null = null): string | null {
     if (!validCharName(name)) return `nombre inválido: ${name}`;
     return this.db.transaction((): string | null => {
-      if (this.db.query('SELECT 1 FROM characters WHERE name = ?').get(name)) return `ya hay un personaje ${name} en la estación`;
+      const have = this.db.query<{ id: number; class: string | null; username: string }, [string, number]>(
+        'SELECT c.id, c.class, a.username FROM characters c JOIN accounts a ON a.id = c.account_id WHERE c.name = ? AND a.server_id = ?',
+      ).get(name, this.serverId);
+      if (have) {
+        // Ya está: solo se le puede poner la clase con que el bot lo va a crear (misma cuenta, y todavía sin clase).
+        if (cls && !have.class && have.username === user) { this.db.query("UPDATE characters SET class = ?, updated_at = datetime('now') WHERE id = ?").run(cls, have.id); return null; }
+        return `ya hay un personaje ${name} en la estación`;
+      }
       let acc = this.db.query<{ id: number; username: string; password: string }, [number, string]>(
         'SELECT id, username, password FROM accounts WHERE server_id = ? AND username = ?',
       ).get(this.serverId, user);
@@ -141,7 +148,51 @@ export class EstacionDb {
       }
       const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
       if (n >= MAX_CHARS_PER_ACCOUNT) return `${acc.username} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
-      this.db.query('INSERT INTO characters (account_id, name, env_file) VALUES (?, ?, ?)').run(acc.id, name, envFile);
+      this.db.query('INSERT INTO characters (account_id, name, class, env_file) VALUES (?, ?, ?, ?)').run(acc.id, name, cls, envFile);
+      return null;
+    })();
+  }
+
+  /** Cuentas que todavía no tienen ningún personaje (creadas en el juego; falta el paso 2). No aparecen como tarjetas. */
+  freeAccounts(): string[] {
+    return this.db.query<{ username: string }, [number]>(
+      'SELECT a.username FROM accounts a WHERE a.server_id = ? AND NOT EXISTS (SELECT 1 FROM characters c WHERE c.account_id = a.id) ORDER BY a.id',
+    ).all(this.serverId).map((r) => r.username);
+  }
+
+  /** Guarda una cuenta recién creada en el juego, sin personaje. Devuelve el motivo si no se puede. */
+  addAccount(user: string, pass: string): string | null {
+    const have = this.db.query<{ password: string }, [number, string]>('SELECT password FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
+    if (have) return have.password === pass ? null : `la cuenta ${user} ya está guardada con otra clave`;
+    this.db.query('INSERT INTO accounts (server_id, username, password) VALUES (?, ?, ?)').run(this.serverId, user, pass);
+    return null;
+  }
+
+  /** Paso 2: el personaje (con la clase con que el bot lo va a crear) en una cuenta ya guardada. */
+  addCharToAccount(user: string, name: string, cls: CharClassKey, replace?: string): string | null {
+    if (!validCharName(name)) return `nombre inválido: ${name}`;
+    return this.db.transaction((): string | null => {
+      const acc = this.db.query<{ id: number }, [number, string]>('SELECT id FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
+      if (!acc) return `no conozco la cuenta ${user}: creala primero (paso 1)`;
+      // `replace`: el personaje que figuraba en esta cuenta pero el juego no tiene (viene de su tarjeta fallida). Si se eligió otro
+      // nombre, se lo renombra (y se le pone la clase) en vez de dejar una tarjeta fantasma al lado del nuevo.
+      if (replace && replace !== name) {
+        const old = this.db.query<{ id: number; class: string | null }, [string, number]>('SELECT id, class FROM characters WHERE name = ? AND account_id = ?').get(replace, acc.id);
+        if (old && !old.class) {
+          if (this.db.query('SELECT 1 FROM characters WHERE name = ?').get(name)) return `ya hay un personaje ${name} en la estación`;
+          this.db.query("UPDATE characters SET name = ?, class = ?, updated_at = datetime('now') WHERE id = ?").run(name, cls, old.id);
+          return null;
+        }
+      }
+      const have = this.db.query<{ id: number; class: string | null; account_id: number }, [string]>('SELECT id, class, account_id FROM characters WHERE name = ?').get(name);
+      if (have) {
+        // Un personaje de esta cuenta que figura pero el juego no tiene (la cuenta venía sin personaje): se le pone la clase para crearlo.
+        if (have.account_id === acc.id && !have.class) { this.db.query("UPDATE characters SET class = ?, updated_at = datetime('now') WHERE id = ?").run(cls, have.id); return null; }
+        return `ya hay un personaje ${name} en la estación`;
+      }
+      const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
+      if (n >= MAX_CHARS_PER_ACCOUNT) return `${user} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
+      this.db.query('INSERT INTO characters (account_id, name, class) VALUES (?, ?, ?)').run(acc.id, name, cls);
       return null;
     })();
   }

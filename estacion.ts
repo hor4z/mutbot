@@ -18,11 +18,11 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, rea
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { statPower } from './util';
-import { altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
+import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
   BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
-  parseEnvFile,
+  parseEnvFile, CHAR_CLASSES, accountProblem, isCharClass,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
 } from './estacion-logic';
@@ -49,6 +49,8 @@ const SERVER: GameServer = {
 
 type Slot = {
   cfg: DbChar;
+  /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
+  conn: 'direct' | 'proxy';
   port: number;
   pid: number | null;
   status: CharStatus;
@@ -97,6 +99,9 @@ function discover() {
 
 function refreshSlots() {
   const cfgs = discover();
+  // Quita las tarjetas de personajes que ya no están en la base (renombrados o borrados) si no tienen un bot corriendo.
+  const keep = new Set(cfgs.map((c) => c.key));
+  for (const [k, s] of slots) if (!keep.has(k) && s.pid == null) { detachWs(s); slots.delete(k); }
   for (const cfg of cfgs) {
     const s = slots.get(cfg.key);
     if (s) {
@@ -108,7 +113,7 @@ function refreshSlots() {
     let port = BOT_PORT_BASE;
     while (used.has(port)) port++;
     slots.set(cfg.key, {
-      cfg, port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
+      cfg, conn: 'direct', port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
       state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0, exitCode: null, connectTimer: null,
     });
   }
@@ -154,6 +159,7 @@ function syncRunning() {
     if (p) {
       if (s.pid !== p.pid) {
         s.pid = p.pid;
+        s.conn = p.cmdline.some((a) => /\/p\/[^/]+\/ws/.test(a)) ? 'proxy' : 'direct';
         if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
           s.status = p.wsPort ? 'on' : 'external';
           s.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
@@ -272,8 +278,25 @@ function dbEnv(): Record<string, string> {
   return out;
 }
 
+// --- Tipo de conexión por personaje -------------------------------------------------------
+// Directa al servidor o por el proxy del worker (workers/edge). Se elige en el panel y se aplica al próximo conectar; se guarda en
+// ~/.mubot/conn.json. La URL del proxy sale de MUBOT_ALTA_URL (.env.alta) y del token en ~/.mubot/alta/proxy-token.
+const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
+const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
+const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
+function proxyUrl(): string | null {
+  if (!altaUrl) return null;
+  let token = '';
+  try { token = readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return null; }
+  if (!token) return null;
+  try { const u = new URL(altaUrl); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
+}
+
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
+  const wantProxy = viaProxy.has(s.cfg.key);
+  const pUrl = wantProxy ? proxyUrl() : null;
+  if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
   // Una cuenta juega con un solo personaje a la vez.
   const sibling = [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase());
@@ -307,6 +330,8 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
   env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
+  // Personaje que todavía no existe en la cuenta: el bot lo crea al entrar con esta clase (F3/01).
+  if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
   // Canal directo entre bots (bus.ts, UDP): su puerto y los de todos los demás, más el de la estación (que solo escucha).
   env.MUBOT_BUS_PORT = String(busPort(s));
   env.MUBOT_BUS_PEERS = [...[...slots.values()].filter((x) => x !== s).map(busPort), BUS_STATION_PORT].join(',');
@@ -314,11 +339,12 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   env.MUBOT_PASS = pass;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
-  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
+  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...SERVER, proxy: pUrl } : SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, detached: true, stdin: 'ignore', stdout: fd, stderr: fd,
   });
   closeSync(fd);
   s.pid = proc.pid;
+  s.conn = pUrl ? 'proxy' : 'direct';
   ownExits.add(proc.pid);
   s.status = 'starting';
   s.msg = 'conectando…';
@@ -337,6 +363,9 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
     s.pending = null;
     detachWs(s);
     if (code === 4) { db.setAccountStatus(s.cfg.user, 'blocked'); refreshSlots(); }
+    // Un fallo que no se arregla reintentando (flag mal, cuenta bloqueada, login rechazado, personaje inexistente) saca al personaje de los
+    // que se mantienen vivos: si no, cada reinicio de la estación lo volvía a intentar.
+    if (code === 2 || code === 4 || code === 5 || code === 6) { wanted.delete(s.cfg.key); saveWanted(); }
     say(`${s.cfg.char} salió (código ${code}): ${st.msg}`);
   });
   setTimeout(() => { if (s.pid === proc.pid && !s.ws) attachWs(s, s.port); }, 1500);
@@ -390,12 +419,13 @@ function view() {
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
+      conn: viaProxy.has(s.cfg.key) ? 'proxy' : 'direct', connUsed: s.pid != null ? s.conn : null, proxyReady: proxyUrl() != null,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
         mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets,
         map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
-        zen: st.char.zen, nearby: st.nearby,
+        zen: st.char.zen, nearby: st.nearby, power: statPower(st.char.stats),
         session: st.session ? { since: st.session.since, kills: st.session.kills, deaths: st.session.deaths, exp: st.session.exp } : null,
       },
     };
@@ -482,9 +512,9 @@ try {
   altaUrl = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8')).MUBOT_ALTA_URL ?? '';
   if (altaUrl) startAltaSync({
     url: altaUrl,
-    addChar: (u, p, c) => {
-      const why = db.addChar(u, p, c);
-      addAlert({ at: Date.now(), kind: 'status', tone: why ? 'warn' : 'good', char: c, text: why ? `No se pudo agregar a ${c}: ${why}` : `${c} agregado a la estación (cuenta ${u}): ya está en la lista` });
+    addChar: (u, p, c, k) => {
+      const why = db.addChar(u, p, c, null, k);
+      addAlert({ at: Date.now(), kind: 'status', tone: why ? 'warn' : 'good', char: c, text: why ? `No se pudo agregar a ${c}: ${why}` : k ? `${c} agregado (cuenta ${u}). Conectalo: el bot crea el personaje al entrar (${CHAR_CLASSES[k].label}).` : `${c} agregado a la estación (cuenta ${u}): ya está en la lista` });
       return why;
     },
     onAdded: refreshSlots,
@@ -499,6 +529,8 @@ try {
 // manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
 const SHADOW_POWER_RATIO = 0.5;
 const shadowOff = new Set<string>();
+/** A quién sigue cada personaje, si es un humano (en memoria: se vuelve a pedir tras reiniciar la estación). */
+const followTargets = new Map<string, { name: string; map?: number; x?: number; y?: number }>();
 const shadowOf = new Map<string, string>();
 function orchestrate() {
   const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
@@ -506,10 +538,13 @@ function orchestrate() {
   const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
   for (const s of on) if (leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
+  // Quien sigue a un humano no es sombra de ningún bot.
+  for (const k of followTargets.keys()) shadowOf.delete(k);
   // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
   for (const s of on) {
     const mine = [...shadowOf].filter(([, l]) => l === s.cfg.char).map(([k]) => slots.get(k)!.cfg.char);
-    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: shadowOf.get(s.cfg.key) ?? null, s: mine })), busPort(s), '127.0.0.1');
+    const ft = followTargets.get(s.cfg.key);
+    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: shadowOf.get(s.cfg.key) ?? null, s: mine, ...(ft ? { f: { n: ft.name, m: ft.map, x: ft.x, y: ft.y } } : {}) })), busPort(s), '127.0.0.1');
   }
 }
 
@@ -593,7 +628,7 @@ Bun.serve({
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
       if (url.pathname === '/api/state') return json({
-        chars: view(), alerts, invasion: invasion(), now: Date.now(),
+        chars: view(), alerts, invasion: invasion(), now: Date.now(), freeAccounts: db.freeAccounts(),
       });
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -617,6 +652,18 @@ Bun.serve({
         if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
         return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
       }
+      if (r.action === 'conn') {
+        if (r.mode === 'proxy' && !proxyUrl()) return json({ ok: false, msg: 'falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys)' }, 409);
+        if (r.mode === 'proxy') viaProxy.add(s.cfg.key); else viaProxy.delete(s.cfg.key);
+        saveConn();
+        const live = s.pid != null && s.conn !== r.mode;
+        return json({ ok: true, msg: `${s.cfg.char}: conexión ${r.mode === 'proxy' ? 'por proxy' : 'directa'}${live ? ' (se aplica al reconectar)' : ''}` });
+      }
+      if (r.action === 'follow') {
+        if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
+        followTargets.set(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
+        return json({ ok: true, msg: `${s.cfg.char} va a buscar a ${r.target}, le pide party y lo sigue` });
+      }
       if (r.action === 'retry') {
         const res = await retryNow(s);
         return json(res, res.ok ? 200 : 409);
@@ -634,22 +681,54 @@ Bun.serve({
       if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
       const body = await req.text();
       if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; create?: unknown };
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown };
       try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
       if (typeof raw.user !== 'string' || typeof raw.pass !== 'string' || typeof raw.char !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
-      const input = { user: raw.user, pass: raw.pass, char: raw.char };
+      if (raw.cls != null && raw.cls !== '' && !isCharClass(raw.cls)) return json({ ok: false, msg: 'clase inválida' }, 400);
+      const input = { user: raw.user, pass: raw.pass, char: raw.char, cls: isCharClass(raw.cls) ? raw.cls : null };
       const bad = altaProblem(input);
       if (bad) return json({ ok: false, msg: bad }, 409);
-      // create: primero se crea la cuenta en el juego (por el worker); si ya existía, se desmarca y solo se da de alta.
-      if (raw.create === true) {
-        const made = await registerAccount(altaUrl, input);
-        if (!made.ok) return json(made, 409);
-        say(`cuenta ${input.user} creada en el juego`);
-        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: input.char, text: `Cuenta ${input.user} creada en el juego. Falta crear el personaje ${input.char} en el cliente.` });
-      }
       const res = await submitAlta(altaUrl, input);
-      if (res.ok && raw.create === true) res.msg = `Cuenta creada. Falta crear el personaje ${input.char} en el cliente del juego (con la clase que quieras): la estación ya la tiene en la lista.`;
       return json(res, res.ok ? 200 : 409);
+    }
+    if (req.method === 'POST' && (url.pathname === '/api/cuenta' || url.pathname === '/api/personaje')) {
+      // Alta en dos pasos. Paso 1 (/api/cuenta): el worker crea la cuenta en el juego y la estación la guarda SIN personaje (no hay tarjeta
+      // todavía). Paso 2 (/api/personaje): se elige una cuenta sin personaje, el nombre y la clase; el bot lo crea al conectarlo.
+      const origin = req.headers.get('origin');
+      if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
+      if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
+      const body = await req.text();
+      if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown };
+      try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
+      if (typeof raw.user !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
+      if (url.pathname === '/api/cuenta') {
+        if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
+        if (typeof raw.pass !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
+        const bad = accountProblem(raw.user, raw.pass);
+        if (bad) return json({ ok: false, msg: bad }, 409);
+        const made = await registerAccount(altaUrl, { user: raw.user, pass: raw.pass });
+        if (!made.ok) return json(made, 409);
+        const why = db.addAccount(raw.user, raw.pass);
+        if (why) return json({ ok: false, msg: `La cuenta se creó en el juego pero no la pude guardar: ${why}` }, 409);
+        say(`cuenta ${raw.user} creada en el juego (sin personaje todavía)`);
+        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: null, text: `Cuenta ${raw.user} creada. Falta el paso 2: crear su personaje.` });
+        return json({ ok: true, msg: `Cuenta ${raw.user} creada. Ahora creá su personaje (paso 2).` });
+      }
+      if (typeof raw.char !== 'string' || !isCharClass(raw.cls)) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
+      const replace = typeof raw.replace === 'string' ? raw.replace : undefined;
+      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace);
+      if (why) return json({ ok: false, msg: why }, 409);
+      // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
+      if (replace && replace !== raw.char) {
+        const ok = replace.toLowerCase(), nk = raw.char.toLowerCase();
+        if (viaProxy.delete(ok)) { viaProxy.add(nk); saveConn(); }
+        if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
+      }
+      refreshSlots();
+      say(`personaje ${raw.char} (${CHAR_CLASSES[raw.cls].label}) en la cuenta ${raw.user}`);
+      addAlert({ at: Date.now(), kind: 'status', tone: 'good', char: raw.char, text: `${raw.char} agregado (${CHAR_CLASSES[raw.cls].label}). Conectalo: el bot lo crea en el juego al entrar.` });
+      return json({ ok: true, msg: `${raw.char} agregado. Conectalo para que el bot lo cree (${CHAR_CLASSES[raw.cls].label}).` });
     }
     return new Response('No.', { status: 405 });
   },

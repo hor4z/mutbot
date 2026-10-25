@@ -7,8 +7,8 @@
 import { sendToGS } from './connection';
 import { decide } from './journal';
 import { buildPartyInvite } from './protocol097';
-import { bot, world } from './state';
-import { teammates } from './bus';
+import { bot, isMate, world } from './state';
+import { followHumanTarget, teammates } from './bus';
 import { dist, statPower } from './util';
 
 const NEAR = 20;
@@ -44,6 +44,20 @@ export function partyUp() {
     invited.set(m.char, { at: now, tries: (prev?.tries ?? 0) + 1 });
     sendToGS(new DataView(buildPartyInvite(id).buffer));
     decide(`Invito a ${m.char} a party (está cerca).`);
+    return;
+  }
+  // Un humano propio (el usuario jugando a mano, que no está en el bus): se lo invita apenas está a la vista y cerca. Lo mismo vale para cualquier
+  // compañero que se vea en pantalla y no esté en el bus.
+  const human = followHumanTarget();
+  for (const [id, p] of world.players) {
+    if (!p.name || !(isMate(p.name) || human?.name.toLowerCase() === p.name.toLowerCase())) continue;
+    if (dist({ x: world.x, y: world.y }, p) > NEAR) continue;
+    anyNear = true;
+    const prev = invited.get(p.name);
+    if (prev && now - prev.at < (prev.tries < FAST_TRIES ? RETRY_MS : SLOW_RETRY_MS)) continue;
+    invited.set(p.name, { at: now, tries: (prev?.tries ?? 0) + 1 });
+    sendToGS(new DataView(buildPartyInvite(id).buffer));
+    decide(`Invito a ${p.name} a party (lo veo cerca).`);
     return;
   }
   if (!anyNear) unpartiedSince = 0;

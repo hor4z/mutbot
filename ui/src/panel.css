@@ -1736,3 +1736,5 @@
     transition: none !important;
   }
 }
+
+.hud-map-who { font-weight: 700; }

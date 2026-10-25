@@ -5,7 +5,7 @@
  */
 import type { Alert } from "../../estacion-logic";
 import { useState, type FormEvent } from "react";
-import { isOnline, isPaused, postAlta, useActions, useStationData, type Character, type Result } from "./station-data";
+import { isOnline, isPaused, postAlta, postCuenta, postPersonaje, useActions, useStationData, type Character, type Result } from "./station-data";
 import "./simple.css";
 
 // Personajes que no se muestran aunque la cuenta esté activa (el server ya no deja conectar 3 a la vez).
@@ -30,34 +30,69 @@ function Invasion({ inv, now }: { inv: NonNullable<ReturnType<typeof useStationD
 }
 
 /** Alta de una cuenta que ya existe en el juego: la estación cifra los datos y los manda por el worker. */
-/** Crear (o solo agregar) una cuenta: la estación habla con el servidor a través del worker. */
-function AltaModal({ onClose }: { onClose: () => void }) {
-  const [f, setF] = useState({ user: "", char: "", pass: "" });
-  const [create, setCreate] = useState(true);
+const CLASSES: [string, string][] = [["dk", "Dark Knight"], ["dw", "Dark Wizard"], ["elf", "Fairy Elf"], ["mg", "Magic Gladiator"]];
+type Tab = "cuenta" | "personaje" | "existente";
+
+/**
+ * Altas en dos pasos: 1) crear la cuenta en el juego (el worker la registra; queda guardada sin personaje y sin tarjeta) y
+ * 2) crear su personaje (nombre y clase; el bot lo crea al conectarlo). La tercera pestaña es para lo que ya existe.
+ */
+function AccountsModal({ free, preset, onClose }: { free: string[]; preset: { user: string; char: string } | null; onClose: () => void }) {
+  const [tab, setTab] = useState<Tab>(preset || free.length ? "personaje" : "cuenta");
+  const [f, setF] = useState({ user: preset?.user ?? "", char: preset?.char ?? "", pass: "", cls: "" });
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const go = (t: Tab) => { setTab(t); setRes(null); };
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const r = await postAlta({ ...f, create });
+    const user = tab === "personaje" ? (preset?.user ?? (f.user || free[0] || "")) : f.user;
+    const r = tab === "cuenta" ? await postCuenta({ user, pass: f.pass }) : tab === "personaje" ? await postPersonaje({ user, char: f.char, cls: f.cls, ...(preset ? { replace: preset.char } : {}) }) : await postAlta({ user, char: f.char, pass: f.pass, cls: f.cls || undefined });
     setBusy(false);
-    if (r.ok) onClose(); // el aviso queda en "Mensajes" cuando la estación la suma
-    else setRes(r);
+    if (!r.ok) return setRes(r);
+    if (tab === "cuenta") { setF({ user: "", char: "", pass: "", cls: "" }); setTab("personaje"); setRes(r); } // sigue el paso 2
+    else onClose(); // el aviso queda en "Mensajes"
   }
+  const info = tab === "cuenta" ? "Paso 1: crea la cuenta en el juego (por el worker). Todavía no aparece en la lista: falta el personaje."
+    : tab === "personaje" ? preset ? "El personaje todavía no existe en el juego. Podés cambiarle el nombre y elegir la clase: el bot lo crea la primera vez que lo conectás." : "Paso 2: el personaje de una cuenta sin personaje. El bot lo crea en el juego la primera vez que lo conectás."
+    : "Cuenta ya creada en el juego: se cifra y pasa por el worker. Si el personaje todavía no existe, elegí su clase y el bot lo crea al conectarlo.";
   return (
     <div className="simple-modal" role="dialog" aria-modal="true" aria-label="Agregar cuenta" onClick={onClose}>
       <form className="simple-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={submit} autoComplete="off">
         <h2>Agregar cuenta</h2>
-        <small>{create ? "Crea la cuenta en el juego por el worker y la suma a la estación. El personaje se crea después en el cliente." : "La cuenta y el personaje ya existen en el juego: se cifran y pasan por el worker."}</small>
-        <label className="simple-check"><input type="checkbox" checked={create} onChange={(e) => setCreate(e.target.checked)} />Crear la cuenta en el juego</label>
-        <label>Usuario<input value={f.user} onChange={set("user")} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>
-        <label>Personaje<input value={f.char} onChange={set("char")} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>
-        <label>Contraseña<input type="password" value={f.pass} onChange={set("pass")} required maxLength={64} autoComplete="new-password" /></label>
+        <div className="simple-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={tab === "cuenta"} onClick={() => go("cuenta")}>1. Cuenta</button>
+          <button type="button" role="tab" aria-selected={tab === "personaje"} onClick={() => go("personaje")}>2. Personaje{free.length ? ` (${free.length})` : ""}</button>
+          <button type="button" role="tab" aria-selected={tab === "existente"} onClick={() => go("existente")}>Ya existe</button>
+        </div>
+        <small>{info}</small>
+        {tab === "personaje" && preset ? (
+          <label>Cuenta<input value={preset.user} readOnly /></label>
+        ) : tab === "personaje" ? (
+          free.length ? (
+            <label>Cuenta
+              <select value={f.user || free[0]} onChange={set("user")}>{free.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+            </label>
+          ) : <div className="simple-err">No hay cuentas sin personaje: creá una en el paso 1.</div>
+        ) : (
+          <label>Usuario<input value={f.user} onChange={set("user")} required maxLength={10} pattern={tab === "cuenta" ? "[A-Za-z0-9]{4,10}" : "[A-Za-z0-9_]{1,10}"} autoComplete="off" /></label>
+        )}
+        {tab !== "cuenta" && <label>Personaje<input value={f.char} onChange={set("char")} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>}
+        {tab !== "cuenta" && (
+          <label>{tab === "existente" ? "Clase (solo si el personaje no existe todavía)" : "Clase"}
+            <select value={f.cls} onChange={set("cls")} required={tab === "personaje"}>
+              {tab === "existente" ? <option value="">Ya existe: no crear</option> : <option value="" disabled>Elegí una clase</option>}
+              {CLASSES.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+            </select>
+            {f.cls === "mg" && <small>El Magic Gladiator pide un personaje de nivel alto en la misma cuenta: en una cuenta nueva el servidor puede rechazarlo.</small>}
+          </label>
+        )}
+        {tab !== "personaje" && <label>Contraseña<input type="password" value={f.pass} onChange={set("pass")} required maxLength={tab === "cuenta" ? 10 : 64} minLength={tab === "cuenta" ? 4 : 1} autoComplete="new-password" /></label>}
         {res && <div className={res.ok ? "simple-ok" : "simple-err"}>{res.msg}</div>}
         <div className="simple-btns">
           <button type="button" className="pause" onClick={onClose}>Cerrar</button>
-          <button type="submit" className="go" disabled={busy}>{busy ? "Enviando…" : "Enviar"}</button>
+          <button type="submit" className="go" disabled={busy || (tab === "personaje" && !preset && !free.length)}>{busy ? "Enviando…" : tab === "cuenta" ? "Crear cuenta" : tab === "personaje" ? "Crear personaje" : "Agregar"}</button>
         </div>
       </form>
     </div>
@@ -66,6 +101,7 @@ function AltaModal({ onClose }: { onClose: () => void }) {
 
 function Shell() {
   const [altaOpen, setAltaOpen] = useState(false);
+  const [preset, setPreset] = useState<{ user: string; char: string } | null>(null);
   const { data, loaded, error, refresh } = useStationData();
   const actions = useActions(refresh);
   const chars = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
@@ -98,6 +134,18 @@ function Shell() {
                   {c.shadowOf ? `Sombra de ${c.shadowOf}` : "Seguir al más fuerte"}
                 </label>
               )}
+              <label className="simple-conn" title="Directa: el bot habla con el servidor. Proxy: pasa por el worker de Cloudflare. Se aplica al próximo conectar.">
+                Conexión
+                <select value={c.conn} onChange={(e) => void actions.conn(c, e.target.value as "direct" | "proxy")}>
+                  <option value="direct">Directa</option>
+                  <option value="proxy" disabled={!c.proxyReady}>Proxy{c.proxyReady ? "" : " (sin configurar)"}</option>
+                </select>
+              </label>
+              {c.status === "failed" && <small className="simple-err">{c.msg}</small>}
+              {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
+                <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setAltaOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
+              )}
+              {c.connUsed && c.connUsed !== c.conn && <small className="simple-wait">Ahora conectado {c.connUsed === "proxy" ? "por proxy" : "directo"}; el cambio se aplica al reconectar.</small>}
               {c.game && !inGame(c) && isOnline(c) && <small className="simple-doing simple-wait">{c.game.doing}</small>}
               {c.game && inGame(c) && (
                 <>
@@ -124,8 +172,8 @@ function Shell() {
           );
         })}
         {loaded && !chars.length && <p className="simple-empty">No hay personajes disponibles.</p>}
-        <button className="simple-add" onClick={() => setAltaOpen(true)}>+ Agregar cuenta</button>
-        {altaOpen && <AltaModal onClose={() => setAltaOpen(false)} />}
+        <button className="simple-add" onClick={() => { setPreset(null); setAltaOpen(true); }}>+ Agregar cuenta</button>
+        {altaOpen && <AccountsModal free={data.freeAccounts} preset={preset} onClose={() => setAltaOpen(false)} />}
         <h2>Mensajes</h2>
         <div className="simple-msgs">
           {msgs.map((m) => (

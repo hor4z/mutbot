@@ -23,7 +23,7 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { choosePlace, farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
+import { choosePlace, isCarrying, farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
 import { warpAndWait } from './warps';
@@ -139,7 +139,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       decide(`Me mató ${by}.`);
       trackEvent('death', by, kid, killer ? 1 : 0, { killer: killer?.name ?? null, npc: killer ? null : world.npcs.get(kid)?.type ?? null });
       onDeath('ObjectGotKilled');
-    } else if ((p.KillerId & 0x7fff) === bot.playerId) kills++;
+    } else if ((p.KillerId & 0x7fff) === bot.playerId) { kills++; bot.lastKillAt = Date.now(); }
   };
   // ExperienceGained: un kill de más de 65535 llega partido en ~60 packets; ExpLog los agrega por segundo.
   const onExp = (raw: any) => {
@@ -170,6 +170,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   if (!sessionStart.level) sessionStart.level = world.level;
   const pickTarget = (n: { id: number }) => { ctx.target = n.id; };
 
+  // Última vez que viajó o caminó hacia su lugar: ese tiempo no cuenta para "sin exp" (un trecho largo de Devias tarda más de 3 min).
+  let lastTravelAt = 0;
   while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked) {
     refreshAttackable();
     const nowT = Date.now();
@@ -179,7 +181,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // Ciego: el server a veces deja de mandar el scope, o la sesión queda "fantasma" (monstruos pero ninguna exp).
     const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0;
     const sinceIn = nowT - Math.max(bot.inGameAt, bot.lastArrivalAt);
-    const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
+    // En carreo (uno acompaña al otro que sube de nivel) la falta de exp no es una sesión rota.
+    const noExp = farming && !isCarrying() && nowT - lastTravelAt > BLIND_RECONNECT_MS && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
     if (noExp || nowT - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
       decide(noExp ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto.` : `Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto.`);
       journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
@@ -257,10 +260,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const place = bot.hunting ? null : choosePlace();
     if (!bot.hunting && !place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
     if (place) {
-      if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
+      if (await travelTo(place)) { ctx.target = null; lastTravelAt = Date.now(); await sleep(500); continue; }
       // La esquina tiene un camino desde la llegada (directo cortaba por los monstruos); el resto, en línea al ancla.
       if (place.kind === 'corner' && !inCorner({ x: world.x, y: world.y })) {
         ctx.target = null;
+        lastTravelAt = Date.now();
         const next = nextRoutePoint({ x: world.x, y: world.y }, routeIdx);
         routeIdx = next.idx;
         bot.doing = `camino a ${place.name} (${next.x},${next.y})`;
@@ -270,6 +274,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         continue;
       }
       if (place.kind !== 'corner' && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+        lastTravelAt = Date.now();
         bot.doing = `yendo a ${place.name}`;
         bot.goalPoint = [place.anchor.x, place.anchor.y];
         ctx.phase = 'walk';

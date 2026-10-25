@@ -115,7 +115,7 @@ export function Radar({ state }: { state: PanelState | null }) {
       <div className="hud-map-head">
         <div className="hud-map-title">
           <h2>
-            <MapIcon size={16} aria-hidden /> {state?.where.mapName ?? "Esperando al personaje"}
+            <MapIcon size={16} aria-hidden /> {state?.char.name ? <strong className="hud-map-who">{state.char.name}</strong> : null}{state?.char.name ? " · " : ""}{state?.where.mapName ?? "Esperando al personaje"}
           </h2>
           <span className="coordinates" aria-live="off">
             {me ? `${me.x}, ${me.y}` : ""}
