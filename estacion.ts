@@ -52,6 +52,9 @@ type Slot = {
   cfg: DbChar;
   /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
   conn: 'direct' | 'proxy';
+  /** Worker por el que entró el bot (si va por proxy) y cuántos cambios de worker seguidos lleva este intento. */
+  proxyBase?: string;
+  proxySwaps?: number;
   port: number;
   pid: number | null;
   status: CharStatus;
@@ -300,13 +303,19 @@ const wsBase = (base: string, token: string): string | null => {
   try { const u = new URL(base); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
 };
 /** El primer worker (el principal y después los de respaldo) que respondió bien en la última comprobación; si ninguno, el principal. */
-function proxyUrl(): string | null {
+function pickProxy(): { url: string; base: string } | null {
   const token = proxyToken();
   if (!token) return null;
   const bases = proxyBases.length ? proxyBases : altaUrl ? [altaUrl] : [];
-  const base = bases.find((b) => proxyUp.get(b) !== false) ?? bases[0];
-  return base ? wsBase(base, token) : null;
+  const now = Date.now();
+  const base = bases.find((b) => proxyUp.get(b) !== false && (proxyBad.get(b) ?? 0) < now) ?? bases.find((b) => proxyUp.get(b) !== false) ?? bases[0];
+  const url = base ? wsBase(base, token) : null;
+  return url ? { url, base } : null;
 }
+const proxyUrl = () => pickProxy()?.url ?? null;
+/** Un worker por el que un bot no logró entrar se saltea un rato aunque la comprobación lo vea vivo (puede fallar la conexión al juego, no el worker). */
+const proxyBad = new Map<string, number>();
+const PROXY_BAD_MS = 2 * 60_000;
 /** Sin token no hay prueba; con token, un GET sin upgrade da 426 si el worker vive y acepta el token (401 si no) y no abre nada contra el juego. */
 async function probeProxies() {
   const token = proxyToken();
@@ -323,7 +332,8 @@ async function probeProxies() {
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   const wantProxy = viaProxy.has(s.cfg.key);
-  const pUrl = wantProxy ? proxyUrl() : null;
+  const pick = wantProxy ? pickProxy() : null;
+  const pUrl = pick?.url ?? null;
   if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
   // Una cuenta juega con un solo personaje a la vez.
@@ -373,6 +383,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   closeSync(fd);
   s.pid = proc.pid;
   s.conn = pUrl ? 'proxy' : 'direct';
+  s.proxyBase = pick?.base;
   ownExits.add(proc.pid);
   s.status = 'starting';
   s.msg = 'conectando…';
@@ -384,6 +395,7 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
     ownExits.delete(proc.pid);
     if (s.pid !== proc.pid) return;
     const st = exitStatus(code);
+    const neverEntered = s.status === 'starting';
     s.exitCode = code;
     s.pid = null;
     s.status = st.status;
@@ -395,6 +407,18 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
     // que se mantienen vivos: si no, cada reinicio de la estación lo volvía a intentar.
     if (code === 2 || code === 4 || code === 5 || code === 6) { wanted.delete(s.cfg.key); saveWanted(); }
     say(`${s.cfg.char} salió (código ${code}): ${st.msg}`);
+    // No pudo entrar por este worker (error de conexión, no un rechazo del juego): se prueba enseguida con el siguiente.
+    if (neverEntered && s.conn === 'proxy' && s.proxyBase && ![0, 2, 3, 4, 5, 6].includes(code ?? 0) && wanted.has(s.cfg.key)) {
+      proxyBad.set(s.proxyBase, Date.now() + PROXY_BAD_MS);
+      const next = pickProxy();
+      if ((s.proxySwaps ?? 0) < proxyBases.length - 1 && next && next.base !== s.proxyBase) {
+        s.proxySwaps = (s.proxySwaps ?? 0) + 1;
+        say(`${s.cfg.char}: no entró por ${new URL(s.proxyBase).host}; pruebo con ${new URL(next.base).host}`);
+        connect(s, routine);
+        return;
+      }
+    }
+    s.proxySwaps = 0;
   });
   setTimeout(() => { if (s.pid === proc.pid && !s.ws) attachWs(s, s.port); }, 1500);
   return { ok: true, msg: `conectando a ${s.cfg.char}…` };
@@ -522,6 +546,7 @@ function keepAlive() {
       connect(s, { kind: 'farm' });
       continue;
     }
+    if (s.status === 'on') s.proxySwaps = 0;
     if (s.status !== 'on' || !s.state) continue;
     // Sano 10 min seguidos: se perdona el historial de caídas.
     if (!r.okSince) r.okSince = now;
