@@ -6,7 +6,8 @@
  * Lo llama farm-loop.ts en cuatro puntos: `huntStep` (arrancar, cortar, viajar), `huntPick` (qué pegar), `huntWander`
  * (a dónde ir sin objetivo) y `onGoldenRequest` (aviso de un compañero).
  */
-import { announceGold, type GoldNotice } from './bus';
+import { announceGold, teammates, type GoldNotice } from './bus';
+import { bandsOf, crewRank } from './crew';
 import { trackEvent } from './telemetry';
 import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES, stickyGolden } from './golden';
@@ -36,6 +37,19 @@ let lastAutoHuntKey: number | null = null;
 let lastRedAt = 0;
 let lastDragon: { id: number; x: number; y: number; at: number } | null = null;
 
+/** Los compañeros que cazan en este mapa y mi lugar entre todos (por nombre): el reparto del rastrillaje. */
+function huntCrew() {
+  const mates = teammates().filter((m) => m.mode === 'hunt' && m.map === world.map);
+  return { mates, ...crewRank(bot.charName, mates.map((m) => m.char)) };
+}
+
+/** Un dorado común que un compañero tiene más cerca (a <= 6 tiles de él): lo deja a él y busca otro. Los dragones son de todos. */
+function claimedByMate(g: { x: number; y: number; type: number }, mates: readonly { x: number; y: number }[]): boolean {
+  if (DRAGON_TYPES.has(g.type)) return false;
+  const mine = chebyshev(world.x, world.y, g.x, g.y);
+  return mates.some((m) => { const d = chebyshev(m.x, m.y, g.x, g.y); return d <= 6 && d < mine; });
+}
+
 const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
 
 
@@ -64,7 +78,7 @@ export function startHunt(hunt: (typeof HUNT_MAPS)[number], now = Date.now()) {
 /** Un compañero vio un dorado: si puedo con ellos y estoy libre, voy a ese mapa recordando dónde estaba. */
 export function onGoldenRequest(r: GoldNotice, weak: boolean) {
   const now = Date.now();
-  const spot = { x: r.x, y: r.y, type: 0, at: now };
+  const spot = { x: r.x, y: r.y, type: r.dragon ? 79 : 0, at: now };
   if (bot.hunting && bot.hunting.hunt.map === r.map) {
     (bot.hunting.spots ??= new Map()).set(-r.at, spot);
     decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
@@ -158,7 +172,8 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
 export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boolean }, canHit: (type: number) => boolean): Promise<{ gold: ScopedNpc | null; walked: boolean }> {
   const h = bot.hunting!;
   const now = Date.now();
-  const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id)), (t) => GOLDEN_TYPES.has(t) && canHit(t)) as ScopedNpc | null;
+  const { mates } = huntCrew();
+  const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id) && (n.id === ctx.target || !claimedByMate(n, mates))), (t) => GOLDEN_TYPES.has(t) && canHit(t)) as ScopedNpc | null;
   if (gold && DRAGON_TYPES.has(gold.type)) lastDragon = { id: gold.id, x: gold.x, y: gold.y, at: now };
   // No repartir el daño con un común cercano mientras el dragón está fuera de la vista un instante.
   if (lastDragon && (!gold || !DRAGON_TYPES.has(gold.type)) && !ctx.npcs.has(lastDragon.id) && now - lastDragon.at < DRAGON_MEMORY_MS && world.map === h.hunt.map) {
@@ -193,11 +208,13 @@ export async function huntWander(ctx: LoopCtx): Promise<boolean> {
   const now = Date.now();
   // Primero el dorado recordado más cercano (visto hace < 3 min); llegado ahí sin verlo, se olvida.
   let mem: { x: number; y: number } | null = null;
+  const { mates, rank, n } = huntCrew();
   if (h.spots && world.map === h.hunt.map) {
     let md = Infinity;
     for (const [id, sp] of h.spots) {
       const d = chebyshev(world.x, world.y, sp.x, sp.y);
       if (now - sp.at > SPOT_TTL_MS || (d <= 4 && !ctx.npcs.has(id))) { h.spots.delete(id); continue; }
+      if (claimedByMate(sp, mates)) continue;
       if (d < md) { md = d; mem = sp; }
     }
   }
@@ -213,8 +230,14 @@ export async function huntWander(ctx: LoopCtx): Promise<boolean> {
   // Sin dorado recordado: la zona de dragones más cercana sin visitar (de la base), después las de cualquier dorado.
   const visited = (h.zonesVisited ??= new Set());
   const dz = dragonZones(world.map);
-  const zs = dz.some((z) => !visited.has(`${z.x},${z.y}`)) ? dz : goldenZones(world.map);
-  for (const z of zs) if (chebyshev(world.x, world.y, z.x, z.y) <= 6) visited.add(`${z.x},${z.y}`);
+  let zs = dz.some((z) => !visited.has(`${z.x},${z.y}`)) ? dz : goldenZones(world.map);
+  // Lo que pisa un compañero también está visto. Con cuadrilla, cada uno va primero a las zonas de su franja.
+  for (const z of zs) if (chebyshev(world.x, world.y, z.x, z.y) <= 6 || mates.some((m) => chebyshev(m.x, m.y, z.x, z.y) <= 6)) visited.add(`${z.x},${z.y}`);
+  if (n > 1) {
+    const band = bandsOf(zs, n);
+    const own = zs.filter((z) => band.get(z) === rank);
+    if (own.some((z) => !visited.has(`${z.x},${z.y}`))) zs = own;
+  }
   const z = nextZone(zs, { x: world.x, y: world.y }, visited);
   if (z) {
     bot.goalPoint = [z.x, z.y];
@@ -229,6 +252,8 @@ export async function huntWander(ctx: LoopCtx): Promise<boolean> {
     const walk = walkableFor(world.map);
     h.explorer.useTerrain(world.map, walk, (x, y) => walk(x, y) && !isSafeZone(world.map, x, y), { x: world.x, y: world.y }, zoneWeights(world.map, h.explorer.cell, now), undefined);
   }
+  h.explorer.setCrew(rank, n);
+  for (const m of mates) h.explorer.markSeen(m.x, m.y);
   const g = h.explorer.next(world.x, world.y, now);
   bot.goalPoint = [g.x, g.y];
   bot.doing = `cazando dorados en ${h.hunt.name}: recorro la celda (${g.x},${g.y})`;

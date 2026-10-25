@@ -59,6 +59,7 @@ la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cue
 | `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
 | `combat.ts` / `loot.ts` / `progress.ts` | Skills y pociones, drops, reparto de puntos y `/reset`. |
 | `route.ts` / `learning.ts` | Warps, ruta fija por tramo (`maybeChangeSpot`), lo aprendido en `~/.mubot/learning.json`. |
+| `crew.ts` | Reparto del rastrillaje entre los que cazan juntos en un mapa: franjas contiguas por nombre (`bandsOf`, `crewRank`); `hunt.ts` y `HuntExplorer.setCrew/markSeen` lo usan. Un dragón es de todos (aviso `dragon` del bus, vienen aunque cacen en otro mapa); un dorado común lo deja el que lo tiene más cerca un compañero. |
 | `camp.ts` / `farming.ts` / `explore.ts` / `power.ts` / `golden.ts` | Campamentos y objetivo por exp/s, exploración del mapa vacío, qué puede matar el personaje, regla de dorados. |
 | `loop-ctx.ts` | Caminar con el terreno (`walkTowards`) y detectar trabas (`stuckSince`). |
 | `estacion.ts` / `estacion-logic.ts` / `ui/` | La estación y su interfaz (`panel.html`/`estacion.html` se generan con `bun run ui:build`). |
