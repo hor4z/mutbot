@@ -30,7 +30,7 @@ import { D } from './directivas';
 import { scoutShopsStep } from './shop-scout';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
-import { warpAndWait } from './warps';
+import { WARP_COOLDOWN_MS, warp, warpAndWait } from './warps';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
@@ -93,6 +93,7 @@ function nearestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) =
 export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
   const ctx = newLoopCtx();
+  let fleeing = false;
 
   // Monstruos atacables: los de world.npcs fuera de zona segura. Un personaje que no aguanta la esquina solo ataca lo que
   // su poder permite; los dorados los decide la regla de dorados.
@@ -238,6 +239,23 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       potionsDrunk++;
       await sleep(200);
       continue;
+    }
+    // Huir con poca vida (Slow, sin pociones): en Atlans Capitan quedó parado con 9 monstruos encima y bajó de 526 a 113 de vida en 16 s
+    // porque no podía pelear con ellos. Con monstruos cerca y la vida por debajo del límite, warp al pueblo y esperar a recuperarse.
+    if (strategy.fleeBelow != null && world.maxHp > 0) {
+      const pct = world.hp / world.maxHp;
+      const attackers = [...world.npcs.values()].some((m) => chebyshev(m.x, m.y, world.x, world.y) <= 6 && !isSafeZone(world.map, m.x, m.y));
+      if (!fleeing && pct < strategy.fleeBelow && attackers) { fleeing = true; log(`Huyo: vida al ${Math.round(pct * 100)} % con monstruos encima.`); trackEvent('flee', mapName(world.map), Math.round(pct * 100), 0, { map: world.map, x: world.x, y: world.y }); }
+      if (fleeing) {
+        ctx.target = null;
+        if (pct >= 0.7) { fleeing = false; log('Recuperado: vuelvo a lo mío.'); }
+        else {
+          bot.doing = `recuperando vida (${Math.round(pct * 100)} %)`;
+          if (!isSafeZone(world.map, world.x, world.y) && Date.now() - bot.lastWarpAt > WARP_COOLDOWN_MS) await warpAndWait(warp(2));
+          await sleep(1000);
+          continue;
+        }
+      }
     }
     if (bot.retarget) {
       bot.retarget = false;

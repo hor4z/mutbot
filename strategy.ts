@@ -32,6 +32,8 @@ export type Strategy = {
   statBatchMin: number | null;
   /** Cuánto vale matar a este tipo de monstruo (exp por kill estimada): elige el de más valor por distancia en vez del más cercano. null: el más cercano. */
   targetValue: ((type: number) => number) | null;
+  /** Fracción de vida por debajo de la cual huye al pueblo si hay monstruos encima (null: no huye). Sin pociones es lo único que lo salva. */
+  fleeBelow: number | null;
   /** Pelear con lo que haya al paso mientras camina al lugar (en vez de pasar entre los monstruos hasta el ancla). */
   fightOnTheWay: boolean;
   /** Usar el warp también dentro del mismo mapa cuando el lugar queda lejos (place.ts, travelTo). El Fast sigue caminando. */
@@ -40,7 +42,7 @@ export type Strategy = {
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, sameMapWarp: false, fightOnTheWay: false, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, statBatchMin: null, targetValue: null, sameMapWarp: false, fightOnTheWay: false, fleeBelow: null, choosePlace };
 
 /**
  * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
@@ -131,7 +133,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, fightOnTheWay: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, fightOnTheWay: true, fleeBelow: 0.4, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
