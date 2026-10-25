@@ -652,6 +652,7 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
+      if (url.pathname === '/api/directivas') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), estacion: D });
       if (url.pathname === '/api/state') return json({
         chars: view(), alerts, invasion: invasion(), now: Date.now(), freeAccounts: db.freeAccounts(),
       });
@@ -661,7 +662,6 @@ Bun.serve({
     }
     if (url.pathname === '/api/directivas') {
       // Perillas que los bots leen en caliente (directivas.ts). Mismas reglas de origen y JSON que /api/do.
-      if (req.method === 'GET') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), estacion: D });
       if (req.method === 'POST') {
         const origin = req.headers.get('origin');
         if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
