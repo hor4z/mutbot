@@ -130,8 +130,9 @@ export const HUNT_DRY_MS = 2 * 60_000;
 // Quedan pocos acá y otro mapa tiene muchos más: se pasa sin esperar los 2 min.
 export const HUNT_FEW_ALIVE = 3;
 export const HUNT_FEW_MIN_STAY_MS = 45_000;
-export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice; since?: number }): string | null {
-  if (!inp.next.ok) return null;
+/** `stay`: el mapa del Golden Dragon mientras dura su invasión: ahí se queda (los otros mapas solo tienen dorados comunes; medido el 25/10: dejarlo a los 7 min perdió los últimos 8). */
+export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice; since?: number; stay?: boolean }): string | null {
+  if (inp.stay || !inp.next.ok) return null;
   const here = inp.invasion?.maps.find((m) => m.map === inp.map)?.alive ?? 0;
   const next = inp.next.alive ?? 0;
   if (inp.since != null && inp.now - inp.since >= HUNT_FEW_MIN_STAY_MS && here <= HUNT_FEW_ALIVE && next >= 8 && next >= 3 * Math.max(here, 1)) {

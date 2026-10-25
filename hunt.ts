@@ -131,7 +131,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now, maxMs: RED_HUNT_MS })
     : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
       (h.auto && world.map === h.hunt.map
-        ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since,
+        ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since, stay: freshDragonMap(now) === h.hunt.map,
             next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now) }) })
         : null);
   if (stop) {
