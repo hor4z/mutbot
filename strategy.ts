@@ -67,15 +67,19 @@ export function slowStatPlan(points: number, stats: StatValues): StatValues {
  * los niveles 48-74). En este server los Giants viven en Lorencia, no en Devias: la v1 mandaba a Devias 4 y no había nada que matar.
  */
 type SlowSpot = { from: () => number; warp: number; anchor: () => Pos; radius: number; name: string };
-/** Devias 2 deja en la zona noroeste de Devias ([0,0,128,128]: Ice Monster y Hommerd, ~150 en total, densidad 0,009): el ancla es la celda de spawns más cercana. */
+/**
+ * Devias 1 deja en (205,41), en la zona noreste ([128,0,251,128]: Worm y Assassin, densidad 0,006). El ancla es la celda de spawns más cercana
+ * que no esté cerca de un nido (spawns.ts). Devias 2 quedó descartado: deja a 12 tiles de un nido de 10 Elite Yeti y Capitan murió ahí.
+ */
+const DEVIAS1_LANDING: Pos = { x: 205, y: 41 };
 let deviasAnchor: Pos | null = null;
-const deviasNorthwest = (): Pos => (deviasAnchor ??= (() => { const w = warp(5); const s = bestSpot(w.map, w.arrival ?? { x: 24, y: 25 }, isMonster); return s ? { x: s.x, y: s.y } : (w.arrival ?? { x: 24, y: 25 }); })());
+const deviasNortheast = (): Pos => (deviasAnchor ??= (() => { const s = bestSpot(2, DEVIAS1_LANDING, isMonster); return s ? { x: s.x, y: s.y } : DEVIAS1_LANDING; })());
 export const SLOW_SPOTS: readonly SlowSpot[] = [
   { from: () => 0, warp: 2, anchor: () => ({ x: 200, y: 137 }), radius: 20, name: 'Lorencia (Spiders)' },
   { from: () => D.slowBullFromLevel, warp: 2, anchor: () => ({ x: 165, y: 55 }), radius: 25, name: 'Lorencia (Bull Fighters)' },
   { from: () => D.slowGiantsFromLevel, warp: 2, anchor: () => ({ x: 30, y: 35 }), radius: 30, name: 'Lorencia (Giants)' },
-  // Medido el 2026-10-25 con Capitan (nivel 129-131): ~300.000 exp/min contra ~200.000 en los Giants, sin muertes (vida mínima 76 %).
-  { from: () => D.slowDeviasFromLevel, warp: 5, anchor: deviasNorthwest, radius: 30, name: 'Devias (Ice Monster y Hommerd)' },
+  // En la prueba (nivel 129-133, saliendo de Devias 1 y peleando en el camino) rindió ~300.000 exp/min contra ~200.000 en los Giants; este ancla concreto se mide aparte.
+  { from: () => D.slowDeviasFromLevel, warp: 4, anchor: deviasNortheast, radius: 30, name: 'Devias 1 (Worm y Assassin)' },
 ];
 
 /**
@@ -133,7 +137,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, fightOnTheWay: true, fleeBelow: 0.4, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, sameMapWarp: true, fightOnTheWay: true, fleeBelow: 0.5, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
