@@ -46,7 +46,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
   ctx.target = null;
   if (await travelTo(TOWN)) return true;
 
-  const npcs = [...world.npcs.values()].filter((n) => SHOP_TYPES.has(n.type) && !st!.done.has(n.id));
+  const npcs = [...world.townNpcs.values()].filter((n) => SHOP_TYPES.has(n.type) && !st!.done.has(n.id));
   const me = { x: world.x, y: world.y };
   npcs.sort((a, b) => chebyshev(a.x, a.y, me.x, me.y) - chebyshev(b.x, b.y, me.x, me.y));
   const npc = npcs[0];
