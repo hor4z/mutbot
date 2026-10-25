@@ -76,3 +76,9 @@
 .simple-tabs button[aria-selected="true"] { background: rgba(255,255,255,.12); font-weight: 600; }
 .simple-modal-box select { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: transparent; color: inherit; font: inherit; }
 .simple-modal-box select option { color: #111; }
+
+/* Pestañas por servidor */
+.simple-tabs { display: flex; gap: 6px; margin: 4px 0 8px; }
+.simple-tabs button { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.04); color: inherit; cursor: pointer; font: inherit; font-weight: 600; }
+.simple-tabs button small { opacity: .75; font-weight: 400; margin-left: 4px; }
+.simple-tabs button.on { background: rgba(120,170,255,.22); border-color: rgba(120,170,255,.6); }

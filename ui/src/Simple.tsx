@@ -13,6 +13,8 @@ const HIDDEN = new Set(["mortael"]);
 const fmtExp = (n: number) => (n >= 1e6 ? `${Math.round(n / 1e6)}M/min` : n >= 1e3 ? `${Math.round(n / 1e3)}k/min` : "0");
 const hhmm = (t: number) => new Date(t).toTimeString().slice(0, 8);
 
+type Srv = "fast" | "slow";
+const SRV_NAME: Record<Srv, string> = { fast: "Fast", slow: "Slow" };
 function stateOf(c: Character): { text: string; tone: "on" | "wait" | "off" } {
   if (c.status === "on") return { text: "Conectado", tone: "on" };
   if (c.status === "starting") return { text: "Conectando…", tone: "wait" };
@@ -37,9 +39,9 @@ type Tab = "cuenta" | "personaje" | "existente";
  * Altas en dos pasos: 1) crear la cuenta en el juego (el worker la registra; queda guardada sin personaje y sin tarjeta) y
  * 2) crear su personaje (nombre y clase; el bot lo crea al conectarlo). La tercera pestaña es para lo que ya existe.
  */
-function AccountsModal({ free, preset, onClose }: { free: string[]; preset: { user: string; char: string } | null; onClose: () => void }) {
+function AccountsModal({ free, preset, defaultServer, onClose }: { free: string[]; preset: { user: string; char: string } | null; defaultServer: Srv; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>(preset || free.length ? "personaje" : "cuenta");
-  const [f, setF] = useState({ user: preset?.user ?? "", char: preset?.char ?? "", pass: "", cls: "", server: "fast" });
+  const [f, setF] = useState({ user: preset?.user ?? "", char: preset?.char ?? "", pass: "", cls: "", server: defaultServer });
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -113,25 +115,46 @@ function Shell() {
   const [preset, setPreset] = useState<{ user: string; char: string } | null>(null);
   const { data, loaded, error, refresh } = useStationData();
   const actions = useActions(refresh);
-  const chars = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
+  // Cada servidor es un mundo aparte (otros personajes, mapas, mensajes): una pestaña por servidor, con su propia escuadra.
+  const [srv, setSrv] = useState<Srv>(() => { try { return localStorage.getItem("srv") === "slow" ? "slow" : "fast"; } catch { return "fast"; } });
+  const pickSrv = (s: Srv) => { setSrv(s); try { localStorage.setItem("srv", s); } catch { /* sin almacenamiento: no pasa nada */ } };
+  const all = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
+  const chars = all.filter((c) => c.server === srv);
+  const srvOfChar = new Map(all.map((c) => [c.char, c.server] as const));
+  const summary = (s: Srv) => {
+    const on = all.filter((c) => c.server === s && isOnline(c));
+    return { on: on.length, stuck: on.filter((c) => c.stuck).length, exp: on.reduce((n, c) => n + (c.game?.expPerMin ?? 0), 0) };
+  };
   // El mapa solo cuando el personaje ya entró al juego: mientras conecta (o espera cupo) no hay nada que mostrar.
   const inGame = (c: Character) => c.game != null && c.game.mode !== "connecting";
   const online = chars.filter((c) => isOnline(c) && c.panel && inGame(c));
   // Las subidas de nivel tapaban lo importante: de ellas queda solo la última de cada personaje.
   const lastLevel = new Map<string, Alert>();
   for (const a of data.alerts) if (a.kind === "level" && a.char && (lastLevel.get(a.char)?.at ?? 0) < a.at) lastLevel.set(a.char, a);
-  const msgs = [...data.alerts.filter((a) => a.kind !== "level"), ...lastLevel.values()].sort((a, b) => b.at - a.at).slice(0, 60);
+  // Los mensajes de un personaje van a la pestaña de su servidor; los generales (invasiones) son del Fast.
+  const mine = (a: Alert) => (a.char ? srvOfChar.get(a.char) === srv : srv === "fast");
+  const msgs = [...data.alerts.filter((a) => a.kind !== "level"), ...lastLevel.values()].filter(mine).sort((a, b) => b.at - a.at).slice(0, 60);
 
   return (
     <div className="simple">
       <aside className="simple-list">
         <h1>MU / Estación</h1>
-        <Invasion inv={data.invasion} now={data.now || Date.now()} />
+        <div className="simple-tabs" role="tablist">
+          {(["fast", "slow"] as Srv[]).map((s) => {
+            const t = summary(s);
+            return (
+              <button key={s} role="tab" aria-selected={srv === s} className={srv === s ? "on" : ""} onClick={() => pickSrv(s)} title={`${t.on} conectados${t.stuck ? `, ${t.stuck} trabados` : ""}`}>
+                {SRV_NAME[s]} <small>{t.on}{t.stuck ? ` · ⚠ ${t.stuck}` : ""}</small>
+              </button>
+            );
+          })}
+        </div>
+        {srv === "fast" ? <Invasion inv={data.invasion} now={data.now || Date.now()} /> : <div className="simple-inv">{summary("slow").on ? `Total del Slow: ${fmtExp(summary("slow").exp)}` : "Sin personajes del Slow conectados"}</div>}
         {error && <div className="simple-err">{error}</div>}
         {chars.map((c) => {
           const st = stateOf(c);
           // Una cuenta juega con un solo personaje a la vez: si otro de la misma cuenta está conectado, este no se puede conectar.
-          const sibling = isOnline(c) ? undefined : chars.find((o) => o !== c && o.user === c.user && isOnline(o));
+          const sibling = isOnline(c) ? undefined : all.find((o) => o !== c && o.user === c.user && isOnline(o));
           return (
             <div key={c.key} className="simple-row">
               <div className="simple-head">
@@ -160,6 +183,7 @@ function Shell() {
                 </select>
               </label>
               {sibling && <small className="simple-wait">La cuenta la usa {sibling.char}: desconectala para jugar con {c.char}.</small>}
+              {c.stuck && <small className="simple-err">⚠ Trabado: no avanza hace rato.</small>}
               {c.status === "failed" && <small className="simple-err">{c.msg}</small>}
               {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
                 <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setAltaOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
@@ -191,9 +215,9 @@ function Shell() {
             </div>
           );
         })}
-        {loaded && !chars.length && <p className="simple-empty">No hay personajes disponibles.</p>}
+        {loaded && !chars.length && <p className="simple-empty">No hay personajes en el {SRV_NAME[srv]}. Se agregan con "+ Agregar cuenta" y se mueven con el selector Servidor de cada tarjeta.</p>}
         <button className="simple-add" onClick={() => { setPreset(null); setAltaOpen(true); }}>+ Agregar cuenta</button>
-        {altaOpen && <AccountsModal free={data.freeAccounts} preset={preset} onClose={() => setAltaOpen(false)} />}
+        {altaOpen && <AccountsModal free={data.freeAccounts} preset={preset} defaultServer={srv} onClose={() => setAltaOpen(false)} />}
         <h2>Mensajes</h2>
         <div className="simple-msgs">
           {msgs.map((m) => (
@@ -211,7 +235,7 @@ function Shell() {
             <iframe src={`http://127.0.0.1:${c.port}/panel?mapa`} title={`Mapa de ${c.char}`} />
           </section>
         ))}
-        {!online.length && <div className="simple-empty">Conectá un personaje para ver su mapa.</div>}
+        {!online.length && <div className="simple-empty">Conectá un personaje del {SRV_NAME[srv]} para ver su mapa.</div>}
       </main>
     </div>
   );
