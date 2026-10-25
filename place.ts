@@ -16,6 +16,7 @@ import { bot, world } from './state';
 import { directedLeader, myShadows, setWaiting } from './bus';
 import { isSafeZone, walkableFor } from './terrain';
 import { trackEvent } from './telemetry';
+import { D } from './directivas';
 import { dist, log, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
@@ -28,9 +29,7 @@ const TIERS: { minLevel: number; warp: number; anchor: Pos; radius: number }[] =
 ];
 
 /** Jugadores (los nuestros también) a la vista dentro y alrededor de la esquina a partir de los cuales ya no rinde para todos. */
-const CORNER_CROWD_MAX = 4;
 /** Cuánto busca otro lugar un bot al que la esquina le quedó llena. */
-const CORNER_BAN_MS = 8 * 60_000;
 let cornerBanUntil = 0;
 /** Otras Arenas (mapa, monstruo que hay que poder matar), de más a menos exp: ~50M/min cada una contra una esquina con gente. */
 const OTHER_ARENAS: readonly (readonly [number, number])[] = [[85, 75], [84, 72]];
@@ -138,9 +137,9 @@ export function choosePlace(): Place | null {
     // Esquina llena (otros jugadores y nuestros bots se reparten los mismos monstruos): este bot sale a otra Arena un rato y vuelve a mirar.
     // Cada uno decide con lo que ve, así que se van de a uno: al irse el primero la esquina se vacía un poco y los demás se quedan.
     const now = Date.now();
-    if (now >= cornerBanUntil && world.map === CORNER.map && inCorner({ x: world.x, y: world.y }) && now - bot.lastWarpAt > 20_000 && cornerCrowd() >= CORNER_CROWD_MAX) {
-      cornerBanUntil = now + CORNER_BAN_MS;
-      log(`Esquina llena (${cornerCrowd()} jugadores cerca): busco otra Arena por ${CORNER_BAN_MS / 60_000} min.`);
+    if (now >= cornerBanUntil && world.map === CORNER.map && inCorner({ x: world.x, y: world.y }) && now - bot.lastWarpAt > 20_000 && D.cornerCrowdMax > 0 && D.cornerBanMin > 0 && cornerCrowd() >= D.cornerCrowdMax) {
+      cornerBanUntil = now + D.cornerBanMin * 60_000;
+      log(`Esquina llena (${cornerCrowd()} jugadores cerca): busco otra Arena por ${D.cornerBanMin} min.`);
     }
     if (now < cornerBanUntil) {
       for (const [map, gate] of OTHER_ARENAS) {

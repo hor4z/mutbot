@@ -32,6 +32,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 import { classFamily } from './farming';
 import { isSafeZone, walkableFor } from './terrain';
 import { mapName } from './panel-logic';
+import { ARCHIVO, D, ESQUEMA, guardarArchivo, iniciarDirectivas, leerArchivo, validar } from './directivas';
 import type { PanelServerMessage, PanelState } from './panel-protocol';
 
 const ROOT = import.meta.dir;
@@ -544,6 +545,7 @@ try {
 const SHADOW_POWER_RATIO = 0.5;
 /** MUBOT_SHADOWS=0 apaga las sombras: cada uno farmea lo suyo y se hace party si coinciden. */
 const SHADOWS_ENABLED = process.env.MUBOT_SHADOWS !== '0';
+const shadowsOn = () => SHADOWS_ENABLED && D.shadows;
 const shadowOff = new Set<string>();
 /** A quién sigue cada personaje, si es un humano (en memoria: se vuelve a pedir tras reiniciar la estación). */
 const followTargets = new Map<string, { name: string; map?: number; x?: number; y?: number }>();
@@ -553,7 +555,7 @@ function orchestrate() {
   const power = (s: Slot) => statPower(s.state!.char.stats);
   const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
-  for (const s of on) if (SHADOWS_ENABLED && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
+  for (const s of on) if (shadowsOn() && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
   // Quien sigue a un humano no es sombra de ningún bot.
   for (const k of followTargets.keys()) shadowOf.delete(k);
   // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
@@ -640,6 +642,7 @@ syncRunning();
 setInterval(() => { refreshSlots(); syncRunning(); trackAlerts(); }, 2000);
 setInterval(orchestrate, 1000);
 
+iniciarDirectivas('estacion', (m) => say(m));
 Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
@@ -655,6 +658,35 @@ Bun.serve({
       const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
       if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       return new Response('No encontrado.', { status: 404 });
+    }
+    if (url.pathname === '/api/directivas') {
+      // Perillas que los bots leen en caliente (directivas.ts). Mismas reglas de origen y JSON que /api/do.
+      if (req.method === 'GET') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), estacion: D });
+      if (req.method === 'POST') {
+        const origin = req.headers.get('origin');
+        if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
+        if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
+        const body = await req.text();
+        if (body.length > 2048) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
+        let raw: any;
+        try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
+        const scope = typeof raw?.scope === 'string' ? raw.scope.toLowerCase() : '';
+        if (!/^(global|[a-z0-9_]{1,10})$/.test(scope)) return json({ ok: false, msg: 'scope: "global" o el nombre de un personaje' }, 400);
+        const set = raw.set && typeof raw.set === 'object' && !Array.isArray(raw.set) ? (raw.set as Record<string, unknown>) : {};
+        const unset = Array.isArray(raw.unset) ? raw.unset.filter((k: unknown): k is string => typeof k === 'string') : [];
+        const archivo = leerArchivo();
+        const mine = (archivo[scope] ??= {});
+        for (const [k, v] of Object.entries(set)) {
+          const r = validar(k, v);
+          if (!r.ok) return json({ ok: false, msg: `${k}: ${r.why}` }, 400);
+          mine[k] = r.v;
+        }
+        for (const k of unset) delete mine[k];
+        if (!Object.keys(mine).length) delete archivo[scope];
+        guardarArchivo(archivo);
+        say(`directivas (${scope}): ${JSON.stringify(set)}${unset.length ? ` sin ${unset.join(', ')}` : ''}`);
+        return json({ ok: true, msg: 'guardado: los bots lo toman en ~2 s', valores: archivo });
+      }
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.

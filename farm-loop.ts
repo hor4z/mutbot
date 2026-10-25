@@ -13,6 +13,7 @@ import { sendHit, sendTargetedSkill } from './actions';
 import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
 import { CORNER, inCorner, nextRoutePoint } from './corner';
 import { DRAGON_TYPES, GoldenRule } from './golden';
+import { DragonFights, fightData } from './dragon-fight';
 import { canFarmMonster, canFight } from './power';
 import { partyUp } from './help';
 import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
@@ -104,6 +105,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   let routeIdx: number | null = null;
   const golden = new GoldenRule();
   const goldAnnounced = new Set<number>();
+  const fights = new DragonFights();
+  const endFight = (e: ReturnType<DragonFights['expire']>[number] | null) => {
+    if (e) trackEvent('dragon_fight', monsterName(e.type), e.type, e.mine ? 1 : 0, { ...fightData(e), map: world.map });
+  };
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro id); dentro de la ventana es una sola.
   const onDeath = (source: string) => {
@@ -128,6 +133,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (dead && GOLDEN_TYPES.has(dead.type)) {
       const kid = p.KillerId & 0x7fff;
       const mine = kid === bot.playerId;
+      if (DRAGON_TYPES.has(dead.type)) endFight(fights.killed(id, Date.now(), mine ? bot.charName : world.players.get(kid)?.name ?? null, mine));
       trackEvent('golden_kill', monsterName(dead.type), dead.type, mine ? 1 : 0, { gx: dead.x, gy: dead.y, killer: mine ? bot.charName : world.players.get(kid)?.name ?? null, hunting: !!bot.hunting });
     }
     world.npcs.delete(id);
@@ -237,6 +243,13 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     partyUp();
     const strong = isStrong();
     for (const r of drainGold()) onGoldenRequest(r, strong === false);
+    for (const n of ctx.npcs.values()) {
+      if (!DRAGON_TYPES.has(n.type)) continue;
+      const near = [...world.players.values()].filter((q) => q.name != null && chebyshev(q.x, q.y, n.x, n.y) <= 15);
+      const mates = near.filter((q) => isMate(q.name!)).length + 1; // yo también
+      fights.seen(n.id, n.type, n.x, n.y, nowT, mates, near.length - (mates - 1), bot.dragonMap && Math.abs(nowT - bot.dragonMap.at) < 20 * 60_000 ? bot.dragonMap.at : null);
+    }
+    for (const e of fights.expire(nowT)) endFight(e);
     if (bot.hunting && strong === false && followsLeader()) stopHunt('sigo a mi líder');
     // El débil con un líder que vale la pena no sale a cazar solo: lo sigue (place.ts) y caza como su sombra.
     if (strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
@@ -342,6 +355,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         }
         if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
           ctx.lastCastAt = Date.now();
+          if (DRAGON_TYPES.has(t.type)) fights.hit(target, ctx.lastCastAt);
           ctx.skillsUsed++;
           await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {

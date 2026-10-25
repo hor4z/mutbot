@@ -8,6 +8,7 @@
  */
 import { announceGold, teammates, type GoldNotice } from './bus';
 import { bandsOf, crewRank } from './crew';
+import { D } from './directivas';
 import { trackEvent } from './telemetry';
 import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES, stickyGolden } from './golden';
@@ -20,11 +21,10 @@ import { isSafeZone, terrainOf, walkableFor } from './terrain';
 import { chebyshev, log } from './util';
 
 // Nivel mínimo para salir a cazar: el chequeo de poder (`weak`, stats por detrás del nivel) ya frena al recién reseteado.
-const HUNT_MIN_LEVEL = 300;
 // Un personaje limitado (stats por detrás del nivel) también sale a la invasión: recorre, avisa lo que ve y solo ataca
 // los dorados que su poder aguanta (el resto, como un dragón, queda avisado para el fuerte).
 const INFORM_MIN_LEVEL = 150;
-const minLevelFor = (weak: boolean) => (weak ? INFORM_MIN_LEVEL : HUNT_MIN_LEVEL);
+const minLevelFor = (weak: boolean) => (weak ? INFORM_MIN_LEVEL : D.huntMinLevel);
 // Un dorado visto se recuerda 3 min (para volver tras morir); a los compañeros se les avisa como mucho cada 15 s.
 const SPOT_TTL_MS = 3 * 60_000;
 const SHARE_MS = 15_000;
@@ -39,13 +39,13 @@ let lastDragon: { id: number; x: number; y: number; at: number } | null = null;
 
 /** Los compañeros que cazan en este mapa y mi lugar entre todos (por nombre): el reparto del rastrillaje. */
 function huntCrew() {
-  const mates = teammates().filter((m) => m.mode === 'hunt' && m.map === world.map);
+  const mates = D.crew ? teammates().filter((m) => m.mode === 'hunt' && m.map === world.map) : [];
   return { mates, ...crewRank(bot.charName, mates.map((m) => m.char)) };
 }
 
 /** Un dorado común que un compañero tiene más cerca (a <= 6 tiles de él): lo deja a él y busca otro. Los dragones son de todos. */
 function claimedByMate(g: { x: number; y: number; type: number }, mates: readonly { x: number; y: number }[]): boolean {
-  if (DRAGON_TYPES.has(g.type)) return false;
+  if (DRAGON_TYPES.has(g.type) || !D.claimCommons) return false;
   const mine = chebyshev(world.x, world.y, g.x, g.y);
   return mates.some((m) => { const d = chebyshev(m.x, m.y, g.x, g.y); return d <= 6 && d < mine; });
 }
@@ -86,8 +86,8 @@ export function onGoldenRequest(r: GoldNotice, weak: boolean) {
   }
   // Un dragón es el objetivo principal y muy duro: van todos (con resets son fuertes aunque el nivel sea bajo) y dejan lo que hacen,
   // incluso otra cacería. Un dorado común solo lo atiende el libre, fuerte y de nivel.
-  if (bot.resetting || bot.paused) return;
-  if (!r.dragon && (bot.hunting || weak || world.level < HUNT_MIN_LEVEL)) return;
+  if (bot.resetting || bot.paused || !D.hunt) return;
+  if (!(r.dragon && D.dragonAll) && (bot.hunting || weak || world.level < D.huntMinLevel)) return;
   const hm = HUNT_MAPS.find((h) => h.map === r.map);
   if (!hm || world.level < hm.reqLevel) return;
   if (bot.hunting) stopHunt(`${r.from} vio ${r.note}`);
@@ -98,8 +98,10 @@ export function onGoldenRequest(r: GoldNotice, weak: boolean) {
 /** Arrancar, cortar y viajar. true = consumió el tick. */
 export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
   const now = Date.now();
+  // Directiva `hunt` apagada: se corta la cacería automática y no se sale a ninguna por cuenta propia (las del panel siguen).
+  if (!D.hunt && bot.hunting?.auto) { stopHunt('directiva: hunt apagado'); return true; }
   if (!bot.hunting) {
-    if (bot.paused || bot.resetting || world.level < minLevelFor(weak)) return false;
+    if (!D.hunt || bot.paused || bot.resetting || world.level < minLevelFor(weak)) return false;
     // Dragón Rojo (caja +4): con el aviso del server, a ese mapa a cazarlo (una vez por aviso).
     if (!weak && bot.redDragon && now - bot.redDragon.at < RED_HUNT_MS && lastRedAt !== bot.redDragon.at) {
       lastRedAt = bot.redDragon.at;
@@ -131,7 +133,7 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now, maxMs: RED_HUNT_MS })
     : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
       (h.auto && world.map === h.hunt.map
-        ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since, stay: freshDragonMap(now) === h.hunt.map,
+        ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since, stay: D.stayDragonMap && freshDragonMap(now) === h.hunt.map,
             next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now) }) })
         : null);
   if (stop) {
