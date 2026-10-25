@@ -29,6 +29,7 @@ export const ESQUEMA = {
   // --- Slow: lo que se afina en caliente de `slowStrategy` (strategy.ts) ---
   slowStatBatch: { def: 10, min: 1, max: 500, srv: 'slow', doc: 'Puntos que se juntan antes de repartir (el Fast usa 200).' },
   slowAgiTarget: { def: 90, min: 0, max: 400, srv: 'slow', doc: 'Agilidad a la que se llega primero (velocidad de ataque = Agi / 15; 90 = 6).' },
+  slowProbarWarp: { def: 0, min: 0, max: 40, srv: 'slow', doc: 'Prueba un lugar: índice del warp al que ir a farmear (4 = Devias 1, 5 = Devias 2, 6 = Devias 3, 7 = Devias 4, 11 = Atlans…). 0: el spot normal por nivel. Se mide con los ticks de la base.' },
   slowBullFromLevel: { def: 12, min: 0, max: 400, srv: 'slow', doc: 'Nivel desde el que se farmea Bull Fighters (antes, Spiders).' },
   slowGiantsFromLevel: { def: 45, min: 0, max: 400, srv: 'slow', doc: 'Nivel desde el que se farmea Giants (~26.000 exp por kill).' },
 } as const satisfies Record<string, Spec>;
