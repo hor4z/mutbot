@@ -64,11 +64,18 @@ export function slowStatPlan(points: number, stats: StatValues): StatValues {
  * kill, `scripts/analyze-session.ts`): Spiders hasta el nivel ~12, Bull Fighters hasta el ~45 y Giants desde ahí (~26.000 exp por kill a
  * los niveles 48-74). En este server los Giants viven en Lorencia, no en Devias: la v1 mandaba a Devias 4 y no había nada que matar.
  */
-export const SLOW_SPOTS = [
-  { from: () => 0, anchor: { x: 200, y: 137 }, radius: 20, name: 'Lorencia (Spiders)' },
-  { from: () => D.slowBullFromLevel, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
-  { from: () => D.slowGiantsFromLevel, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
-] as const;
+type SlowSpot = { from: () => number; warp: number; anchor: () => Pos; radius: number; name: string };
+/** Devias 2 deja en la zona noroeste de Devias ([0,0,128,128]: Ice Monster y Hommerd, ~150 en total, densidad 0,009): el ancla es la celda de spawns más cercana. */
+let deviasAnchor: Pos | null = null;
+const deviasNorthwest = (): Pos => (deviasAnchor ??= (() => { const w = warp(5); const s = bestSpot(w.map, w.arrival ?? { x: 24, y: 25 }, isMonster); return s ? { x: s.x, y: s.y } : (w.arrival ?? { x: 24, y: 25 }); })());
+export const SLOW_SPOTS: readonly SlowSpot[] = [
+  { from: () => 0, warp: 2, anchor: () => ({ x: 200, y: 137 }), radius: 20, name: 'Lorencia (Spiders)' },
+  { from: () => D.slowBullFromLevel, warp: 2, anchor: () => ({ x: 165, y: 55 }), radius: 25, name: 'Lorencia (Bull Fighters)' },
+  { from: () => D.slowGiantsFromLevel, warp: 2, anchor: () => ({ x: 30, y: 35 }), radius: 30, name: 'Lorencia (Giants)' },
+  // Medido el 2026-10-25 con Capitan (nivel 129-131): ~300.000 exp/min contra ~200.000 en los Giants, sin muertes (vida mínima 76 %).
+  { from: () => D.slowDeviasFromLevel, warp: 5, anchor: deviasNorthwest, radius: 30, name: 'Devias (Ice Monster y Hommerd)' },
+];
+
 /**
  * Lugar de prueba (directiva `slowProbarWarp`): el warp pedido y, como ancla, donde queda el personaje al llegar. Si ahí no hay monstruos
  * (el warp deja en el pueblo), sale a buscarlos: cada 9 s prueba un punto más lejos, en 8 direcciones y cada vez más afuera, y apenas ve
@@ -112,7 +119,7 @@ export function slowPlace(level: number): Place {
   if (D.slowProbarWarp > 0 && WARPS.some((w) => w.index === D.slowProbarWarp)) return probePlace(D.slowProbarWarp);
   probe = null;
   const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.from())!;
-  return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
+  return { kind: 'tier', warp: warp(t.warp), anchor: t.anchor(), radius: t.radius, name: t.name };
 }
 
 /**
