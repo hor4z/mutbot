@@ -62,6 +62,8 @@ En orden; cada paso puede cortar el tick con `continue`:
 - **Canal directo entre bots (`bus.ts`, UDP en loopback):** cada bot escucha en su puerto (`puerto de su panel + 300`) y manda a los
   demás su posición 4 veces por segundo y, al instante, cada dorado que ve. Sin servidor en el medio ni consulta periódica
   (latencia de milisegundos). La estación escucha en el 9090 solo para mostrar los avisos en Mensajes.
+  El aviso lleva la marca `dragon` (Golden Dragon y Dragón Rojo): a un dragón van todos los que cazan o farmean (dejan incluso otra cacería, sin filtro de nivel ni de "limitado") y el aviso se repite cada 30 s mientras dura la pelea. Los dorados comunes los atiende el libre y fuerte.
+- **Rastrillaje coordinado (`crew.ts`, `hunt.ts`, `HuntExplorer.setCrew/markSeen`):** los que cazan en el mismo mapa (modo `hunt` en el canal) se reparten el mapa en franjas contiguas, ordenados por nombre (sin ponerse de acuerdo); cada uno barre primero la suya y después ayuda en las otras. Lo que pisa un compañero cuenta como visto, y un dorado común que otro tiene más cerca (<= 6 tiles) se lo deja. Medido el 24/10 (ClickHouse): sin reparto, los pares cazaban a < 15 tiles entre sí el 60-73 % del tiempo.
 - **Orquestador (en `estacion.ts`, cada segundo):** el más fuerte de los conectados (suma de stats: fuerza+agilidad+vida+energía) es el **líder**; los que
   tienen menos de la mitad de su fuerza (el nivel y los resets no cuentan) son su **sombra**; con una fuerza parecida cooperan, salvo los que el usuario apague (casilla "Sombra de X"). Manda a cada uno por
   el canal `{l: a quién sigue, s: quiénes lo siguen}`. El bot obedece mientras la orden llegue (3 s); si deja de llegar, vuelve a

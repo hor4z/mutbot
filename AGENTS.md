@@ -419,14 +419,17 @@ El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un wor
 
 ## Personajes nuevos, worker y Slow (2026-10-24)
 
-> **2026-10-25:** el algoritmo de lugar/loot/stats (`place.ts`, `farm-loop.ts`, `farming.ts`, `loot.ts`, `progress.ts`, `zones.ts`, `state.ts`, `help.ts`, `bus.ts`) volvió al de la tarde del 24 (PR #48): sin carreo, sin reparto de a 10, sin zen obligatorio ni orden `follow`. El carreo y lo demás de esa sesión (zen siempre, Roamer, seguir a un humano) hacían que Hume y Zamu perdieran exp (juntaban zen con ~2.100 M y bajaban a buscar a una sombra débil). La versión anterior está en el commit `950e59e`.
+> **2026-10-25:** el algoritmo de lugar/loot/stats (`place.ts`, `farm-loop.ts`, `farming.ts`, `loot.ts`, `progress.ts`, `zones.ts`, `state.ts`, `help.ts`, `bus.ts`) volvió al de la tarde del 24 (PR #48): sin carreo, sin reparto de a 10, sin zen obligatorio ni orden `follow`. El carreo y lo demás de esa sesión (zen siempre, Roamer, seguir a un humano) hacían que Hume y Zamu perdieran exp (juntaban zen con ~2.100 M y bajaban a buscar a una sombra débil). La versión anterior está en el commit `950e59e`. Encima se agregó (`place.ts`): **esquina llena** — si estando en la esquina de Arena 2 el bot ve >= 4 jugadores cerca (los nuestros incluidos; `CORNER_CROWD_MAX`), busca otra Arena 8 min (Arena 4, después 3, si `canFarmMonster` lo permite) y se para en la "primera jaula a la derecha" de la llegada (`ARENA_CAGE`: +18, −2, radio 10; dato del usuario: nunca hacia el norte; sin probar en vivo). Una cuenta juega con un solo personaje a la vez (la estación lo avisa en la tarjeta y no reconecta al otro) y la estación reenvía los paquetes de posición entre los bots, porque los pares del bus se fijan al lanzar.
 
 Ver también [HANDOFF.md](HANDOFF.md) (estado y aprendizajes de esa sesión).
 - **Creación de personaje:** `MUBOT_CREATE_CLASS` (lo pasa la estación desde `characters.class`): si el personaje no está en la cuenta, el bot lo crea al entrar (`world.ts`, F3/01).
 - **Worker:** el proxy WebSocket devuelve el `fetch` del servidor sin reenviar mensajes (si no, agota los 10 ms de CPU del plan gratuito a los ~20 s). `net/socket.ts` imprime la URL del WebSocket (con el token).
 - **Slow (Beta):** proxy `wss://slow.mu.garden/ws`, connect server `clasico:44405`, game `clasico:55901`. El login de una cuenta del Fast devolvió `NoChargeInfo` (9); hipótesis sin confirmar: solo VIP.
 
-## Datos y aprendizaje (ClickHouse local)
+## Datos y aprendizaje (ClickHouse)
+
+> **Dónde vive:** `MUBOT_DB_URL` (en `.env.db`, no se commitea) apunta a otro equipo de la red (`192.168.100.8:8123`), no a `127.0.0.1`. Si "no responde", probá esa URL antes de levantar nada en local (el 25/10 se creyó caído por consultar `127.0.0.1`). Para consultar: `curl -u "$MUBOT_DB_USER:$MUBOT_DB_PASSWORD" "$MUBOT_DB_URL/?database=mubot" --data-binary "SELECT ..."` con `.env.db` cargado.
+
 
 - `bun run db:up` levanta ClickHouse en Docker (`db/docker-compose.yml`): solo en `127.0.0.1:8123`, datos
   en `~/.mubot/clickhouse`, credenciales en `.env.db` (no se commitea; `MUBOT_DB_USER`,

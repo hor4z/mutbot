@@ -77,7 +77,7 @@ y en el server OpenMU (`~/self/mutest/OpenMU/src`). Lo marcado *(inferido)* no s
   el dorado de esta invasión. El **tipo 44** es el **Dragón Rojo** de la otra invasión (los dragones que
   se ven volar). El avistamiento de las 21:50 en Lorencia probablemente fue un tipo 44.
 - Este server la corre cada hora (:50) y con más de 200 dorados; los valores por defecto de OpenMU son cada 4 h y 20/10 por tipo.
-- Otra invasión activa en este server: **Dragón Rojo** (ver abajo). White Wizard (cada 2 h, de 12 a 23) no se vio todavía.
+- Otra invasión activa en este server: **Dragón Rojo** (ver abajo). White Wizard (`[Mapa] White Wizard corps invasion!` / `... has ended.`) se vio el 24 y 25/10 en Noria y Lorencia, varias veces al día; el bot la ignora (no sabemos qué suelta ni cuánta exp da; falta medirla antes de sumarla al cazador).
 
 ## Invasión del Dragón Rojo
 
