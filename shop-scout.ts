@@ -4,7 +4,8 @@
  * (`POST /api/directivas {"scope":"capitan","set":{"scoutShops":true}}`); corre una vez y no repite hasta que la directiva pase a false.
  * Es para saber qué hay a la venta, dónde y a qué nivel (pociones, orbes de habilidad, equipo) antes de decidir qué comprar y qué recoger.
  */
-import { sendToGS, waitFor } from './connection';
+import { sendToGS } from './connection';
+import { EventBus } from './net/eventBus';
 import { D } from './directivas';
 import { itemInfo } from './panel-logic';
 import { buildCloseNpc, buildTalkNpc, decodeItemDetail } from './protocol097';
@@ -15,11 +16,15 @@ import { travelTo, type Place } from './place';
 import { warp } from './warps';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 
-/** NPC con tienda o servicio (tipos del cliente, data/monsters.json): se prueba hablar con cada uno que aparezca a la vista. */
-const SHOP_TYPES = new Set([230, 242, 243, 244, 245, 246, 248, 250, 251, 253, 254, 255, 258]);
+/**
+ * NPC de pueblo (tipos 200-299 del cliente, data/monsters.json) con los que se prueba hablar: todos menos los que no atienden (estatuas,
+ * altares, interruptores, guardias, el Golden Archer, el estadio) y Baz, el baúl (otra ventana, no una tienda).
+ */
+const NO_TALK = new Set([...Array.from({ length: 10 }, (_, i) => 200 + i), 215, 216, 217, 218, 219, 220, 221, 222, 224, 233, 236, 239, 240, 241, 247, 249, 252, 260]);
+const isTalkable = (type: number) => type >= 200 && type <= 299 && !NO_TALK.has(type);
 /** Lorencia (mapa 0): el centro del pueblo y puntos para recorrerlo y que los NPC entren en pantalla. */
 const TOWN: Place = { kind: 'tier', warp: warp(2), anchor: { x: 125, y: 120 }, radius: 14, name: 'Lorencia (pueblo)' };
-const PATROL = [{ x: 125, y: 122 }, { x: 140, y: 112 }, { x: 118, y: 108 }, { x: 122, y: 134 }, { x: 108, y: 126 }, { x: 146, y: 126 }, { x: 134, y: 100 }];
+const PATROL = [{ x: 125, y: 122 }, { x: 140, y: 112 }, { x: 118, y: 108 }, { x: 122, y: 134 }, { x: 108, y: 126 }, { x: 146, y: 126 }, { x: 134, y: 100 }, { x: 116, y: 142 }, { x: 150, y: 140 }, { x: 100, y: 110 }];
 const MAX_STEPS_PER_NPC = 80;
 
 let ran = false;
@@ -46,7 +51,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
   ctx.target = null;
   if (await travelTo(TOWN)) return true;
 
-  const npcs = [...world.townNpcs.values()].filter((n) => SHOP_TYPES.has(n.type) && !st!.done.has(n.id));
+  const npcs = [...world.townNpcs.values()].filter((n) => isTalkable(n.type) && !st!.done.has(n.id));
   const me = { x: world.x, y: world.y };
   npcs.sort((a, b) => chebyshev(a.x, a.y, me.x, me.y) - chebyshev(b.x, b.y, me.x, me.y));
   const npc = npcs[0];
@@ -63,21 +68,26 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
     st.done.add(npc.id);
     if (d > 2) { log(`Tiendas: no llegué a ${monsterName(npc.type)} (${npc.x},${npc.y}); sigo.`); return true; }
     bot.doing = `recorrido de tiendas: hablando con ${monsterName(npc.type)}`;
+    // El server manda la ventana (0x30) y la lista (0x31) pegadas, en el mismo paquete de red: hay que estar suscrito a los dos ANTES de hablar
+    // (esperar uno y recién ahí suscribirse al otro se pierde el segundo).
+    const got: { window: string | null; items: Shop[] | null } = { window: null, items: null };
+    const onPacket = (raw: unknown) => {
+      const p = toBytes(raw);
+      const code = codeOf(p);
+      if (code === 0x31 && p[0] === 0xc2) got.items = parseShop(p);
+      else if (code === 0x30) got.window = [...p].map((b) => b.toString(16).padStart(2, '0')).join('');
+    };
+    EventBus.on('NpcWindowResponse' as any, onPacket);
+    EventBus.on('StoreItemList' as any, onPacket);
     sendToGS(new DataView(buildTalkNpc(npc.id).buffer));
-    let window: string | null = null;
-    let items: Shop[] | null = null;
-    for (let i = 0; i < 2 && !items; i++) {
-      try {
-        const raw = toBytes(await waitFor(['NpcWindowResponse', 'StoreItemList'], i === 0 ? 3000 : 1800));
-        const code = codeOf(raw);
-        if (code === 0x31 && raw[0] === 0xc2) items = parseShop(raw);
-        else if (code === 0x30) window = [...raw].map((b) => b.toString(16).padStart(2, '0')).join('');
-      } catch { break; }
-    }
+    for (let waited = 0; waited < 3000 && !got.items; waited += 100) await sleep(100);
+    if (got.items) await sleep(150);
+    EventBus.off('NpcWindowResponse' as any, onPacket);
+    EventBus.off('StoreItemList' as any, onPacket);
     const name = monsterName(npc.type);
-    trackEvent('shop_list', name, items?.length ?? 0, npc.type, { npc: npc.type, map: world.map, x: npc.x, y: npc.y, window, items: items ?? [] });
-    st.visited.push(`${name}: ${items ? `${items.length} ítems` : window ? 'ventana sin tienda' : 'sin respuesta'}`);
-    log(`Tiendas: ${name} (${npc.x},${npc.y}) → ${items ? items.map((i) => i.name).join(', ') : window ? `ventana ${window}` : 'sin respuesta'}`);
+    trackEvent('shop_list', name, got.items?.length ?? 0, npc.type, { npc: npc.type, map: world.map, x: npc.x, y: npc.y, window: got.window, items: got.items ?? [] });
+    st.visited.push(`${name}: ${got.items ? `${got.items.length} ítems` : got.window ? 'ventana sin tienda' : 'sin respuesta'}`);
+    log(`Tiendas: ${name} (${npc.x},${npc.y}) → ${got.items ? got.items.map((i) => i.name).join(', ') : got.window ? `ventana ${got.window}` : 'sin respuesta'}`);
     sendToGS(new DataView(buildCloseNpc().buffer));
     await sleep(700);
     return true;
