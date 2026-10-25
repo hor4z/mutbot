@@ -18,6 +18,13 @@ export const levelOf = (type: number) => LEVEL.get(type);
 /** Los tipos 200-299 son NPC de pueblo, no monstruos. */
 export const isMonster = (type: number) => !(type >= 200 && type <= 299);
 
+/**
+ * Un "nido" es un spawn fijo de 1 tile con varios monstruos juntos (10 Elite Yeti en (36,25) de Devias): densísimo y mortal. Las celdas a menos de
+ * esta distancia de un nido no se ofrecen como destino (Capitan murió en Devias 2, cuyo warp deja a 12 tiles del nido).
+ */
+export const NEST_KEEP_OUT = 26;
+const NEST_MIN_QTY = 5;
+
 /** Un rectángulo de 1 tile (evento o spawn fijo) se trata como mínimo de este tamaño, para que no parezca densísimo. */
 const MIN_AREA = 100;
 const CELL = 8;
@@ -26,11 +33,14 @@ export type Hotspot = { x: number; y: number; density: number; walkable: number 
 
 /** Celdas de CELL×CELL con la densidad esperada de monstruos que pasan `filter` (monstruos por tile), solo las caminables y fuera de zona segura. */
 export function hotspots(map: number, filter: (type: number) => boolean): Hotspot[] {
-  const spawns = spawnsOf(map).filter((s) => isMonster(s.type) && filter(s.type));
+  const all = spawnsOf(map).filter((s) => isMonster(s.type));
+  const nests = all.filter((s) => s.rect[0] === s.rect[2] && s.rect[1] === s.rect[3] && s.qty >= NEST_MIN_QTY);
+  const spawns = all.filter((s) => filter(s.type));
   const out: Hotspot[] = [];
   for (let cy = 0; cy < TERRAIN_SIZE; cy += CELL) {
     for (let cx = 0; cx < TERRAIN_SIZE; cx += CELL) {
       const mx = cx + CELL / 2, my = cy + CELL / 2;
+      if (nests.some((n) => dist({ x: mx, y: my }, { x: n.rect[0], y: n.rect[1] }) < NEST_KEEP_OUT)) continue;
       let density = 0;
       for (const s of spawns) {
         const [x1, y1, x2, y2] = s.rect;

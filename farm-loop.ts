@@ -30,7 +30,7 @@ import { D } from './directivas';
 import { scoutShopsStep } from './shop-scout';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
-import { WARP_COOLDOWN_MS, warp, warpAndWait } from './warps';
+import { warp, warpAndWait } from './warps';
 import { isSafeZone } from './terrain';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
@@ -70,6 +70,8 @@ function dataTick(ctx: LoopCtx) {
   }, now);
 }
 
+/** Espera mínima entre warps al huir (el bot no se queda esperando 15 s con monstruos encima). */
+const FLEE_WARP_MS = 3_000;
 /** De camino a un lugar lejano, se pelea con lo que esté a este alcance (Strategy.fightOnTheWay). */
 const WAY_TILES = 8;
 
@@ -245,13 +247,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (strategy.fleeBelow != null && world.maxHp > 0) {
       const pct = world.hp / world.maxHp;
       const attackers = [...world.npcs.values()].some((m) => chebyshev(m.x, m.y, world.x, world.y) <= 6 && !isSafeZone(world.map, m.x, m.y));
-      if (!fleeing && pct < strategy.fleeBelow && attackers) { fleeing = true; log(`Huyo: vida al ${Math.round(pct * 100)} % con monstruos encima.`); trackEvent('flee', mapName(world.map), Math.round(pct * 100), 0, { map: world.map, x: world.x, y: world.y }); }
+      // En el pueblo con poca vida no se sale a farmear: se descansa hasta el 70 % (al reiniciar el bot, por ejemplo).
+      const resting = isSafeZone(world.map, world.x, world.y) && pct < 0.7 && !attackers;
+      if (!fleeing && (resting || (pct < strategy.fleeBelow && attackers))) {
+        fleeing = true;
+        log(resting ? `Descanso en el pueblo: vida al ${Math.round(pct * 100)} %.` : `Huyo: vida al ${Math.round(pct * 100)} % con monstruos encima.`);
+        if (!resting) trackEvent('flee', mapName(world.map), Math.round(pct * 100), 0, { map: world.map, x: world.x, y: world.y });
+      }
       if (fleeing) {
         ctx.target = null;
         if (pct >= 0.7) { fleeing = false; log('Recuperado: vuelvo a lo mío.'); }
         else {
           bot.doing = `recuperando vida (${Math.round(pct * 100)} %)`;
-          if (!isSafeZone(world.map, world.x, world.y) && Date.now() - bot.lastWarpAt > WARP_COOLDOWN_MS) await warpAndWait(warp(2));
+          // Huir no espera los 15 s de siempre entre warps: con monstruos encima cada segundo cuenta (Capitan murió esperando).
+          if (!isSafeZone(world.map, world.x, world.y) && Date.now() - bot.lastWarpAt > FLEE_WARP_MS) await warpAndWait(warp(2));
           await sleep(1000);
           continue;
         }
