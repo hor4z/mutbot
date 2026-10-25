@@ -10,7 +10,9 @@ import { isCharClass, type CharClassKey } from './estacion-logic';
 import { validCharName } from './util';
 
 export const ALTA_DIR = join(homedir(), '.mubot', 'alta');
-const POLL_MS = 60_000;
+// Cada consulta hace un `list` del KV del worker, y el plan gratuito deja 1.000 por día: cada 5 min son 288 (cada minuto eran 1.440 y el worker
+// empezaba a fallar con el error 1101 a mitad del día).
+const POLL_MS = 5 * 60_000;
 const USER_RE = /^[A-Za-z0-9_]{1,10}$/;
 const MAX_PASS = 64;
 
