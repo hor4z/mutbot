@@ -70,18 +70,20 @@ function dataTick(ctx: LoopCtx) {
   }, now);
 }
 
+/** Con valor por tipo (Slow): solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
+const CHASE_TILES = 12;
+
 /** Lo más cercano a mí dentro del lugar (ancla + radio), sin los marcados inalcanzables. */
 function nearestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) => boolean): ScopedNpc | null {
-  let best: ScopedNpc | null = null;
-  let bd = Infinity;
-  for (const m of npcs) {
-    if (skip(m.id) || chebyshev(m.x, m.y, place.anchor.x, place.anchor.y) > place.radius) continue;
-    const d = chebyshev(m.x, m.y, world.x, world.y);
-    // Con valor por tipo (Slow): el de más valor por distancia (valor / (d + 8)); sin él, el más cercano (Fast).
-    const score = strategy.targetValue ? -strategy.targetValue(m.type) / (d + 8) : d;
-    if (score < bd) { bd = score; best = m; }
-  }
-  return best;
+  const list = [...npcs].filter((m) => !skip(m.id) && chebyshev(m.x, m.y, place.anchor.x, place.anchor.y) <= place.radius);
+  const dist = (m: ScopedNpc) => chebyshev(m.x, m.y, world.x, world.y);
+  // Sin valor por tipo (Fast): el más cercano.
+  const pick = (from: ScopedNpc[], score: (m: ScopedNpc) => number) => from.reduce<ScopedNpc | null>((b, m) => (b == null || score(m) < score(b) ? m : b), null);
+  if (!strategy.targetValue) return pick(list, dist);
+  // Con valor por tipo (Slow): el de más valor por distancia (valor / (d + 8)), pero sin correr por todo el spot: primero lo que está cerca.
+  const value = (m: ScopedNpc) => -strategy.targetValue!(m.type) / (dist(m) + 8);
+  const near = list.filter((m) => dist(m) <= CHASE_TILES);
+  return pick(near.length ? near : list, value);
 }
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
