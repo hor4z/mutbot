@@ -75,7 +75,9 @@ function nearestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) =
   for (const m of npcs) {
     if (skip(m.id) || chebyshev(m.x, m.y, place.anchor.x, place.anchor.y) > place.radius) continue;
     const d = chebyshev(m.x, m.y, world.x, world.y);
-    if (d < bd) { bd = d; best = m; }
+    // Con valor por tipo (Slow): el de más valor por distancia (valor / (d + 8)); sin él, el más cercano (Fast).
+    const score = strategy.targetValue ? -strategy.targetValue(m.type) / (d + 8) : d;
+    if (score < bd) { bd = score; best = m; }
   }
   return best;
 }

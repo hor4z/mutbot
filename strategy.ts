@@ -5,7 +5,7 @@
  * Para sumar una decisión que difiere: un campo acá, las dos estrategias la definen y el bucle la lee por `strategy.<campo>`.
  */
 import { SERVER_KEY } from './config';
-import { world } from './state';
+import { monsterName, world } from './state';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
 import { warp } from './warps';
@@ -24,11 +24,13 @@ export type Strategy = {
   lootAll: boolean;
   /** Reparto de puntos propio (null: el de siempre, progress.ts). */
   statPlan: ((points: number) => StatValues) | null;
+  /** Cuánto vale matar a este tipo de monstruo (exp por kill estimada): elige el de más valor por distancia en vez del más cercano. null: el más cercano. */
+  targetValue: ((type: number) => number) | null;
   /** Dónde pararse (null: esperar). */
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, targetValue: null, choosePlace };
 
 /**
  * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
@@ -49,14 +51,22 @@ export function slowStatPlan(points: number): StatValues {
 export const SLOW_SPOTS = [
   { minLevel: 0, anchor: { x: 200, y: 137 }, radius: 20, name: 'Lorencia (Spiders)' },
   { minLevel: 12, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
-  { minLevel: 45, anchor: { x: 30, y: 22 }, radius: 25, name: 'Lorencia (Giants)' },
+  { minLevel: 45, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
 ] as const;
 export function slowPlace(level: number): Place {
   const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.minLevel)!;
   return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
 }
+/**
+ * Exp por kill medida en el Slow (`scripts/analyze-session.ts`, niveles 48-74): Giant ~26.000; el resto (Bull Fighter, Hound, Spider…)
+ * rinde mucho menos. Los que no están medidos valen poco a propósito: se prefiere el Giant aunque esté más lejos.
+ */
+export const SLOW_EXP_PER_KILL: Record<string, number> = { Giant: 26_000 };
+export const SLOW_DEFAULT_EXP = 3_000;
+export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
+
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
