@@ -96,6 +96,12 @@ export function isStrong(): boolean | null {
   return canFarmMonster(f, 75, world.skills.has(41));
 }
 
+/** El spot por nivel (Lorencia, después Devias 4), sin esquina ni sombras: lo usa la estrategia del Slow. */
+export function tierPlace(level = world.level): Place {
+  const t = [...TIERS].reverse().find((x) => level >= x.minLevel)!;
+  return { kind: 'tier', warp: warp(t.warp), anchor: t.anchor, radius: t.radius, name: warp(t.warp).name };
+}
+
 /** El lugar de este personaje ahora, o null si todavía no se puede decidir (faltan stats y vida). */
 export function choosePlace(): Place | null {
   setWaiting(false);

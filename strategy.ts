@@ -1,14 +1,12 @@
 /**
  * Estrategia por servidor: lo que el bucle de farmeo (farm-loop.ts) decide distinto en el Fast y en el Slow. El servidor sale de
  * `SERVER_KEY` (config.ts). La del Fast es el código de siempre, sin cambios; la del Slow arranca en modo seguro (sin reset, sin
- * repartir puntos, sin cacería ni viajes: se queda donde está y pelea lo que tiene cerca) hasta tener datos del Slow.
+ * cacería y sin viajes por la esquina) hasta tener datos del Slow.
  * Para sumar una decisión que difiere: un campo acá, las dos estrategias la definen y el bucle la lee por `strategy.<campo>`.
  */
 import { SERVER_KEY } from './config';
-import { lootPolicy } from './farming';
-import { choosePlace, type Place } from './place';
-import { bot, world } from './state';
-import type { Pos } from './util';
+import { lootPolicy, type StatValues } from './farming';
+import { choosePlace, isStrong, tierPlace, type Place } from './place';
 
 export type Strategy = {
   server: 'fast' | 'slow';
@@ -20,22 +18,30 @@ export type Strategy = {
   spendsPoints: boolean;
   /** Levantar siempre las joyas (Bless, Soul, Life, Chaos, Creation) y con prioridad. En el Fast no valen nada para comerciar; en el Slow son lo más valioso. */
   jewels: boolean;
+  /** Levantar también el Zen, las pociones y el equipo (el modo "personaje nuevo" de lootStep). */
+  lootAll: boolean;
+  /** Reparto de puntos propio (null: el de siempre, progress.ts). */
+  statPlan: ((points: number) => StatValues) | null;
   /** Dónde pararse (null: esperar). */
   choosePlace(): Place | null;
 };
 
-export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, choosePlace };
+export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: true, spendsPoints: true, jewels: false, lootAll: false, statPlan: null, choosePlace };
 
-/** El Slow en modo seguro: el ancla es donde se entró (o donde se paró al cambiar de mapa) y el radio, el de la pelea cercana. */
-let stay: { map: number; anchor: Pos } | null = null;
-export const SLOW_RADIUS = 12;
-const stayPlace = (): Place => {
-  if (!stay || stay.map !== world.map) stay = { map: world.map, anchor: { x: world.x, y: world.y } };
-  return { kind: 'tier', warp: { index: -1, name: 'donde estoy', reqLevel: 0, map: world.map }, anchor: stay.anchor, radius: SLOW_RADIUS, name: 'donde estoy' };
-};
+/**
+ * El Slow, primera versión: sin reset ni cacería; sube de nivel por los spots de siempre según el nivel (Lorencia, Devias 4), levanta Zen,
+ * pociones, joyas y equipo, y reparte los puntos pensando en aguantar (Str y Vit: sin pociones la vida es lo que más falta). Los lugares y
+ * el reparto son una estimación hasta tener datos del Slow (`server = 'slow'` en ClickHouse); aprender cuánto rinde cada spot es lo que sigue.
+ */
+export const SLOW_STATS = { str: 0.5, vit: 0.4, agi: 0.1 } as const;
+export function slowStatPlan(points: number): StatValues {
+  const vit = Math.floor(points * SLOW_STATS.vit);
+  const agi = Math.floor(points * SLOW_STATS.agi);
+  return { str: points - vit - agi, agi, vit, ene: 0 };
+}
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: false, jewels: true,
-  choosePlace: () => (bot.playerId < 0 ? null : stayPlace()),
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan,
+  choosePlace: () => (isStrong() == null ? null : tierPlace()),
 };
 
 export const strategy: Strategy = SERVER_KEY === 'slow' ? slowStrategy : fastStrategy;
