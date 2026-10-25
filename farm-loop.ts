@@ -296,7 +296,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // --- 5. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
     const targetInMelee = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;
-    if (!targetInMelee && (await lootStep(false, false))) {
+    if (!targetInMelee && (await lootStep(strategy.lootAll, false))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;

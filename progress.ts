@@ -7,6 +7,7 @@ import { requestCharacterList, waitFor } from './connection';
 import { sayChat } from './actions';
 import { capStats, planStats, planByClass, classFamily } from './farming';
 import { journal } from './journal';
+import { strategy } from './strategy';
 import { warp, warpAndWait } from './warps';
 import { bot, world } from './state';
 import { log, sleep } from './util';
@@ -50,7 +51,7 @@ export async function investStatPoints(force = false): Promise<number> {
   }
   // DK: energía hasta fuerza − 2000, después mitad/mitad; 5 % vitalidad. Las demás clases, por porcentajes (farming.ts).
   // Tope de 65535 por stat (capStats): lo que no entra va a agilidad y vitalidad. Todo en el tope: no se reparte.
-  const raw = family === 'knight' || family == null ? planStats(points, world.stats.str, world.stats.ene) : planByClass(points, family);
+  const raw = strategy.statPlan ? strategy.statPlan(points) : family === 'knight' || family == null ? planStats(points, world.stats.str, world.stats.ene) : planByClass(points, family);
   const capped = capStats(raw, world.stats);
   const plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
   if (!plan.length) return 0;
