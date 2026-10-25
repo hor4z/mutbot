@@ -375,12 +375,15 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
   // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
-  env.MUBOT_MATES = [...slots.values()].map((x) => x.cfg.char).join(',');
+  // Solo los personajes del mismo servidor son compañeros: un homónimo del otro servidor no es nuestro.
+  env.MUBOT_SERVER = srv;
+  const sameSrv = (x: Slot) => x.cfg.server === s.cfg.server;
+  env.MUBOT_MATES = [...slots.values()].filter(sameSrv).map((x) => x.cfg.char).join(',');
   // Personaje que todavía no existe en la cuenta: el bot lo crea al entrar con esta clase (F3/01).
   if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
   // Canal directo entre bots (bus.ts, UDP): su puerto y los de todos los demás, más el de la estación (que solo escucha).
   env.MUBOT_BUS_PORT = String(busPort(s));
-  env.MUBOT_BUS_PEERS = [...[...slots.values()].filter((x) => x !== s).map(busPort), BUS_STATION_PORT].join(',');
+  env.MUBOT_BUS_PEERS = [...[...slots.values()].filter((x) => x !== s && sameSrv(x)).map(busPort), BUS_STATION_PORT].join(',');
   // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
   env.MUBOT_PASS = pass;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
@@ -638,7 +641,8 @@ void Bun.udpSocket({
         // Un bot lanzado antes de que existiera otro personaje no lo tiene en sus pares (se fijan al lanzar): la estación, que
         // los oye a todos, reenvía el estado a los demás para que se vean igual (los duplicados no molestan: se pisan por nombre).
         if (m.t === 's' && typeof m.c === 'string') {
-          for (const o of slots.values()) if (o.cfg.char.toLowerCase() !== m.c.toLowerCase()) busSock?.send(buf, busPort(o), '127.0.0.1');
+          const from = [...slots.values()].find((x) => x.cfg.char.toLowerCase() === m.c!.toLowerCase());
+          for (const o of slots.values()) if (o !== from && (!from || o.cfg.server === from.cfg.server)) busSock?.send(buf, busPort(o), '127.0.0.1');
           return;
         }
         if (m.t !== 'g' || typeof m.c !== 'string' || typeof m.n !== 'string') return;

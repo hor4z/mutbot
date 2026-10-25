@@ -56,6 +56,11 @@ ALTER TABLE ticks ADD COLUMN IF NOT EXISTS kills_rival UInt16;
 ALTER TABLE ticks ADD COLUMN IF NOT EXISTS top_rival String;
 ALTER TABLE ticks ADD COLUMN IF NOT EXISTS mate_spot UInt8;
 
+-- Servidor del juego (fast / slow): las cuentas valen en los dos, los datos no se mezclan. Lo anterior es todo Fast.
+ALTER TABLE ticks ADD COLUMN IF NOT EXISTS server LowCardinality(String) DEFAULT 'fast';
+ALTER TABLE events ADD COLUMN IF NOT EXISTS server LowCardinality(String) DEFAULT 'fast';
+ALTER TABLE players_seen ADD COLUMN IF NOT EXISTS server LowCardinality(String) DEFAULT 'fast';
+
 -- Ranking del server cada hora (lo guarda la estación): ritmo de resets de los rivales.
 CREATE TABLE IF NOT EXISTS ranking (
   ts DateTime64(3),
@@ -66,3 +71,4 @@ CREATE TABLE IF NOT EXISTS ranking (
   level UInt16,
   pos UInt16
 ) ENGINE = MergeTree ORDER BY (name, ts) TTL toDateTime(ts) + INTERVAL 365 DAY;
+ALTER TABLE ranking ADD COLUMN IF NOT EXISTS server LowCardinality(String) DEFAULT 'fast';
