@@ -9,7 +9,7 @@ import { D } from './directivas';
 import { monsterName, world } from './state';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
-import { warp } from './warps';
+import { WARPS, warp } from './warps';
 
 export type Strategy = {
   server: 'fast' | 'slow';
@@ -64,7 +64,19 @@ export const SLOW_SPOTS = [
   { from: () => D.slowBullFromLevel, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
   { from: () => D.slowGiantsFromLevel, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
 ] as const;
+/** Lugar de prueba (directiva `slowProbarWarp`): el warp pedido y, como ancla, donde queda el personaje al llegar (radio de pelea chico). */
+let probe: { index: number; map: number; anchor: { x: number; y: number } } | null = null;
+function probePlace(index: number): Place {
+  const w = warp(index);
+  // Aterrizó en el mapa del warp: ese punto es el ancla (se fija una vez por prueba).
+  if (world.map === w.map && (!probe || probe.index !== index)) probe = { index, map: w.map, anchor: { x: world.x, y: world.y } };
+  if (world.map !== w.map && probe?.index !== index) probe = null;
+  return { kind: 'tier', warp: w, anchor: probe?.anchor ?? w.arrival ?? { x: world.x, y: world.y }, radius: 25, name: `prueba en ${w.name}` };
+}
+
 export function slowPlace(level: number): Place {
+  if (D.slowProbarWarp > 0 && WARPS.some((w) => w.index === D.slowProbarWarp)) return probePlace(D.slowProbarWarp);
+  probe = null;
   const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.from())!;
   return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
 }

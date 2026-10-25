@@ -11,6 +11,8 @@ export const WARPS: readonly Warp[] = [
   { index: 2, name: 'Lorencia', reqLevel: 10, map: 0 },
   { index: 1, name: 'Arena', reqLevel: 50, map: 6 },
   { index: 3, name: 'Noria', reqLevel: 10, map: 3 },
+  // El primer Devias del menú de warps (índice 4): dónde deja se aprende al usarlo (place.ts, `landings`).
+  { index: 4, name: 'Devias 1', reqLevel: 20, map: 2 },
   { index: 5, name: 'Devias 2', reqLevel: 20, map: 2, arrival: { x: 24, y: 25 } },
   { index: 6, name: 'Devias 3', reqLevel: 20, map: 2, arrival: { x: 226, y: 228 } },
   { index: 7, name: 'Devias 4', reqLevel: 20, map: 2, arrival: { x: 70, y: 179 } },
