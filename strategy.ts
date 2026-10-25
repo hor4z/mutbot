@@ -5,6 +5,7 @@
  * Para sumar una decisión que difiere: un campo acá, las dos estrategias la definen y el bucle la lee por `strategy.<campo>`.
  */
 import { SERVER_KEY } from './config';
+import { D } from './directivas';
 import { monsterName, world } from './state';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
@@ -39,11 +40,11 @@ export const fastStrategy: Strategy = { server: 'fast', hunts: true, resets: tru
  * pociones, joyas y equipo, y reparte los puntos pensando en aguantar (Str y Vit: sin pociones la vida es lo que más falta). Los lugares y
  * el reparto son una estimación hasta tener datos del Slow (`server = 'slow'` en ClickHouse); aprender cuánto rinde cada spot es lo que sigue.
  */
-export const SLOW_AGI_TARGET = 90; // velocidad de ataque = Agi / 15: con 90 pasa de 5 a 6 con muy pocos puntos
+// Agi objetivo (directiva `slowAgiTarget`, por defecto 90): velocidad de ataque = Agi / 15, con 90 pasa de 5 a 6 con muy pocos puntos.
 export const SLOW_STATS = { str: 0.45, agi: 0.3, vit: 0.15, ene: 0.1 } as const;
 /** Primero Agi hasta 90; el resto 45 % Str, 30 % Agi, 15 % Vit, 10 % Ene (lo que sobra del redondeo, a Str). Estimado con lo medido, a ajustar con datos. */
 export function slowStatPlan(points: number, stats: StatValues): StatValues {
-  const agiFirst = Math.min(points, Math.max(0, SLOW_AGI_TARGET - stats.agi));
+  const agiFirst = Math.min(points, Math.max(0, D.slowAgiTarget - stats.agi));
   const rest = points - agiFirst;
   const agi = agiFirst + Math.floor(rest * SLOW_STATS.agi);
   const vit = Math.floor(rest * SLOW_STATS.vit);
@@ -57,12 +58,12 @@ export function slowStatPlan(points: number, stats: StatValues): StatValues {
  * los niveles 48-74). En este server los Giants viven en Lorencia, no en Devias: la v1 mandaba a Devias 4 y no había nada que matar.
  */
 export const SLOW_SPOTS = [
-  { minLevel: 0, anchor: { x: 200, y: 137 }, radius: 20, name: 'Lorencia (Spiders)' },
-  { minLevel: 12, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
-  { minLevel: 45, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
+  { from: () => 0, anchor: { x: 200, y: 137 }, radius: 20, name: 'Lorencia (Spiders)' },
+  { from: () => D.slowBullFromLevel, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
+  { from: () => D.slowGiantsFromLevel, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
 ] as const;
 export function slowPlace(level: number): Place {
-  const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.minLevel)!;
+  const t = [...SLOW_SPOTS].reverse().find((x) => level >= x.from())!;
   return { kind: 'tier', warp: warp(2), anchor: t.anchor, radius: t.radius, name: t.name };
 }
 
@@ -75,7 +76,7 @@ export const SLOW_DEFAULT_EXP = 3_000;
 export const slowTargetValue = (type: number) => SLOW_EXP_PER_KILL[monsterName(type)] ?? SLOW_DEFAULT_EXP;
 
 export const slowStrategy: Strategy = {
-  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, statBatchMin: 10, targetValue: slowTargetValue,
+  server: 'slow', hunts: false, resets: false, spendsPoints: true, jewels: true, lootAll: true, statPlan: slowStatPlan, get statBatchMin() { return D.slowStatBatch; }, targetValue: slowTargetValue,
   choosePlace: () => (isStrong() == null ? null : slowPlace(world.level)),
 };
 
