@@ -10,7 +10,7 @@
  *
  * - Nombres sin importar mayúsculas (COLLATE NOCASE), como el server. Un nombre de personaje es
  *   único en todo el server; una cuenta, por server.
- * - Hasta 5 personajes por cuenta (0.97d); solo uno juega a la vez (lo controla la estación).
+ * - Sin tope de personajes por cuenta (este servidor no lo tiene); solo uno juega a la vez por cuenta (lo controla la estación).
  * - `accounts.status`: 'active' o 'blocked' (el server contestó AccountBlocked: no se reconecta).
  * - `characters.server`: 'fast' o 'slow'. La cuenta (usuario y clave) vale en los dos; el personaje existe en uno. El nombre sigue siendo único en la estación.
  * - `characters.class`: dk, dw, elf, mg (lo usa el bot para crearlo si todavía no existe).
@@ -26,9 +26,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { type CharClassKey, type CharConfig, type GameServer, type Routine, type ServerKey, isCharClass, isServerKey } from './estacion-logic';
 import { validCharName } from './util';
-
-/** Personajes por cuenta en el 0.97d. */
-export const MAX_CHARS_PER_ACCOUNT = 5;
 
 export const DB_FILE = process.env.MUBOT_DB_FILE ?? join(homedir(), '.mubot', 'mubot.db');
 
@@ -154,8 +151,6 @@ export class EstacionDb {
         const id = Number(this.db.query('INSERT INTO accounts (server_id, username, password) VALUES (?, ?, ?)').run(this.serverId, user, pass).lastInsertRowid);
         acc = { id, username: user, password: pass };
       }
-      const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
-      if (n >= MAX_CHARS_PER_ACCOUNT) return `${acc.username} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
       this.db.query('INSERT INTO characters (account_id, name, class, env_file, server) VALUES (?, ?, ?, ?, ?)').run(acc.id, name, cls, envFile, server);
       return null;
     })();
@@ -177,7 +172,7 @@ export class EstacionDb {
   }
 
   /** Paso 2: el personaje (con la clase con que el bot lo va a crear) en una cuenta ya guardada. */
-  addCharToAccount(user: string, name: string, cls: CharClassKey, replace?: string, server: ServerKey = 'fast'): string | null {
+  addCharToAccount(user: string, name: string, cls: CharClassKey | null, replace?: string, server: ServerKey = 'fast'): string | null {
     if (!validCharName(name)) return `nombre inválido: ${name}`;
     return this.db.transaction((): string | null => {
       const acc = this.db.query<{ id: number }, [number, string]>('SELECT id FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
@@ -198,8 +193,6 @@ export class EstacionDb {
         if (have.account_id === acc.id && !have.class) { this.db.query("UPDATE characters SET class = ?, server = ?, updated_at = datetime('now') WHERE id = ?").run(cls, server, have.id); return null; }
         return `ya hay un personaje ${name} en la estación`;
       }
-      const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
-      if (n >= MAX_CHARS_PER_ACCOUNT) return `${user} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
       this.db.query('INSERT INTO characters (account_id, name, class, server) VALUES (?, ?, ?, ?)').run(acc.id, name, cls, server);
       return null;
     })();
