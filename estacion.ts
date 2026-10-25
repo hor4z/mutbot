@@ -293,14 +293,11 @@ function dbEnv(): Record<string, string> {
   return out;
 }
 
-// --- Tipo de conexión por personaje -------------------------------------------------------
-// Directa al servidor o por el proxy del worker (workers/edge). Se elige en el panel y se aplica al próximo conectar; se guarda en
-// ~/.mubot/conn.json. La URL del proxy sale de MUBOT_ALTA_URL (.env.alta) y del token en ~/.mubot/alta/proxy-token.
-const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
-const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
+// --- Conexión: siempre por los workers (workers/edge) ---------------------------------------
+// No hay conexión directa: todos los bots entran por el proxy de un worker (la URL sale de MUBOT_ALTA_URL y MUBOT_PROXY_URLS en
+// .env.alta, el token de ~/.mubot/alta/proxy-token). Si uno no responde, se usa el siguiente (pickProxy).
 // Servidor del juego por personaje: columna `characters.server` (las cuentas valen en Fast y Slow, los personajes son de uno).
 const chosenServer = (s: Slot): ServerKey => s.cfg.server;
-const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
 const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
 /** Workers de respaldo (MUBOT_PROXY_URLS en .env.alta, separados por coma): mismo código que el principal, solo con PROXY_TOKEN. */
 let proxyBases: string[] = [];
@@ -337,12 +334,11 @@ async function probeProxies() {
 
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
-  const wantProxy = viaProxy.has(s.cfg.key);
   const srv = chosenServer(s);
   const base: GameServer = srv === 'slow' ? SERVERS.slow : SERVER;
-  const pick = wantProxy ? pickProxy() : null;
+  const pick = pickProxy();
   const pUrl = pick?.url ?? null;
-  if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
+  if (!pUrl) return { ok: false, msg: `Falta configurar el worker: sin él ${s.cfg.char} no puede conectar (MUBOT_ALTA_URL en .env.alta y bun run alta:keys).` };
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
   // Una cuenta juega con un solo personaje a la vez.
   const sibling = [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase());
@@ -483,7 +479,6 @@ function view() {
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
-      conn: viaProxy.has(s.cfg.key) ? 'proxy' : 'direct', connUsed: s.pid != null ? s.conn : null, proxyReady: proxyUrl() != null,
       server: chosenServer(s), serverUsed: s.pid != null ? s.srv ?? null : null,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
@@ -772,13 +767,6 @@ Bun.serve({
         if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
         return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
       }
-      if (r.action === 'conn') {
-        if (r.mode === 'proxy' && !proxyUrl()) return json({ ok: false, msg: 'falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys)' }, 409);
-        if (r.mode === 'proxy') viaProxy.add(s.cfg.key); else viaProxy.delete(s.cfg.key);
-        saveConn();
-        const live = s.pid != null && s.conn !== r.mode;
-        return json({ ok: true, msg: `${s.cfg.char}: conexión ${r.mode === 'proxy' ? 'por proxy' : 'directa'}${live ? ' (se aplica al reconectar)' : ''}` });
-      }
       if (r.action === 'server') {
         if (!db.setServer(s.cfg.char, r.server)) return json({ ok: false, msg: 'no encuentro el personaje en la base' }, 409);
         refreshSlots();
@@ -861,7 +849,6 @@ Bun.serve({
       // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
       if (replace && replace !== raw.char) {
         const ok = replace.toLowerCase(), nk = raw.char.toLowerCase();
-        if (viaProxy.delete(ok)) { viaProxy.add(nk); saveConn(); }
         if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
       }
       refreshSlots();

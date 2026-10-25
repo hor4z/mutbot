@@ -20,9 +20,6 @@ export type Character = {
   shadowOf: string | null;
   shadowOff: boolean;
   /** conexión elegida (se aplica al próximo conectar), la del proceso que corre ahora y si el proxy está configurado */
-  conn: "direct" | "proxy";
-  connUsed: "direct" | "proxy" | null;
-  proxyReady: boolean;
   /** servidor del juego elegido (se aplica al próximo conectar) y el del proceso que corre ahora */
   server: "fast" | "slow";
   serverUsed: "fast" | "slow" | null;
@@ -115,7 +112,6 @@ export const postAlta = (a: { user: string; char: string; pass: string; cls?: st
 
 export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;
-  conn: (c: Character, mode: "direct" | "proxy") => Promise<Result>;
   server: (c: Character, server: "fast" | "slow") => Promise<Result>;
 };
 
@@ -133,7 +129,6 @@ export function useActions(refresh: () => void): Actions {
       pause: (c) => run({ action: "routine", char: c.key, routine: { kind: "pause" } }),
       resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
       shadow: (c, on) => run({ action: "shadow", char: c.key, on }),
-      conn: (c, mode) => run({ action: "conn", char: c.key, mode }),
       server: (c, server) => run({ action: "server", char: c.key, server }),
     };
   }, [refresh]);
