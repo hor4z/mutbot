@@ -6,12 +6,13 @@
  *
  *   servers    (id, name, proxy, cs_host, cs_port)
  *   accounts   (id, server_id → servers, username, password, status, created_at, updated_at)
- *   characters (id, account_id → accounts, name, class, last_routine, env_file, role, created_at, updated_at)
+ *   characters (id, account_id → accounts, name, class, last_routine, env_file, role, server, created_at, updated_at)
  *
  * - Nombres sin importar mayúsculas (COLLATE NOCASE), como el server. Un nombre de personaje es
  *   único en todo el server; una cuenta, por server.
  * - Hasta 5 personajes por cuenta (0.97d); solo uno juega a la vez (lo controla la estación).
  * - `accounts.status`: 'active' o 'blocked' (el server contestó AccountBlocked: no se reconecta).
+ * - `characters.server`: 'fast' o 'slow'. La cuenta (usuario y clave) vale en los dos; el personaje existe en uno. El nombre sigue siendo único en la estación.
  * - `characters.class`: dk, dw, elf, mg (lo usa el bot para crearlo si todavía no existe).
  * - `characters.env_file`: de qué `.env` se importó (para adoptar bots lanzados a la vieja usanza).
  * - Migraciones versionadas con `PRAGMA user_version`: para cambiar el esquema se agrega una al
@@ -23,7 +24,7 @@ import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type CharClassKey, type CharConfig, type GameServer, type Routine, isCharClass } from './estacion-logic';
+import { type CharClassKey, type CharConfig, type GameServer, type Routine, type ServerKey, isCharClass, isServerKey } from './estacion-logic';
 import { validCharName } from './util';
 
 /** Personajes por cuenta en el 0.97d. */
@@ -64,9 +65,11 @@ const MIGRATIONS = [
    CREATE INDEX characters_account ON characters(account_id);`,
   // Estrategia del personaje (JSON de RoleAssign, ver estacion-logic.ts).
   `ALTER TABLE characters ADD COLUMN role TEXT;`,
+  // Servidor del juego del personaje: las cuentas valen en Fast y en Slow, los personajes son de uno solo.
+  `ALTER TABLE characters ADD COLUMN server TEXT NOT NULL DEFAULT 'fast' CHECK (server IN ('fast', 'slow'));`,
 ];
 
-export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null};
+export type DbChar = CharConfig & { status: 'active' | 'blocked'; lastRoutine: Routine | null; server: ServerKey };
 
 export class EstacionDb {
   readonly db: Database;
@@ -108,15 +111,20 @@ export class EstacionDb {
 
   /** Personajes de este server, como los ve la estación (sin la clave). */
   chars(): DbChar[] {
-    type Row = { name: string; username: string; class: string | null; env_file: string | null; status: 'active' | 'blocked'; last_routine: string | null; role: string | null };
+    type Row = { name: string; username: string; class: string | null; env_file: string | null; status: 'active' | 'blocked'; last_routine: string | null; role: string | null; server: string };
     return this.db.query<Row, [number]>(
-      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine
+      `SELECT c.name, a.username, c.class, c.env_file, a.status, c.last_routine, c.server
          FROM characters c JOIN accounts a ON a.id = c.account_id
         WHERE a.server_id = ? ORDER BY c.name`,
     ).all(this.serverId).map((r) => ({
       key: r.name.toLowerCase(), envFile: r.env_file, user: r.username, char: r.name, cls: isCharClass(r.class) ? r.class : undefined,
-      status: r.status, lastRoutine: parseRoutine(r.last_routine),
+      status: r.status, lastRoutine: parseRoutine(r.last_routine), server: isServerKey(r.server) ? r.server : 'fast',
     }));
+  }
+
+  /** Cambia el servidor de un personaje (se aplica al próximo conectar). */
+  setServer(name: string, server: ServerKey): boolean {
+    return this.db.query("UPDATE characters SET server = ?, updated_at = datetime('now') WHERE name = ?").run(server, name).changes > 0;
   }
 
   /** Clave de la cuenta de un personaje (solo para lanzar el bot). */
@@ -127,7 +135,7 @@ export class EstacionDb {
   }
 
   /** Suma un personaje que ya existe en el server a una cuenta (la crea si no está). Devuelve el motivo si no se puede. */
-  addChar(user: string, pass: string, name: string, envFile: string | null = null, cls: CharClassKey | null = null): string | null {
+  addChar(user: string, pass: string, name: string, envFile: string | null = null, cls: CharClassKey | null = null, server: ServerKey = 'fast'): string | null {
     if (!validCharName(name)) return `nombre inválido: ${name}`;
     return this.db.transaction((): string | null => {
       const have = this.db.query<{ id: number; class: string | null; username: string }, [string, number]>(
@@ -148,7 +156,7 @@ export class EstacionDb {
       }
       const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
       if (n >= MAX_CHARS_PER_ACCOUNT) return `${acc.username} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
-      this.db.query('INSERT INTO characters (account_id, name, class, env_file) VALUES (?, ?, ?, ?)').run(acc.id, name, cls, envFile);
+      this.db.query('INSERT INTO characters (account_id, name, class, env_file, server) VALUES (?, ?, ?, ?, ?)').run(acc.id, name, cls, envFile, server);
       return null;
     })();
   }
@@ -169,7 +177,7 @@ export class EstacionDb {
   }
 
   /** Paso 2: el personaje (con la clase con que el bot lo va a crear) en una cuenta ya guardada. */
-  addCharToAccount(user: string, name: string, cls: CharClassKey, replace?: string): string | null {
+  addCharToAccount(user: string, name: string, cls: CharClassKey, replace?: string, server: ServerKey = 'fast'): string | null {
     if (!validCharName(name)) return `nombre inválido: ${name}`;
     return this.db.transaction((): string | null => {
       const acc = this.db.query<{ id: number }, [number, string]>('SELECT id FROM accounts WHERE server_id = ? AND username = ?').get(this.serverId, user);
@@ -180,19 +188,19 @@ export class EstacionDb {
         const old = this.db.query<{ id: number; class: string | null }, [string, number]>('SELECT id, class FROM characters WHERE name = ? AND account_id = ?').get(replace, acc.id);
         if (old && !old.class) {
           if (this.db.query('SELECT 1 FROM characters WHERE name = ?').get(name)) return `ya hay un personaje ${name} en la estación`;
-          this.db.query("UPDATE characters SET name = ?, class = ?, updated_at = datetime('now') WHERE id = ?").run(name, cls, old.id);
+          this.db.query("UPDATE characters SET name = ?, class = ?, server = ?, updated_at = datetime('now') WHERE id = ?").run(name, cls, server, old.id);
           return null;
         }
       }
       const have = this.db.query<{ id: number; class: string | null; account_id: number }, [string]>('SELECT id, class, account_id FROM characters WHERE name = ?').get(name);
       if (have) {
         // Un personaje de esta cuenta que figura pero el juego no tiene (la cuenta venía sin personaje): se le pone la clase para crearlo.
-        if (have.account_id === acc.id && !have.class) { this.db.query("UPDATE characters SET class = ?, updated_at = datetime('now') WHERE id = ?").run(cls, have.id); return null; }
+        if (have.account_id === acc.id && !have.class) { this.db.query("UPDATE characters SET class = ?, server = ?, updated_at = datetime('now') WHERE id = ?").run(cls, server, have.id); return null; }
         return `ya hay un personaje ${name} en la estación`;
       }
       const n = this.db.query<{ n: number }, [number]>('SELECT count(*) AS n FROM characters WHERE account_id = ?').get(acc.id)!.n;
       if (n >= MAX_CHARS_PER_ACCOUNT) return `${user} ya tiene ${MAX_CHARS_PER_ACCOUNT} personajes`;
-      this.db.query('INSERT INTO characters (account_id, name, class) VALUES (?, ?, ?)').run(acc.id, name, cls);
+      this.db.query('INSERT INTO characters (account_id, name, class, server) VALUES (?, ?, ?, ?)').run(acc.id, name, cls, server);
       return null;
     })();
   }

@@ -21,7 +21,7 @@ import { statPower } from './util';
 import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, SERVERS, isServerKey, type ServerKey, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   parseEnvFile, CHAR_CLASSES, accountProblem, isCharClass,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
@@ -52,6 +52,8 @@ type Slot = {
   cfg: DbChar;
   /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
   conn: 'direct' | 'proxy';
+  /** servidor del juego del proceso que corre ahora */
+  srv?: ServerKey;
   /** Worker por el que entró el bot (si va por proxy) y cuántos cambios de worker seguidos lleva este intento. */
   proxyBase?: string;
   proxySwaps?: number;
@@ -159,8 +161,9 @@ function scanProcs(): Running[] {
 /** ¿La línea de comandos del bot apunta al connect server de esta estación? (sin --cs-host se asume que sí) */
 function sameServer(cmdline: string[]): boolean {
   const i = cmdline.indexOf('--cs-host');
-  return i < 0 || cmdline[i + 1] === SERVER.csHost;
+  return i < 0 || cmdline[i + 1] === SERVER.csHost || cmdline[i + 1] === SERVERS.slow.csHost;
 }
+const srvOfCmdline = (cmdline: string[]): ServerKey => (cmdline[cmdline.indexOf('--cs-host') + 1] === SERVERS.slow.csHost ? 'slow' : 'fast');
 
 function syncRunning() {
   const procs = scanProcs();
@@ -171,6 +174,7 @@ function syncRunning() {
       if (s.pid !== p.pid) {
         s.pid = p.pid;
         s.conn = p.cmdline.some((a) => /\/p\/[^/]+\/ws/.test(a)) ? 'proxy' : 'direct';
+        s.srv = srvOfCmdline(p.cmdline);
         if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
           s.status = p.wsPort ? 'on' : 'external';
           s.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
@@ -294,6 +298,8 @@ function dbEnv(): Record<string, string> {
 // ~/.mubot/conn.json. La URL del proxy sale de MUBOT_ALTA_URL (.env.alta) y del token en ~/.mubot/alta/proxy-token.
 const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
 const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
+// Servidor del juego por personaje: columna `characters.server` (las cuentas valen en Fast y Slow, los personajes son de uno).
+const chosenServer = (s: Slot): ServerKey => s.cfg.server;
 const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
 const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
 /** Workers de respaldo (MUBOT_PROXY_URLS en .env.alta, separados por coma): mismo código que el principal, solo con PROXY_TOKEN. */
@@ -332,6 +338,8 @@ async function probeProxies() {
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   const wantProxy = viaProxy.has(s.cfg.key);
+  const srv = chosenServer(s);
+  const base: GameServer = srv === 'slow' ? SERVERS.slow : SERVER;
   const pick = wantProxy ? pickProxy() : null;
   const pUrl = pick?.url ?? null;
   if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
@@ -377,12 +385,13 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   env.MUBOT_PASS = pass;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
-  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...SERVER, proxy: pUrl } : SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
+  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...base, proxy: pUrl } : base, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, detached: true, stdin: 'ignore', stdout: fd, stderr: fd,
   });
   closeSync(fd);
   s.pid = proc.pid;
   s.conn = pUrl ? 'proxy' : 'direct';
+  s.srv = srv;
   s.proxyBase = pick?.base;
   ownExits.add(proc.pid);
   s.status = 'starting';
@@ -472,6 +481,7 @@ function view() {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
       conn: viaProxy.has(s.cfg.key) ? 'proxy' : 'direct', connUsed: s.pid != null ? s.conn : null, proxyReady: proxyUrl() != null,
+      server: chosenServer(s), serverUsed: s.pid != null ? s.srv ?? null : null,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
@@ -761,6 +771,12 @@ Bun.serve({
         const live = s.pid != null && s.conn !== r.mode;
         return json({ ok: true, msg: `${s.cfg.char}: conexión ${r.mode === 'proxy' ? 'por proxy' : 'directa'}${live ? ' (se aplica al reconectar)' : ''}` });
       }
+      if (r.action === 'server') {
+        if (!db.setServer(s.cfg.char, r.server)) return json({ ok: false, msg: 'no encuentro el personaje en la base' }, 409);
+        refreshSlots();
+        const live = s.pid != null && (s.srv ?? 'fast') !== r.server;
+        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label}${live ? ' (se aplica al reconectar)' : ''}` });
+      }
       if (r.action === 'follow') {
         if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
         followTargets.set(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
@@ -802,7 +818,7 @@ Bun.serve({
       if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
       const body = await req.text();
       if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown };
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown; server?: unknown };
       try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
       if (typeof raw.user !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
       if (url.pathname === '/api/cuenta') {
@@ -820,7 +836,7 @@ Bun.serve({
       }
       if (typeof raw.char !== 'string' || !isCharClass(raw.cls)) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
       const replace = typeof raw.replace === 'string' ? raw.replace : undefined;
-      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace);
+      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace, isServerKey(raw.server) ? raw.server : 'fast');
       if (why) return json({ ok: false, msg: why }, 409);
       // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
       if (replace && replace !== raw.char) {

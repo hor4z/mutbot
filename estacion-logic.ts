@@ -68,6 +68,17 @@ export type GameServer = { proxy: string; csHost: string; csPort: number };
 export const DEFAULT_SERVER: GameServer = { proxy: 'wss://mu.mormon.garden/ws', csHost: 'mu.mormon.garden', csPort: 44405 };
 
 /**
+ * Los dos servidores del juego (comparten cuentas). El cliente web no trae la lista: usa el host de la página como WebSocket
+ * (`wss://<host>/ws`); el connect server del Slow es interno (`clasico`), el WebSocket lo reenvía con `?host=clasico&port=44405`.
+ */
+export type ServerKey = 'fast' | 'slow';
+export const SERVERS: Record<ServerKey, GameServer & { label: string }> = {
+  fast: { ...DEFAULT_SERVER, label: 'Fast' },
+  slow: { proxy: 'wss://slow.mu.garden/ws', csHost: 'clasico', csPort: 44405, label: 'Slow' },
+};
+export const isServerKey = (v: unknown): v is ServerKey => v === 'fast' || v === 'slow';
+
+/**
  * Argumentos de `bun` para lanzar el bot de un personaje. La clave nunca va en la línea de comandos
  * (se ve en `ps`): la estación la pasa por MUBOT_PASS. `--exit-if-in-use`: si la cuenta ya está
  * conectada (la pestaña del navegador), el bot sale con código 3 en vez de insistir. Sin él (recién
@@ -143,6 +154,8 @@ export type StationRequest =
   | { action: 'follow'; char: string; target: string | null; map?: number; x?: number; y?: number }
   // Tipo de conexión de este personaje: directa al servidor o por el proxy del worker. Se aplica al próximo conectar.
   | { action: 'conn'; char: string; mode: 'direct' | 'proxy' }
+  // Servidor del juego de este personaje (Fast o Slow; comparten cuentas). Se aplica al próximo conectar.
+  | { action: 'server'; char: string; server: ServerKey }
   | { action: 'routine'; char: string; routine: Routine }
   // Sombra: el orquestador manda (o no) a este personaje a seguir al más fuerte.
   | { action: 'shadow'; char: string; on: boolean }
@@ -156,6 +169,7 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
   if (r.action === 'conn') return keys.length === 3 && (r.mode === 'direct' || r.mode === 'proxy') ? { action: 'conn', char: r.char, mode: r.mode } : null;
+  if (r.action === 'server') return keys.length === 3 && isServerKey(r.server) ? { action: 'server', char: r.char, server: r.server } : null;
   if (r.action === 'follow') {
     const num = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255);
     if (!keys.every((k) => ['action', 'char', 'target', 'map', 'x', 'y'].includes(k))) return null;

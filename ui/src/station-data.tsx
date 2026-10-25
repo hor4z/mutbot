@@ -23,6 +23,9 @@ export type Character = {
   conn: "direct" | "proxy";
   connUsed: "direct" | "proxy" | null;
   proxyReady: boolean;
+  /** servidor del juego elegido (se aplica al próximo conectar) y el del proceso que corre ahora */
+  server: "fast" | "slow";
+  serverUsed: "fast" | "slow" | null;
   game: null | {
     mode: string;
     doing: string;
@@ -106,13 +109,14 @@ async function postAccount(path: string, body: object): Promise<Result> {
 /** Paso 1: crear la cuenta en el juego (por el worker); queda guardada sin personaje. */
 export const postCuenta = (a: { user: string; pass: string }) => postAccount("/api/cuenta", a);
 /** Paso 2: el personaje y su clase en una cuenta sin personaje; el bot lo crea al conectarlo. */
-export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string }) => postAccount("/api/personaje", a);
+export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string; server?: "fast" | "slow" }) => postAccount("/api/personaje", a);
 /** Cuenta y personaje que ya existen en el juego: se cifran y pasan por el worker. */
 export const postAlta = (a: { user: string; char: string; pass: string; cls?: string }) => postAccount("/api/alta", a);
 
 export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;
   conn: (c: Character, mode: "direct" | "proxy") => Promise<Result>;
+  server: (c: Character, server: "fast" | "slow") => Promise<Result>;
 };
 
 export function useActions(refresh: () => void): Actions {
@@ -130,6 +134,7 @@ export function useActions(refresh: () => void): Actions {
       resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
       shadow: (c, on) => run({ action: "shadow", char: c.key, on }),
       conn: (c, mode) => run({ action: "conn", char: c.key, mode }),
+      server: (c, server) => run({ action: "server", char: c.key, server }),
     };
   }, [refresh]);
 }

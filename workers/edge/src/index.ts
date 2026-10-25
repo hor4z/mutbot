@@ -29,6 +29,8 @@ export interface Env {
   PROXY_TOKEN: string;
   /** host del servidor cuyo `/ws` (WebSocket → TCP) usa el cliente web */
   UPSTREAM_HOST: string;
+  /** Servidor Slow: el host `clasico` (su connect/game server interno) sale por este WebSocket. */
+  SLOW_UPSTREAM_HOST?: string;
   /** destinos (`host=`) que el proxy acepta, separados por coma */
   ALLOWED_HOSTS: string;
 }
@@ -77,7 +79,7 @@ async function proxyWs(req: Request, env: Env, url: URL): Promise<Response> {
   if (!allowed.includes(host) || !Number.isInteger(port) || port < 1 || port > 65535) return json({ error: 'destino no permitido' }, 403);
   // Se devuelve la respuesta del servidor tal cual: Cloudflare pasa los frames del WebSocket sin volver a ejecutar el worker, así que los
   // mensajes no gastan CPU. (Reenviarlos a mano con un WebSocketPair agotaba los 10 ms de CPU del plan gratuito a los ~20 s de juego.)
-  const target = new URL(`https://${env.UPSTREAM_HOST}/ws`);
+  const target = new URL(`https://${host === 'clasico' && env.SLOW_UPSTREAM_HOST ? env.SLOW_UPSTREAM_HOST : env.UPSTREAM_HOST}/ws`);
   target.searchParams.set('host', host);
   target.searchParams.set('port', String(port));
   return fetch(new Request(target, req));
