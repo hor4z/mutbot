@@ -9,6 +9,8 @@
 import { announceGold, teammates, type GoldNotice } from './bus';
 import { bandsOf, crewRank } from './crew';
 import { D } from './directivas';
+import { gancho, type DejarArgs, type DoradoArgs, type ZonaArgs } from './ganchos';
+import type { Zone } from './zones';
 import { trackEvent } from './telemetry';
 import { dragonZones, goldenZones, mapsWithZones, nextZone, zoneWeights } from './zones';
 import { DRAGON_TYPES, stickyGolden } from './golden';
@@ -49,6 +51,20 @@ function claimedByMate(g: { x: number; y: number; type: number }, mates: readonl
   const mine = chebyshev(world.x, world.y, g.x, g.y);
   return mates.some((m) => { const d = chebyshev(m.x, m.y, g.x, g.y); return d <= 6 && d < mine; });
 }
+
+/** La zona de dragón a la que ir (lógica del repo; el gancho `elegirZona` la puede reemplazar): con cuadrilla, la de mi franja. */
+function zonaBase({ zonas, yo, visitadas, rank, n }: ZonaArgs): Zone | null {
+  let zs = zonas;
+  if (n > 1) {
+    const band = bandsOf(zs, n);
+    const own = zs.filter((z) => band.get(z) === rank);
+    if (own.some((z) => !visitadas.has(`${z.x},${z.y}`))) zs = own;
+  }
+  return nextZone(zs, yo, visitadas);
+}
+const elegirZona = gancho('elegirZona', zonaBase);
+const dejarMapa = gancho('dejarMapa', huntDryOut);
+const elegirDorado = gancho('elegirDorado', (a: DoradoArgs) => stickyGolden(a.yo, a.objetivo, a.monstruos, a.esDorado));
 
 const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
 
@@ -133,8 +149,8 @@ export async function huntStep(ctx: LoopCtx, weak: boolean): Promise<boolean> {
     ? shouldStopHunt({ invasion: null, map: h.hunt.map, since: h.since, now, maxMs: RED_HUNT_MS })
     : shouldStopHunt({ invasion: bot.invasion, map: h.hunt.map, since: h.since, now, stopAlive: h.auto ? AUTO_HUNT.stopAlive : undefined }) ??
       (h.auto && world.map === h.hunt.map
-        ? huntDryOut({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since, stay: D.stayDragonMap && freshDragonMap(now) === h.hunt.map,
-            next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now) }) })
+        ? dejarMapa({ invasion: bot.invasion, map: h.hunt.map, lastSeenAt: h.lastSeenAt ?? h.since, now, since: h.since, stay: D.stayDragonMap && freshDragonMap(now) === h.hunt.map,
+            next: pickHuntMap({ invasion: bot.invasion, level: world.level, done: new Set([...(h.done ?? []), h.hunt.map]), knownMaps: knownMaps(now) }) } satisfies DejarArgs)
         : null);
   if (stop) {
     trackEvent('hunt_end', stop, h.hunt.map, h.seen.size, { map: h.hunt.map, seen: h.seen.size, min: +((now - h.since) / 60_000).toFixed(1), red: !!h.red });
@@ -175,7 +191,7 @@ export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boo
   const h = bot.hunting!;
   const now = Date.now();
   const { mates } = huntCrew();
-  const gold = stickyGolden({ x: world.x, y: world.y }, ctx.target, [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id) && (n.id === ctx.target || !claimedByMate(n, mates))), (t) => GOLDEN_TYPES.has(t) && canHit(t)) as ScopedNpc | null;
+  const gold = elegirDorado({ yo: { x: world.x, y: world.y }, objetivo: ctx.target, monstruos: [...ctx.npcs.values()].filter((n) => !unreachable.has(n.id) && (n.id === ctx.target || !claimedByMate(n, mates))), esDorado: (t: number) => GOLDEN_TYPES.has(t) && canHit(t) } satisfies DoradoArgs) as ScopedNpc | null;
   if (gold && DRAGON_TYPES.has(gold.type)) lastDragon = { id: gold.id, x: gold.x, y: gold.y, at: now };
   // No repartir el daño con un común cercano mientras el dragón está fuera de la vista un instante.
   if (lastDragon && (!gold || !DRAGON_TYPES.has(gold.type)) && !ctx.npcs.has(lastDragon.id) && now - lastDragon.at < DRAGON_MEMORY_MS && world.map === h.hunt.map) {
@@ -232,15 +248,10 @@ export async function huntWander(ctx: LoopCtx): Promise<boolean> {
   // Sin dorado recordado: la zona de dragones más cercana sin visitar (de la base), después las de cualquier dorado.
   const visited = (h.zonesVisited ??= new Set());
   const dz = dragonZones(world.map);
-  let zs = dz.some((z) => !visited.has(`${z.x},${z.y}`)) ? dz : goldenZones(world.map);
+  const zs = dz.some((z) => !visited.has(`${z.x},${z.y}`)) ? dz : goldenZones(world.map);
   // Lo que pisa un compañero también está visto. Con cuadrilla, cada uno va primero a las zonas de su franja.
   for (const z of zs) if (chebyshev(world.x, world.y, z.x, z.y) <= 6 || mates.some((m) => chebyshev(m.x, m.y, z.x, z.y) <= 6)) visited.add(`${z.x},${z.y}`);
-  if (n > 1) {
-    const band = bandsOf(zs, n);
-    const own = zs.filter((z) => band.get(z) === rank);
-    if (own.some((z) => !visited.has(`${z.x},${z.y}`))) zs = own;
-  }
-  const z = nextZone(zs, { x: world.x, y: world.y }, visited);
+  const z: Zone | null = elegirZona({ zonas: zs, yo: { x: world.x, y: world.y }, visitadas: visited, rank, n, mapa: world.map } satisfies ZonaArgs);
   if (z) {
     bot.goalPoint = [z.x, z.y];
     bot.doing = `cazando dorados en ${h.hunt.name}: voy a la zona (${z.x},${z.y}) (${z.n} avistamientos)`;

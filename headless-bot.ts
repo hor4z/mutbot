@@ -53,6 +53,7 @@
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
 import { startBus } from './bus';
 import { iniciarDirectivas } from './directivas';
+import { iniciarGanchos } from './ganchos';
 import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
 import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
@@ -123,6 +124,7 @@ async function session(deadline: number): Promise<LoopResult> {
     watchLiveness();
     void startBus();
     iniciarDirectivas(bot.charName, (m) => log(m));
+    iniciarGanchos((m) => log(m));
     worldTracked = true;
   }
   await loginAndSelectCharacter();
