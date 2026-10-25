@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isCharClass, type CharClassKey } from './estacion-logic';
 import { validCharName } from './util';
 
 export const ALTA_DIR = join(homedir(), '.mubot', 'alta');
@@ -17,7 +18,7 @@ type Pending = { id: string; ct: string };
 export type AltaDeps = {
   url: string;
   /** devuelve el motivo si no se pudo (ver EstacionDb.addChar) */
-  addChar: (user: string, pass: string, char: string) => string | null;
+  addChar: (user: string, pass: string, char: string, cls: CharClassKey | null) => string | null;
   onAdded: () => void;
   say: (...a: unknown[]) => void;
 };
@@ -33,14 +34,14 @@ export function validAltaUrl(raw: string): URL | null {
   } catch { return null; }
 }
 
-async function decrypt(ct: string, privateJwk: string): Promise<{ user: string; pass: string; char: string } | null> {
+async function decrypt(ct: string, privateJwk: string): Promise<{ user: string; pass: string; char: string; cls: CharClassKey | null } | null> {
   try {
     const key = await crypto.subtle.importKey('jwk', JSON.parse(privateJwk), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
     const plain = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, key, Buffer.from(ct, 'base64'));
-    const { u, p, c } = JSON.parse(new TextDecoder().decode(plain)) as { u?: unknown; p?: unknown; c?: unknown };
+    const { u, p, c, k } = JSON.parse(new TextDecoder().decode(plain)) as { u?: unknown; p?: unknown; c?: unknown; k?: unknown };
     if (typeof u !== 'string' || typeof p !== 'string' || typeof c !== 'string') return null;
     if (!USER_RE.test(u) || !validCharName(c) || p.length < 1 || p.length > MAX_PASS) return null;
-    return { user: u, pass: p, char: c };
+    return { user: u, pass: p, char: c, cls: isCharClass(k) ? k : null };
   } catch { return null; }
 }
 
@@ -58,7 +59,7 @@ async function pollOnce(base: URL, d: AltaDeps) {
     const data = await decrypt(it.ct, priv);
     if (!data) d.say(`alta: pendiente ${it.id} ilegible o inválido: se descarta`);
     else {
-      const why = d.addChar(data.user, data.pass, data.char);
+      const why = d.addChar(data.user, data.pass, data.char, data.cls);
       // Nunca se loguea la clave. Con o sin error el pendiente se borra: reintentarlo no lo arregla.
       if (why) d.say(`alta de ${data.char}: ${why}`); else { d.say(`alta: ${data.char} (cuenta ${data.user}) agregada`); added = true; }
     }
@@ -100,7 +101,7 @@ export const pollAltaNow = () => {
   for (const ms of [8_000, 20_000, 40_000]) setTimeout(() => pollNow?.(), ms);
 };
 
-export type AltaInput = { user: string; pass: string; char: string };
+export type AltaInput = { user: string; pass: string; char: string; cls?: CharClassKey | null };
 /** Valida un alta; devuelve el motivo si no sirve. */
 export function altaProblem(a: AltaInput): string | null {
   if (!USER_RE.test(a.user)) return 'usuario inválido (letras, números o _, hasta 10)';
@@ -120,7 +121,7 @@ export async function submitAlta(baseUrl: string, a: AltaInput): Promise<{ ok: b
   try {
     const jwk = await (await fetch(new URL('/api/pubkey', base), { signal: AbortSignal.timeout(15_000) })).json();
     const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
-    const ct = Buffer.from(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, key, new TextEncoder().encode(JSON.stringify({ u: a.user, p: a.pass, c: a.char })))).toString('base64');
+    const ct = Buffer.from(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, key, new TextEncoder().encode(JSON.stringify({ u: a.user, p: a.pass, c: a.char, ...(a.cls ? { k: a.cls } : {}) })))).toString('base64');
     const r = await fetch(new URL('/api/alta', base), { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ ct }), signal: AbortSignal.timeout(15_000) });
     if (!r.ok) return { ok: false, msg: `el worker contestó ${r.status}` };
     pollAltaNow();

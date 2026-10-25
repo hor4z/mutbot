@@ -35,10 +35,16 @@ export function resetStatTracking() {
   statOffUntil = 0;
 }
 
+/** Lote mínimo de puntos para repartir con stats chicos (personaje nuevo). */
+const SMALL_STAT_BATCH = 10;
+
 export async function investStatPoints(force = false): Promise<number> {
   const points = world.levelUpPoints;
   const family = classFamily(world.classId);
-  if (points <= 0 || (!force && points < STAT_BATCH_MIN)) return 0;
+  // Un personaje nuevo (stats chicos) gana 5 puntos por nivel y con el lote de 200 no repartía nada: Buscapina llegó a nivel 37 con 180 puntos
+  // libres y 116 de vida, y la mataban hasta los Goblins. Con stats chicos se reparte cada pocos niveles.
+  const small = world.stats.str + world.stats.agi + world.stats.vit + world.stats.ene < 1500;
+  if (points <= 0 || (!force && points < (small ? SMALL_STAT_BATCH : STAT_BATCH_MIN))) return 0;
   if (!force && Date.now() < statOffUntil) return 0;
   // Si subió de nivel desde el reparto, los puntos que hay son nuevos (no es que el server no lo tomó):
   // a un personaje nuevo que sube varios niveles por minuto lo frenaba 15 min sin repartir.

@@ -2,7 +2,7 @@
  * Borde de la estación: alta de cuentas y proxy WebSocket hacia el servidor del juego.
  *
  * Proxy: el bot se conecta a `wss://<worker>/p/<PROXY_TOKEN>/ws?host=H&port=P` y el worker abre la conexión con el servidor
- * (`UPSTREAM_HOST`, el mismo `/ws` que usa el cliente web) y pasa los mensajes en los dos sentidos. Solo reenvía a los hosts de
+ * (`UPSTREAM_HOST`, el mismo `/ws` que usa el cliente web) y devuelve su respuesta: los frames pasan por Cloudflare sin gastar CPU del worker. Solo reenvía a los hosts de
  * `ALLOWED_HOSTS`: no es un relay abierto. El token va en la ruta porque el cliente del bot arma la URL con `?host=&port=`.
  *
  * Registro: `POST /api/register` crea la cuenta en el servidor (el mismo `/api/register` del cliente web). Es la única ruta
@@ -69,29 +69,18 @@ function page(nonce: string): Response {
   });
 }
 
-/** Códigos de cierre que se pueden mandar por el cable (1005/1006 y similares no). */
-const closeCode = (c: number) => (c === 1000 || (c >= 1001 && c <= 1003) || (c >= 3000 && c <= 4999) ? c : 1000);
-
 async function proxyWs(req: Request, env: Env, url: URL): Promise<Response> {
   if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'se espera un WebSocket' }, 426);
   const host = (url.searchParams.get('host') ?? '').toLowerCase();
   const port = Number(url.searchParams.get('port'));
   const allowed = (env.ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
   if (!allowed.includes(host) || !Number.isInteger(port) || port < 1 || port > 65535) return json({ error: 'destino no permitido' }, 403);
-  const upstream = await fetch(`https://${env.UPSTREAM_HOST}/ws?host=${encodeURIComponent(host)}&port=${port}`, { headers: { upgrade: 'websocket' } });
-  const up = upstream.webSocket;
-  if (!up) return json({ error: 'el servidor no aceptó la conexión' }, 502);
-  up.accept();
-  const [client, server] = Object.values(new WebSocketPair());
-  server.accept();
-  server.addEventListener('message', (e) => { try { up.send(e.data); } catch { /* el otro lado ya cerró */ } });
-  up.addEventListener('message', (e) => { try { server.send(e.data); } catch { /* el otro lado ya cerró */ } });
-  const closer = (to: WebSocket) => (e: CloseEvent) => { try { to.close(closeCode(e.code), 'cierre'); } catch { /* ya cerrado */ } };
-  server.addEventListener('close', closer(up));
-  up.addEventListener('close', closer(server));
-  server.addEventListener('error', () => { try { up.close(1011, 'error'); } catch { /* ya cerrado */ } });
-  up.addEventListener('error', () => { try { server.close(1011, 'error'); } catch { /* ya cerrado */ } });
-  return new Response(null, { status: 101, webSocket: client });
+  // Se devuelve la respuesta del servidor tal cual: Cloudflare pasa los frames del WebSocket sin volver a ejecutar el worker, así que los
+  // mensajes no gastan CPU. (Reenviarlos a mano con un WebSocketPair agotaba los 10 ms de CPU del plan gratuito a los ~20 s de juego.)
+  const target = new URL(`https://${env.UPSTREAM_HOST}/ws`);
+  target.searchParams.set('host', host);
+  target.searchParams.set('port', String(port));
+  return fetch(new Request(target, req));
 }
 
 export default {

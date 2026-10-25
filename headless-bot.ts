@@ -191,7 +191,7 @@ async function main() {
       // Lo que ve el panel mientras espera para reintentar (la estación lo muestra en la tarjeta).
       whyOff = e instanceof LoginError
         ? e.result === LoginResponseLoginResultEnum.ServerIsFull ? 'Servidor lleno' : `Login rechazado (${LoginResponseLoginResultEnum[e.result] ?? e.result})`
-        : 'Sin conexión con el servidor';
+        : `Error: ${(e as Error).message.slice(0, 80)}`;
     }
     first = false;
     closeSockets();

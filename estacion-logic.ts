@@ -10,7 +10,28 @@ import { validCharName } from './util';
  * Un personaje: de un archivo de env (`.env`, `.env.melu`, ... con MUBOT_USER/PASS/CHAR) o del
  * de la base (`estacion-db.ts`; `envFile` = de qué `.env` se importó).
  */
-export type CharConfig = { key: string; envFile: string | null; user: string; char: string };
+/**
+ * Clases que se pueden crear en este server (0.97d) y su número de red (`CharacterClassNumber` del
+ * cliente; el packet lo lleva corrido 2 bits). MG pide un personaje de nivel alto en la cuenta.
+ */
+export const CHAR_CLASSES = {
+  dk: { id: 4, label: 'Dark Knight' },
+  dw: { id: 0, label: 'Dark Wizard' },
+  elf: { id: 8, label: 'Fairy Elf' },
+  mg: { id: 12, label: 'Magic Gladiator' },
+} as const;
+export type CharClassKey = keyof typeof CHAR_CLASSES;
+export const isCharClass = (v: unknown): v is CharClassKey => typeof v === 'string' && Object.hasOwn(CHAR_CLASSES, v);
+
+/** Cuenta y clave como las valida el registro del cliente web. Devuelve el motivo o null. */
+export function accountProblem(user: string, pass: string): string | null {
+  if (!/^[A-Za-z0-9]{4,10}$/.test(user)) return 'la cuenta tiene que tener de 4 a 10 letras o números';
+  if (pass.length < 4 || pass.length > 10) return 'la clave tiene que tener de 4 a 10 caracteres';
+  if (!/^[!-~]+$/.test(pass)) return 'la clave solo puede tener caracteres visibles, sin espacios ni acentos';
+  return null;
+}
+
+export type CharConfig = { key: string; envFile: string | null; user: string; char: string; cls?: CharClassKey };
 
 /**
  * Lee un archivo de env (formato de Bun: KEY=valor, comentarios con #, comillas opcionales).
@@ -100,7 +121,7 @@ export type CharStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fa
 
 /** Cómo se lee la salida del bot. */
 export function exitStatus(code: number | null): { status: CharStatus; msg: string } {
-  if (code === 6) return { status: 'failed', msg: 'el personaje no está en la cuenta (¿nombre mal escrito?) o el server no dejó crearlo (¿nombre tomado o clase bloqueada?). Mirá la consola.' };
+  if (code === 6) return { status: 'failed', msg: 'la cuenta no tiene ese personaje en este servidor (¿nombre mal escrito? ¿lo creaste en otro servidor, Fast o Slow?). Si la cuenta no tiene ninguno, creá el personaje en el cliente del juego.' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
   if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá el .env del personaje.' };
@@ -118,6 +139,10 @@ export type StationRequest =
   | { action: 'disconnect'; char: string }
   // Reintentar ya: corta el intento de conexión en curso (el bot espera cupo) y lanza otro sin esperar el backoff.
   | { action: 'retry'; char: string }
+  // Seguir a un jugador humano propio (ej. el usuario jugando a mano): lo busca, le pide party y lo sigue. target null = dejar de seguir.
+  | { action: 'follow'; char: string; target: string | null; map?: number; x?: number; y?: number }
+  // Tipo de conexión de este personaje: directa al servidor o por el proxy del worker. Se aplica al próximo conectar.
+  | { action: 'conn'; char: string; mode: 'direct' | 'proxy' }
   | { action: 'routine'; char: string; routine: Routine }
   // Sombra: el orquestador manda (o no) a este personaje a seguir al más fuerte.
   | { action: 'shadow'; char: string; on: boolean }
@@ -130,6 +155,14 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
+  if (r.action === 'conn') return keys.length === 3 && (r.mode === 'direct' || r.mode === 'proxy') ? { action: 'conn', char: r.char, mode: r.mode } : null;
+  if (r.action === 'follow') {
+    const num = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255);
+    if (!keys.every((k) => ['action', 'char', 'target', 'map', 'x', 'y'].includes(k))) return null;
+    if (!(r.target === null || (typeof r.target === 'string' && /^[A-Za-z0-9_]{1,10}$/.test(r.target)))) return null;
+    if (!num(r.map) || !num(r.x) || !num(r.y)) return null;
+    return { action: 'follow', char: r.char, target: r.target, map: r.map as number | undefined, x: r.x as number | undefined, y: r.y as number | undefined };
+  }
   if (r.action === 'retry') return keys.length === 2 ? { action: 'retry', char: r.char } : null;
   if (r.action === 'shadow') return keys.length === 3 && typeof r.on === 'boolean' ? { action: 'shadow', char: r.char, on: r.on } : null;
   if (r.action === 'connect' || r.action === 'routine') {

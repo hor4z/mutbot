@@ -38,7 +38,7 @@ reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, 
 código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
 
 `--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
-sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal), y el personaje nuevo que el server no deja crear con código 6; la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
+sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal), y el personaje que no está en la cuenta (o la cuenta sin personajes en ese servidor) con código 6; la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
 la sesión vieja del propio bot). Lo pasa la estación.
 
 ## Estructura
@@ -54,6 +54,7 @@ la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cue
 | `farm-loop.ts` | El loop: ciego/trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda > reset > ruta > loot > objetivo > pelear. |
 | `help.ts` | Party: invita el más fuerte (por stats); si pasan 40 s sin party invita también el más débil (los roles se invierten con los resets). Reintenta rápido (15 s x4) y acepta resolviendo el nombre al responder. |
 | `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
+| `place.ts` (carreo) | Un personaje de nivel < 40 que sigue a un líder le pide por el bus (`k`) que baje a su mapa y pelee a su lado en party; sin nivel para ningún warp (< 10) farmea donde está. El líder usa un lugar `fetch` sobre la sombra. Ver `CARRY_UNTIL`. |
 | `alta-sync.ts` | Altas por el worker: la estación trae cada minuto las cuentas cifradas de `workers/edge`, las descifra y las suma a la base; también cifra/envía las del panel y crea la cuenta en el juego por el worker. |
 | `state.ts` / `config.ts` | Estado compartido (`world`, `bot`, `learned`) y flags/ritmos humanos. |
 | `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
@@ -399,19 +400,39 @@ quedan fijas en el C#.
 ## Worker de Cloudflare (`workers/edge`, monorepo con Bun workspaces)
 
 El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un worker de Cloudflare. `bun run tsc` chequea los dos.
-- **Alta de cuentas:** el panel ("+ Agregar cuenta") manda usuario, personaje y clave a la estación (`POST /api/alta`, solo con el Origin
-  de la propia estación); ella los cifra con la clave pública del worker (RSA-OAEP) y los deja en su cola (KV). Con "Crear la cuenta en
-  el juego" marcado, primero le pide al worker que registre la cuenta (`/api/register` del servidor; ahí el worker ve la clave en claro
-  por TLS, no la guarda; tope de 5 por hora). Después la estación toma el alta, la descifra con su clave privada
-  (`~/.mubot/alta/private.jwk`) y hace `db.addChar`. El personaje con su clase se crea una vez en el cliente del juego: el bot no crea personajes.
+- **Altas en dos pasos (panel, "+ Agregar cuenta"):** 1) `POST /api/cuenta` {user, pass}: el worker registra la cuenta en el juego
+  (`/api/register` del servidor; ahí ve la clave en claro por TLS, sin guardarla; tope de 5 por hora) y la estación la guarda en la base
+  **sin personaje y sin tarjeta**. 2) `POST /api/personaje` {user, char, cls}: se elige una cuenta sin personaje, el nombre y la clase
+  (dk/dw/elf/mg); aparece la tarjeta y el bot crea el personaje en el juego al conectarlo (`MUBOT_CREATE_CLASS`, paquete `F3/01`; el Magic
+  Gladiator pide un personaje de nivel alto en la cuenta). Una tarjeta fallida por "no tiene ese personaje" ofrece "Crear personaje…" (pone
+  la clase al personaje que ya figura). La tercera pestaña ("Ya existe") agrega cuenta y personaje que ya existen: `POST /api/alta` cifra
+  los datos (RSA-OAEP) y los deja en la cola (KV) del worker; la estación los trae, los descifra con su clave privada
+  (`~/.mubot/alta/private.jwk`) y hace `db.addChar`. Todos los POST exigen el Origin de la propia estación.
 - **Proxy WebSocket:** `wss://<worker>/p/<PROXY_TOKEN>/ws?host=&port=` reenvía solo a `ALLOWED_HOSTS`. Los bots no lo usan por defecto
   (`MUBOT_PROXY` lo activa).
 - **Secretos:** `bun run alta:keys` genera claves y tokens en `~/.mubot/alta/` (0600, no los imprime); `MUBOT_ALTA_URL` va en `.env.alta`
   (git lo ignora). Pasos de despliegue en `workers/edge/README.md`.
 - **Control de la conexión:** mientras un bot espera cupo, la tarjeta ofrece "Cancelar" (deja de intentar y sale de `wanted.json`) y "Reintentar ahora" (`POST /api/do {action:'retry'}`: corta el intento y lanza otro sin el backoff; se niega si el bot ya está en el juego).
-- **Proxy en uso:** se activa arrancando la estación con `MUBOT_PROXY=wss://<worker>/p/$(cat ~/.mubot/alta/proxy-token)/ws`; vale para los bots que se lancen después. `net/socket.ts` (copia del cliente) imprime la URL del WebSocket, así que el token queda en los logs de los bots: limpiarlos o rotar el token. En la prueba del 2026-10-24 un tercer personaje entró por el proxy mientras Hume y Zamu estaban directos: el límite de 2 conexiones parece ser por dirección de origen.
+- **Tipo de conexión por personaje:** cada tarjeta tiene un selector "Conexión: Directa / Proxy" (`POST /api/do {action:'conn', char, mode}`), guardado en `~/.mubot/conn.json`. Se aplica al próximo conectar (o a "Reintentar ahora"); si el bot ya corre con otra, la tarjeta avisa. "Proxy" arma la URL con `MUBOT_ALTA_URL` (`.env.alta`) y `~/.mubot/alta/proxy-token`; sin eso se deshabilita y `connect` se niega en vez de caer en directa. `MUBOT_PROXY` sigue siendo el proxy por defecto de la opción "Directa". `net/socket.ts` (copia del cliente) imprime la URL del WebSocket, así que el token queda en los logs de los bots: limpiarlos o rotar el token. En la prueba del 2026-10-24 un tercer personaje entró por el proxy mientras Hume y Zamu estaban directos: el límite de 2 conexiones parece ser por dirección de origen.
 - **Límite del servidor:** deja 2 conexiones a la vez (`ServerIsFull` al tercero). El panel muestra el motivo en la tarjeta ("Servidor
   lleno: reintento en N s") y no dibuja el mapa de un personaje que todavía no entró al juego.
+
+## Personajes nuevos, carreo y seguir a un humano (2026-10-24)
+
+Ver también [HANDOFF.md](HANDOFF.md) (estado y aprendizajes de esa sesión).
+- **Stats:** con stats chicos (suma < 1500) se reparte cada 10 puntos (`progress.ts`, `SMALL_STAT_BATCH`); con stats grandes, el lote de `--stat-batch`.
+- **Zen:** siempre se levanta el zen cercano (`ZEN_RADIUS` = 6 en `farming.ts`), salvo el que cae junto a un jugador que no es compañero (`loot.ts`).
+- **Warp sin zen:** `place.ts` (`canWarpNow`): tras un warp sin respuesta no se reintenta hasta tener ≥ 500 zen más; mientras tanto el personaje farmea donde está.
+  Si no hay monstruos en 25 s sin ganar exp ni matar, `Roamer` pasa a la mejor zona cercana no visitada (zonas de `ticks`, `zones.ts`). Los spots de más nivel que Lorencia
+  piden vida (`TIER_MIN_HP`).
+- **Carreo:** un personaje que sigue a un líder y no aguanta lo de Arena 2 (`canFarmMonster(…, 63)`) avisa por el bus (`k`: 1 = hace falta que el líder baje a su mapa,
+  2 = puede hacer warp). El líder va a un lugar `fetch`: su mapa mientras no pueda pagar el warp; con warp, el spot del menor de los dos niveles
+  (`CARRY_TIERS`: Lorencia, Devias 4, Atlans desde 70, Tarkan desde 140). `MUBOT_CARRY=0` lo apaga. El cronómetro de "3 min sin exp" no cuenta mientras viaja (`lastTravelAt`) ni en carreo.
+- **Seguir a un humano:** `POST /api/do {action:'follow', char, target, map?, x?, y?}` (`target: null` lo quita; vive en memoria de la estación). El bot lo busca por scope, va al mapa/posición
+  de la pista, le pide party (`help.ts`) y se pone a ~7 casillas (`bus.ts`: `followHumanTarget`).
+- **Creación de personaje:** `MUBOT_CREATE_CLASS` (lo pasa la estación desde `characters.class`): si el personaje no está en la cuenta, el bot lo crea al entrar (`world.ts`, F3/01).
+- **Worker:** el proxy WebSocket devuelve el `fetch` del servidor sin reenviar mensajes (si no, agota los 10 ms de CPU del plan gratuito a los ~20 s). `net/socket.ts` imprime la URL del WebSocket (con el token).
+- **Slow (Beta):** proxy `wss://slow.mu.garden/ws`, connect server `clasico:44405`, game `clasico:55901`. El login de una cuenta del Fast devolvió `NoChargeInfo` (9); hipótesis sin confirmar: solo VIP.
 
 ## Datos y aprendizaje (ClickHouse local)
 

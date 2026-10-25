@@ -152,7 +152,8 @@ export const JEWELS = new Set([13, 14, 16, 22, 31]);
  */
 export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
 export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?: DropJudge): boolean {
-  if (d.isMoney) return fresh;
+  // El zen siempre se levanta (los warps cuestan zen y un personaje nuevo no tiene nada); pickLoot lo limita a ZEN_RADIUS para no perder pelea.
+  if (d.isMoney) return true;
   if (judge && gear && d.group <= 11) {
     const j = judge(d);
     if (j !== undefined) return j;
@@ -167,6 +168,9 @@ export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?:
 /** Cajas, Cristales y talismanes (grupo 14): ver isValuableDrop. */
 export const CURRENCY_ITEMS: ReadonlySet<number> = new Set([11, 31, 7, 12, 20]);
 
+/** El zen se levanta solo si está cerca: cada viaje largo es tiempo sin pelear. */
+const ZEN_RADIUS = 6;
+
 /** Orden de recolección: la caja primero aunque una joya esté hasta LOOT_BOX_FIRST tiles más cerca. */
 const LOOT_BOX_FIRST = 8;
 
@@ -178,7 +182,7 @@ export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, 
     if (!isValuableDrop(d, fresh, gear, judge)) continue;
     const dd = cheb(me, d);
     const score = dd - (d.group === 14 && d.num === 11 ? LOOT_BOX_FIRST : 0);
-    if (dd <= radius && score < bd) {
+    if (dd <= (d.isMoney ? Math.min(radius, ZEN_RADIUS) : radius) && score < bd) {
       bd = score;
       best = d;
     }
