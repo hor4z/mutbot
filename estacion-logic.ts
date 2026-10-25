@@ -152,8 +152,6 @@ export type StationRequest =
   | { action: 'retry'; char: string }
   // Seguir a un jugador humano propio (ej. el usuario jugando a mano): lo busca, le pide party y lo sigue. target null = dejar de seguir.
   | { action: 'follow'; char: string; target: string | null; map?: number; x?: number; y?: number }
-  // Tipo de conexión de este personaje: directa al servidor o por el proxy del worker. Se aplica al próximo conectar.
-  | { action: 'conn'; char: string; mode: 'direct' | 'proxy' }
   // Servidor del juego de este personaje (Fast o Slow; comparten cuentas). Se aplica al próximo conectar.
   | { action: 'server'; char: string; server: ServerKey }
   | { action: 'routine'; char: string; routine: Routine }
@@ -168,7 +166,6 @@ export function parseStationRequest(v: unknown): StationRequest | null {
   if (typeof r.char !== 'string' || !/^[a-z0-9_]{1,10}$/.test(r.char)) return null;
   const keys = Object.keys(r);
   if (r.action === 'disconnect') return keys.length === 2 ? { action: 'disconnect', char: r.char } : null;
-  if (r.action === 'conn') return keys.length === 3 && (r.mode === 'direct' || r.mode === 'proxy') ? { action: 'conn', char: r.char, mode: r.mode } : null;
   if (r.action === 'server') return keys.length === 3 && isServerKey(r.server) ? { action: 'server', char: r.char, server: r.server } : null;
   if (r.action === 'follow') {
     const num = (v: unknown) => v === undefined || (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255);
