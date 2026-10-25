@@ -138,9 +138,14 @@ export default {
     if (path === '/api/pendientes' || path.startsWith('/api/pendientes/')) {
       if (!(await sameSecret(bearer(req), env.STATION_TOKEN))) return json({ error: 'no autorizado' }, 401);
       if (req.method === 'GET' && path === '/api/pendientes') {
-        const { keys } = await env.ALTAS.list({ prefix: PENDING_PREFIX, limit: 20 });
-        const items = await Promise.all(keys.map(async (k) => ({ id: k.name, ct: await env.ALTAS.get(k.name) })));
-        return json(items.filter((i) => i.ct != null));
+        try {
+          const { keys } = await env.ALTAS.list({ prefix: PENDING_PREFIX, limit: 20 });
+          const items = await Promise.all(keys.map(async (k) => ({ id: k.name, ct: await env.ALTAS.get(k.name) })));
+          return json(items.filter((i) => i.ct != null));
+        } catch (e) {
+          // Límite diario del KV gratuito (list/get): se avisa en vez de tirar la excepción (error 1101 de Cloudflare).
+          return json({ error: 'el KV no responde (¿límite diario?)', detail: String((e as Error).message ?? e).slice(0, 120) }, 503);
+        }
       }
       if (req.method === 'DELETE') {
         const id = decodeURIComponent(path.slice('/api/pendientes/'.length));
