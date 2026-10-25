@@ -18,6 +18,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, rea
 import { EstacionDb, type DbChar } from './estacion-db';
 import { homedir } from 'node:os';
 import { statPower } from './util';
+import { Orquestadores, type Miembro } from './orquestador';
 import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
@@ -473,7 +474,7 @@ function view() {
     const st = s.state;
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
-      shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
+      shadowOf: orquestadores.de(s.cfg.server).sombraDe(s.cfg.key), shadowOff: orquestadores.de(s.cfg.server).sombraApagada(s.cfg.key),
       server: chosenServer(s),
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
@@ -588,36 +589,21 @@ try {
   });
 } catch { /* sin .env.alta: no hay altas remotas */ }
 
-// Orquestador: el más fuerte de los conectados (suma de stats, util.statPower) es el líder; los que tienen menos de la mitad de su
-// fuerza lo siguen como sombra por todos los mapas (son demasiado débiles para farmear solos), salvo los que el usuario apagó
-// (`shadowOff`). Ni el nivel ni los resets cuentan (nivel 100 con 200 resets no es nivel 100 con 0): con fuerza parecida conviene
-// cooperar (cada uno en su spot o juntos en party) y no quedarse de acompañante. Cada segundo la estación
-// manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
-const SHADOW_POWER_RATIO = 0.5;
+// Orquestador (orquestador.ts): una instancia por servidor, así un personaje solo se relaciona con los de su servidor. Cada segundo la
+// estación reparte los roles (líder y sombras) y manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de
+// llegar, vuelve a decidir solo.
 /** MUBOT_SHADOWS=0 apaga las sombras: cada uno farmea lo suyo y se hace party si coinciden. */
 const SHADOWS_ENABLED = process.env.MUBOT_SHADOWS !== '0';
-const shadowsOn = () => SHADOWS_ENABLED && D.shadows;
-const shadowOff = new Set<string>();
-/** A quién sigue cada personaje, si es un humano (en memoria: se vuelve a pedir tras reiniciar la estación). */
-const followTargets = new Map<string, { name: string; map?: number; x?: number; y?: number }>();
-const shadowOf = new Map<string, string>();
+const orquestadores = new Orquestadores(() => SHADOWS_ENABLED && D.shadows);
 function orchestrate() {
   const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
-  const power = (s: Slot) => statPower(s.state!.char.stats);
-  shadowOf.clear();
-  // Cada servidor tiene sus líderes y sus sombras: un personaje del Slow no sigue a uno del Fast (otro mundo, otro mapa).
-  for (const srv of new Set(on.map((s) => s.cfg.server))) {
-    const group = on.filter((s) => s.cfg.server === srv);
-    const leader = group.length > 1 ? group.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
-    for (const s of group) if (shadowsOn() && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
-  }
-  // Quien sigue a un humano no es sombra de ningún bot.
-  for (const k of followTargets.keys()) shadowOf.delete(k);
-  // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
+  const miembros: Miembro[] = on.map((s) => ({ key: s.cfg.key, char: s.cfg.char, server: s.cfg.server, power: statPower(s.state!.char.stats) }));
+  const ordenes = orquestadores.asignar(miembros);
   for (const s of on) {
-    const mine = [...shadowOf].filter(([, l]) => l === s.cfg.char).map(([k]) => slots.get(k)!.cfg.char);
-    const ft = followTargets.get(s.cfg.key);
-    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: shadowOf.get(s.cfg.key) ?? null, s: mine, ...(ft ? { f: { n: ft.name, m: ft.map, x: ft.x, y: ft.y } } : {}) })), busPort(s), '127.0.0.1');
+    const o = ordenes.get(s.cfg.key);
+    if (!o) continue;
+    const f = o.humano ? { f: { n: o.humano.name, m: o.humano.map, x: o.humano.x, y: o.humano.y } } : {};
+    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: o.lider, s: o.sombras, ...f })), busPort(s), '127.0.0.1');
   }
 }
 
@@ -759,7 +745,7 @@ Bun.serve({
       const s = slots.get(r.char);
       if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
       if (r.action === 'shadow') {
-        if (r.on) shadowOff.delete(s.cfg.key); else shadowOff.add(s.cfg.key);
+        orquestadores.de(s.cfg.server).apagarSombra(s.cfg.key, !r.on);
         return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
       }
       if (r.action === 'server') {
@@ -768,8 +754,8 @@ Bun.serve({
         return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label} (se aplica al reconectar)` });
       }
       if (r.action === 'follow') {
-        if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
-        followTargets.set(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
+        if (r.target == null) { orquestadores.de(s.cfg.server).seguirHumano(s.cfg.key, null); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
+        orquestadores.de(s.cfg.server).seguirHumano(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
         return json({ ok: true, msg: `${s.cfg.char} va a buscar a ${r.target}, le pide party y lo sigue` });
       }
       if (r.action === 'retry') {
