@@ -5,6 +5,7 @@
  * recorrido del mapa en celdas. Fuera de `headless-bot.ts` para poder testearlo
  * offline (`panel-tests.ts`): importar el bot lo arranca.
  */
+import { bandsOf } from './crew';
 import itemsData from './data/items.json';
 import type { Invasion, MapName } from './panel-protocol';
 
@@ -129,8 +130,9 @@ export const HUNT_DRY_MS = 2 * 60_000;
 // Quedan pocos acá y otro mapa tiene muchos más: se pasa sin esperar los 2 min.
 export const HUNT_FEW_ALIVE = 3;
 export const HUNT_FEW_MIN_STAY_MS = 45_000;
-export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice; since?: number }): string | null {
-  if (!inp.next.ok) return null;
+/** `stay`: el mapa del Golden Dragon mientras dura su invasión: ahí se queda (los otros mapas solo tienen dorados comunes; medido el 25/10: dejarlo a los 7 min perdió los últimos 8). */
+export function huntDryOut(inp: { invasion: Invasion | null; map: number; lastSeenAt: number; now: number; next: HuntChoice; since?: number; stay?: boolean }): string | null {
+  if (inp.stay || !inp.next.ok) return null;
   const here = inp.invasion?.maps.find((m) => m.map === inp.map)?.alive ?? 0;
   const next = inp.next.alive ?? 0;
   if (inp.since != null && inp.now - inp.since >= HUNT_FEW_MIN_STAY_MS && here <= HUNT_FEW_ALIVE && next >= 8 && next >= 3 * Math.max(here, 1)) {
@@ -288,6 +290,12 @@ export class HuntExplorer {
   /** Con terreno (useTerrain): las celdas caminables y alcanzables del mapa; null = a ciegas, como antes. */
   cells: HuntCell[] | null = null;
   private terrainMap = -1;
+  /** Cuadrilla de cazadores en este mapa (setCrew): con más de uno, cada uno barre primero su franja. */
+  private crewRank = 0;
+  private crewN = 1;
+  private owner: Map<HuntCell, number> | null = null;
+  private ownerFor: HuntCell[] | null = null;
+  private ownerN = 0;
   private weightsRef: ReadonlyMap<string, number> | undefined;
   private avoidRef: ReadonlySet<string> | undefined;
 
@@ -382,14 +390,39 @@ export class HuntExplorer {
   }
 
   /** La celda a recorrer con terreno: con peso primero (peso / distancia), sin peso la más cercana, las a evitar al final. */
+  /** Quiénes cazan conmigo en este mapa (mi lugar y cuántos somos): reparte el mapa en franjas. */
+  setCrew(rank: number, n: number) {
+    this.crewRank = rank;
+    this.crewN = Math.max(1, n);
+  }
+
+  /** Algo vio a esta distancia de (x, y) (yo o un compañero): esas celdas ya están recorridas. */
+  markSeen(x: number, y: number) {
+    if (!this.cells) return;
+    for (const c of this.cells) if (!this.visited.has(c.key) && cheb(x, y, c.x, c.y) <= HUNT_CELL_REACH) this.visited.add(c.key);
+  }
+
+  private owners(): Map<HuntCell, number> | null {
+    if (this.crewN <= 1 || !this.cells) return null;
+    if (this.ownerFor !== this.cells || this.ownerN !== this.crewN) {
+      this.owner = bandsOf(this.cells, this.crewN);
+      this.ownerFor = this.cells;
+      this.ownerN = this.crewN;
+    }
+    return this.owner;
+  }
+
   private nextCell(x: number, y: number): HuntCell | null {
     let best: HuntCell | null = null;
     let bs = -Infinity;
+    const owner = this.owners();
     for (const c of this.cells!) {
       if (this.visited.has(c.key)) continue;
       const d = cheb(x, y, c.x, c.y);
       // Tres bandas: con dorados (10 000+), comunes (0+), a evitar (-10 000+); adentro, lo más cerca / de más peso.
-      const score = c.avoid ? -10_000 - d : c.weight > 0 ? 10_000 + (c.weight * 100) / (d + 25) : -d;
+      // Con cuadrilla, la franja de otro va después de la mía y antes de lo a evitar (si la mía se acabó, ayudo en la suya).
+      const foreign = owner != null && owner.get(c) !== this.crewRank;
+      const score = c.avoid ? -10_000 - d : foreign ? -5_000 - d : c.weight > 0 ? 10_000 + (c.weight * 100) / (d + 25) : -d;
       if (score > bs) { bs = score; best = c; }
     }
     return best;
