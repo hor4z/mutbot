@@ -52,8 +52,6 @@ type Slot = {
   cfg: DbChar;
   /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
   conn: 'direct' | 'proxy';
-  /** servidor del juego del proceso que corre ahora */
-  srv?: ServerKey;
   /** Worker por el que entró el bot (si va por proxy) y cuántos cambios de worker seguidos lleva este intento. */
   proxyBase?: string;
   proxySwaps?: number;
@@ -163,7 +161,6 @@ function sameServer(cmdline: string[]): boolean {
   const i = cmdline.indexOf('--cs-host');
   return i < 0 || cmdline[i + 1] === SERVER.csHost || cmdline[i + 1] === SERVERS.slow.csHost;
 }
-const srvOfCmdline = (cmdline: string[]): ServerKey => (cmdline[cmdline.indexOf('--cs-host') + 1] === SERVERS.slow.csHost ? 'slow' : 'fast');
 
 function syncRunning() {
   const procs = scanProcs();
@@ -174,7 +171,6 @@ function syncRunning() {
       if (s.pid !== p.pid) {
         s.pid = p.pid;
         s.conn = p.cmdline.some((a) => /\/p\/[^/]+\/ws/.test(a)) ? 'proxy' : 'direct';
-        s.srv = srvOfCmdline(p.cmdline);
         if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
           s.status = p.wsPort ? 'on' : 'external';
           s.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
@@ -390,7 +386,6 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   closeSync(fd);
   s.pid = proc.pid;
   s.conn = pUrl ? 'proxy' : 'direct';
-  s.srv = srv;
   s.proxyBase = pick?.base;
   ownExits.add(proc.pid);
   s.status = 'starting';
@@ -479,7 +474,7 @@ function view() {
     return {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
-      server: chosenServer(s), serverUsed: s.pid != null ? s.srv ?? null : null,
+      server: chosenServer(s),
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
@@ -770,8 +765,7 @@ Bun.serve({
       if (r.action === 'server') {
         if (!db.setServer(s.cfg.char, r.server)) return json({ ok: false, msg: 'no encuentro el personaje en la base' }, 409);
         refreshSlots();
-        const live = s.pid != null && (s.srv ?? 'fast') !== r.server;
-        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label}${live ? ' (se aplica al reconectar)' : ''}` });
+        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label} (se aplica al reconectar)` });
       }
       if (r.action === 'follow') {
         if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
