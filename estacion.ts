@@ -826,9 +826,19 @@ Bun.serve({
       if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
       const body = await req.text();
       if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown; server?: unknown };
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown; server?: unknown; existing?: unknown };
       try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
       if (typeof raw.user !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
+      if (url.pathname === '/api/cuenta' && raw.existing === true) {
+        // Cuenta que ya existe en el juego (compartida entre servidores): solo se guarda en la estación, sin pasar por el worker.
+        if (typeof raw.pass !== 'string' || !raw.pass || raw.pass.length > 64) return json({ ok: false, msg: 'falta la clave' }, 400);
+        if (!/^[A-Za-z0-9_]{1,10}$/.test(raw.user)) return json({ ok: false, msg: 'usuario inválido' }, 400);
+        const why = db.addAccount(raw.user, raw.pass);
+        if (why) return json({ ok: false, msg: why }, 409);
+        say(`cuenta ${raw.user} agregada (ya existía en el juego)`);
+        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: null, text: `Cuenta ${raw.user} agregada. Ahora creale un personaje en el servidor que quieras.` });
+        return json({ ok: true, msg: `Cuenta ${raw.user} agregada. Creale un personaje en la pestaña del servidor.` });
+      }
       if (url.pathname === '/api/cuenta') {
         if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
         if (typeof raw.pass !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
@@ -842,9 +852,11 @@ Bun.serve({
         addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: null, text: `Cuenta ${raw.user} creada. Falta el paso 2: crear su personaje.` });
         return json({ ok: true, msg: `Cuenta ${raw.user} creada. Ahora creá su personaje (paso 2).` });
       }
-      if (typeof raw.char !== 'string' || !isCharClass(raw.cls)) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
+      // `existing`: el personaje ya existe en el juego (no hay clase para crearlo); el bot solo lo elige al entrar.
+      const cls = raw.existing === true ? null : isCharClass(raw.cls) ? raw.cls : undefined;
+      if (typeof raw.char !== 'string' || cls === undefined) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
       const replace = typeof raw.replace === 'string' ? raw.replace : undefined;
-      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace, isServerKey(raw.server) ? raw.server : 'fast');
+      const why = db.addCharToAccount(raw.user, raw.char, cls, replace, isServerKey(raw.server) ? raw.server : 'fast');
       if (why) return json({ ok: false, msg: why }, 409);
       // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
       if (replace && replace !== raw.char) {
@@ -853,9 +865,10 @@ Bun.serve({
         if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
       }
       refreshSlots();
-      say(`personaje ${raw.char} (${CHAR_CLASSES[raw.cls].label}) en la cuenta ${raw.user}`);
-      addAlert({ at: Date.now(), kind: 'status', tone: 'good', char: raw.char, text: `${raw.char} agregado (${CHAR_CLASSES[raw.cls].label}). Conectalo: el bot lo crea en el juego al entrar.` });
-      return json({ ok: true, msg: `${raw.char} agregado. Conectalo para que el bot lo cree (${CHAR_CLASSES[raw.cls].label}).` });
+      const label = cls ? CHAR_CLASSES[cls].label : 'ya existe en el juego';
+      say(`personaje ${raw.char} (${label}) en la cuenta ${raw.user}`);
+      addAlert({ at: Date.now(), kind: 'status', tone: 'good', char: raw.char, text: cls ? `${raw.char} agregado (${label}). Conectalo: el bot lo crea en el juego al entrar.` : `${raw.char} agregado (ya existe en el juego). Conectalo.` });
+      return json({ ok: true, msg: cls ? `${raw.char} agregado. Conectalo para que el bot lo cree (${label}).` : `${raw.char} agregado. Conectalo.` });
     }
     return new Response('No.', { status: 405 });
   },

@@ -31,79 +31,84 @@ function Invasion({ inv, now }: { inv: NonNullable<ReturnType<typeof useStationD
   return <div className="simple-inv">{mins != null ? `Próxima invasión en ${mins} min (a las :50)` : "Sin invasión activa"}</div>;
 }
 
-/** Alta de una cuenta que ya existe en el juego: la estación cifra los datos y los manda por el worker. */
 const CLASSES: [string, string][] = [["dk", "Dark Knight"], ["dw", "Dark Wizard"], ["elf", "Fairy Elf"], ["mg", "Magic Gladiator"]];
-type Tab = "cuenta" | "personaje" | "existente";
 
 /**
- * Altas en dos pasos: 1) crear la cuenta en el juego (el worker la registra; queda guardada sin personaje y sin tarjeta) y
- * 2) crear su personaje (nombre y clase; el bot lo crea al conectarlo). La tercera pestaña es para lo que ya existe.
+ * Cuenta (compartida entre los dos servidores): se crea en el juego por el worker o, si ya existe, solo se guarda en la estación.
+ * No lleva servidor ni personaje: los personajes se crean después, dentro de la pestaña de cada servidor.
  */
-function AccountsModal({ free, preset, defaultServer, onClose }: { free: string[]; preset: { user: string; char: string } | null; defaultServer: Srv; onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>(preset || free.length ? "personaje" : "cuenta");
-  const [f, setF] = useState({ user: preset?.user ?? "", char: preset?.char ?? "", pass: "", cls: "", server: defaultServer });
+function AccountModal({ onClose }: { onClose: () => void }) {
+  const [f, setF] = useState({ user: "", pass: "", existing: false });
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const go = (t: Tab) => { setTab(t); setRes(null); };
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const user = tab === "personaje" ? (preset?.user ?? (f.user || free[0] || "")) : f.user;
-    const r = tab === "cuenta" ? await postCuenta({ user, pass: f.pass }) : tab === "personaje" ? await postPersonaje({ user, char: f.char, cls: f.cls, server: f.server as "fast" | "slow", ...(preset ? { replace: preset.char } : {}) }) : await postAlta({ user, char: f.char, pass: f.pass, cls: f.cls || undefined });
+    const r = await postCuenta({ user: f.user, pass: f.pass, ...(f.existing ? { existing: true } : {}) });
     setBusy(false);
-    if (!r.ok) return setRes(r);
-    if (tab === "cuenta") { setF({ user: "", char: "", pass: "", cls: "", server: f.server }); setTab("personaje"); setRes(r); } // sigue el paso 2
-    else onClose(); // el aviso queda en "Mensajes"
+    if (r.ok) onClose(); else setRes(r);
   }
-  const info = tab === "cuenta" ? "Paso 1: crea la cuenta en el juego (por el worker). Todavía no aparece en la lista: falta el personaje."
-    : tab === "personaje" ? preset ? "El personaje todavía no existe en el juego. Podés cambiarle el nombre y elegir la clase: el bot lo crea la primera vez que lo conectás." : "Paso 2: el personaje de una cuenta sin personaje. El bot lo crea en el juego la primera vez que lo conectás."
-    : "Cuenta ya creada en el juego: se cifra y pasa por el worker. Si el personaje todavía no existe, elegí su clase y el bot lo crea al conectarlo.";
   return (
     <div className="simple-modal" role="dialog" aria-modal="true" aria-label="Agregar cuenta" onClick={onClose}>
       <form className="simple-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={submit} autoComplete="off">
         <h2>Agregar cuenta</h2>
-        <div className="simple-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === "cuenta"} onClick={() => go("cuenta")}>1. Cuenta</button>
-          <button type="button" role="tab" aria-selected={tab === "personaje"} onClick={() => go("personaje")}>2. Personaje{free.length ? ` (${free.length})` : ""}</button>
-          <button type="button" role="tab" aria-selected={tab === "existente"} onClick={() => go("existente")}>Ya existe</button>
+        <small>La cuenta vale en los dos servidores. Después, en la pestaña Fast o Slow, le creás sus personajes.</small>
+        <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego (solo guardarla)</label>
+        <label>Usuario<input value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} required maxLength={10} pattern={f.existing ? "[A-Za-z0-9_]{1,10}" : "[A-Za-z0-9]{4,10}"} autoComplete="off" /></label>
+        <label>Contraseña<input type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} required maxLength={f.existing ? 64 : 10} minLength={f.existing ? 1 : 4} autoComplete="new-password" /></label>
+        {res && <div className={res.ok ? "simple-ok" : "simple-err"}>{res.msg}</div>}
+        <div className="simple-btns">
+          <button type="button" className="pause" onClick={onClose}>Cerrar</button>
+          <button type="submit" className="go" disabled={busy}>{busy ? "Enviando…" : f.existing ? "Guardar cuenta" : "Crear cuenta"}</button>
         </div>
-        <small>{info}</small>
-        {tab === "personaje" && preset ? (
-          <label>Cuenta<input value={preset.user} readOnly /></label>
-        ) : tab === "personaje" ? (
-          free.length ? (
-            <label>Cuenta
-              <select value={f.user || free[0]} onChange={set("user")}>{free.map((u) => <option key={u} value={u}>{u}</option>)}</select>
-            </label>
-          ) : <div className="simple-err">No hay cuentas sin personaje: creá una en el paso 1.</div>
-        ) : (
-          <label>Usuario<input value={f.user} onChange={set("user")} required maxLength={10} pattern={tab === "cuenta" ? "[A-Za-z0-9]{4,10}" : "[A-Za-z0-9_]{1,10}"} autoComplete="off" /></label>
-        )}
-        {tab !== "cuenta" && <label>Personaje<input value={f.char} onChange={set("char")} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>}
-        {tab === "personaje" && (
-          <label>Servidor
-            <select value={f.server} onChange={set("server")}>
-              <option value="fast">Fast</option>
-              <option value="slow">Slow</option>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Personaje en el servidor de la pestaña (fijo): de una cuenta ya guardada, con nombre y clase (el bot lo crea al conectarlo) o, si ya
+ * existe en el juego, solo el nombre. `preset`: la tarjeta que falló por "no tiene ese personaje" (cuenta y nombre ya puestos).
+ */
+function CharacterModal({ server, accounts, preset, onClose }: { server: Srv; accounts: { user: string; n: number }[]; preset: { user: string; char: string } | null; onClose: () => void }) {
+  const open = accounts; // sin tope de personajes por cuenta
+  const [f, setF] = useState({ user: preset?.user ?? open[0]?.user ?? "", char: preset?.char ?? "", cls: "", existing: false });
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<Result | null>(null);
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    const r = await postPersonaje({ user: f.user, char: f.char, cls: f.existing ? "" : f.cls, server, ...(f.existing ? { existing: true } : {}), ...(preset ? { replace: preset.char } : {}) });
+    setBusy(false);
+    if (r.ok) onClose(); else setRes(r); // el aviso queda en "Mensajes"
+  }
+  return (
+    <div className="simple-modal" role="dialog" aria-modal="true" aria-label={`Agregar personaje al ${SRV_NAME[server]}`} onClick={onClose}>
+      <form className="simple-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={submit} autoComplete="off">
+        <h2>Personaje en el {SRV_NAME[server]}</h2>
+        <small>{preset ? "El personaje todavía no existe en el juego. Podés cambiarle el nombre y elegir la clase: el bot lo crea la primera vez que lo conectás." : `Se crea en el ${SRV_NAME[server]} (la cuenta vale en los dos). El bot lo crea en el juego la primera vez que lo conectás.`}</small>
+        {preset ? <label>Cuenta<input value={preset.user} readOnly /></label> : open.length ? (
+          <label>Cuenta
+            <select value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })}>
+              {open.map((a) => <option key={a.user} value={a.user}>{a.user} ({a.n} en el {SRV_NAME[server]})</option>)}
             </select>
-            <small>La cuenta vale en los dos servidores; el personaje se crea en el que elijas.</small>
           </label>
-        )}
-        {tab !== "cuenta" && (
-          <label>{tab === "existente" ? "Clase (solo si el personaje no existe todavía)" : "Clase"}
-            <select value={f.cls} onChange={set("cls")} required={tab === "personaje"}>
-              {tab === "existente" ? <option value="">Ya existe: no crear</option> : <option value="" disabled>Elegí una clase</option>}
+        ) : <div className="simple-err">No hay cuentas con lugar: agregá una desde "+ Cuenta" arriba.</div>}
+        <label>Personaje<input value={f.char} onChange={(e) => setF({ ...f, char: e.target.value })} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>
+        {!preset && <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego (no crear)</label>}
+        {!f.existing && (
+          <label>Clase
+            <select value={f.cls} onChange={(e) => setF({ ...f, cls: e.target.value })} required>
+              <option value="" disabled>Elegí una clase</option>
               {CLASSES.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
             </select>
             {f.cls === "mg" && <small>El Magic Gladiator pide un personaje de nivel alto en la misma cuenta: en una cuenta nueva el servidor puede rechazarlo.</small>}
           </label>
         )}
-        {tab !== "personaje" && <label>Contraseña<input type="password" value={f.pass} onChange={set("pass")} required maxLength={tab === "cuenta" ? 10 : 64} minLength={tab === "cuenta" ? 4 : 1} autoComplete="new-password" /></label>}
         {res && <div className={res.ok ? "simple-ok" : "simple-err"}>{res.msg}</div>}
         <div className="simple-btns">
           <button type="button" className="pause" onClick={onClose}>Cerrar</button>
-          <button type="submit" className="go" disabled={busy || (tab === "personaje" && !preset && !free.length)}>{busy ? "Enviando…" : tab === "cuenta" ? "Crear cuenta" : tab === "personaje" ? "Crear personaje" : "Agregar"}</button>
+          <button type="submit" className="go" disabled={busy || (!preset && !open.length)}>{busy ? "Enviando…" : "Agregar personaje"}</button>
         </div>
       </form>
     </div>
@@ -111,7 +116,8 @@ function AccountsModal({ free, preset, defaultServer, onClose }: { free: string[
 }
 
 function Shell() {
-  const [altaOpen, setAltaOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [charOpen, setCharOpen] = useState(false);
   const [preset, setPreset] = useState<{ user: string; char: string } | null>(null);
   const { data, loaded, error, refresh } = useStationData();
   const actions = useActions(refresh);
@@ -120,6 +126,8 @@ function Shell() {
   const pickSrv = (s: Srv) => { setSrv(s); try { localStorage.setItem("srv", s); } catch { /* sin almacenamiento: no pasa nada */ } };
   const all = data.chars.filter((c) => c.account !== "blocked" && !HIDDEN.has(c.key));
   const chars = all.filter((c) => c.server === srv);
+  // Cuentas compartidas: todas las que hay (con o sin personajes) y cuántos personajes tienen en el servidor de la pestaña.
+  const accounts = [...new Set([...all.map((c) => c.user), ...data.freeAccounts])].map((user) => ({ user, n: all.filter((c) => c.user === user && c.server === srv).length })).sort((a, b) => a.n - b.n || a.user.localeCompare(b.user));
   const srvOfChar = new Map(all.map((c) => [c.char, c.server] as const));
   const summary = (s: Srv) => {
     const on = all.filter((c) => c.server === s && isOnline(c));
@@ -138,7 +146,7 @@ function Shell() {
   return (
     <div className="simple">
       <aside className="simple-list">
-        <h1>MU / Estación</h1>
+        <div className="simple-top"><h1>MU / Estación</h1><button className="simple-acc" onClick={() => setAccountOpen(true)} title="Las cuentas son compartidas entre los dos servidores">+ Cuenta</button></div>
         <div className="simple-tabs" role="tablist">
           {(["fast", "slow"] as Srv[]).map((s) => {
             const t = summary(s);
@@ -186,7 +194,7 @@ function Shell() {
               {c.stuck && <small className="simple-err">⚠ Trabado: no avanza hace rato.</small>}
               {c.status === "failed" && <small className="simple-err">{c.msg}</small>}
               {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
-                <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setAltaOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
+                <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setCharOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
               )}
               {c.serverUsed && c.serverUsed !== c.server && <small className="simple-wait">Ahora conectado al {c.serverUsed === "slow" ? "Slow" : "Fast"}; el cambio se aplica al reconectar.</small>}
               {c.connUsed && c.connUsed !== c.conn && <small className="simple-wait">Ahora conectado {c.connUsed === "proxy" ? "por proxy" : "directo"}; el cambio se aplica al reconectar.</small>}
@@ -216,8 +224,9 @@ function Shell() {
           );
         })}
         {loaded && !chars.length && <p className="simple-empty">No hay personajes en el {SRV_NAME[srv]}. Se agregan con "+ Agregar cuenta" y se mueven con el selector Servidor de cada tarjeta.</p>}
-        <button className="simple-add" onClick={() => { setPreset(null); setAltaOpen(true); }}>+ Agregar cuenta</button>
-        {altaOpen && <AccountsModal free={data.freeAccounts} preset={preset} defaultServer={srv} onClose={() => setAltaOpen(false)} />}
+        <button className="simple-add" onClick={() => { setPreset(null); setCharOpen(true); }}>+ Personaje en el {SRV_NAME[srv]}</button>
+        {charOpen && <CharacterModal server={srv} accounts={accounts} preset={preset} onClose={() => setCharOpen(false)} />}
+        {accountOpen && <AccountModal onClose={() => setAccountOpen(false)} />}
         <h2>Mensajes</h2>
         <div className="simple-msgs">
           {msgs.map((m) => (

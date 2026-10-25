@@ -77,7 +77,8 @@ export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
 
     const codeIndex = packetHeaderSize === 3 ? 3 : 2;
     const packetCode = packet.getUint8(codeIndex);
-    const subCode = packet.getUint8(codeIndex + 1);
+    // Un paquete de 3 bytes (code sin subcode) tiraba RangeError y mataba al bot (Trainer, 2026-10-25): sin subcode se busca la ruta sin él.
+    const subCode = codeIndex + 1 < packet.byteLength ? packet.getUint8(codeIndex + 1) : -1;
 
     const pDef = routesByCode[packetCode]?.find(p => p.SubCode == null || p.SubCode === subCode);
 

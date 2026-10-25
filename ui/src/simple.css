@@ -82,3 +82,9 @@
 .simple-tabs button { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.04); color: inherit; cursor: pointer; font: inherit; font-weight: 600; }
 .simple-tabs button small { opacity: .75; font-weight: 400; margin-left: 4px; }
 .simple-tabs button.on { background: rgba(120,170,255,.22); border-color: rgba(120,170,255,.6); }
+
+/* Encabezado: título y alta de cuenta (común a los dos servidores) */
+.simple-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.simple-top h1 { margin: 0; }
+.simple-acc { padding: 5px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; }
+.simple-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
