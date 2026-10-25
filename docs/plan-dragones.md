@@ -29,9 +29,8 @@ En la rama de pelea, el acercamiento al objetivo era **en línea recta** (`step(
 
 ## Decisiones con datos / pendientes
 
-- (c) Varios bots: la ayuda por dragón ya existe (`askHelp('golden', ...)` al ver uno nuevo). Que un bot sea scout puro y avise (scout.ts, /api/team) no se tocó: no hay `scout.ts` en este árbol y no hay datos de cuánto ahorra. Pendiente.
 - (d) Pre-posicionarse antes de las :50: **no** se implementa. El mapa solo se sabe con el aviso (hoy Noria, luego Devias), la historia de los últimos días muestra los tres mapas y no hay una regla medida. Con el aviso a las :50:00, llegar tomó ~27 s al primer dorado; el costo grande fue el tiempo hasta ver al dragón (110 s), lo que `dragonRush` ataca. Revisar cuando haya `dragon_fight` de varias invasiones.
-- Rastrillaje (docs/rastrillaje.md, en el checkout principal): orden de celdas de `HuntExplorer` por probabilidad ÷ costo con baja bayesiana por celda recorrida sin dorados, y suavizado de camino con línea de vista. **Pendiente**, no entró antes de las 16:50 ART. Prioridad: previo blando de `v_dragon_zones` mezclado con uniforme (pocos datos), sin tocar ritmos.
+- Rastrillaje por probabilidad ÷ costo (baja bayesiana por celda sin dorados, suavizado con línea de vista): pasó al issue #52.
 - No verificado: que el layout del 0x15 de 10 bytes sea exactamente id@3/daño@5 (solo hay el test con bytes inventados); nada corrió contra el server.
 
 ## Rastrillaje por visión (sweep.ts, `bun run sweep-tests.ts`)

@@ -52,6 +52,7 @@ let vivos: Partial<Record<Nombre, (...a: any[]) => any>> = {};
 const fallos = new Map<Nombre, number>();
 let avisar: (m: string) => void = console.log;
 let mtime = -1;
+let timer: ReturnType<typeof setInterval> | undefined;
 
 async function recargar() {
   const m = existsSync(ARCHIVO_GANCHOS) ? statSync(ARCHIVO_GANCHOS).mtimeMs : 0;
@@ -79,7 +80,9 @@ async function recargar() {
 export function iniciarGanchos(aviso: (m: string) => void = console.log, cadaMs = 2000) {
   avisar = aviso;
   void recargar();
-  setInterval(() => { void recargar(); }, cadaMs).unref?.();
+  if (timer) return;
+  timer = setInterval(() => { void recargar(); }, cadaMs);
+  timer.unref?.();
 }
 
 /** Para pruebas: una pasada de recarga ahora. */
