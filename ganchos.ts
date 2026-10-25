@@ -85,14 +85,18 @@ export function iniciarGanchos(aviso: (m: string) => void = console.log, cadaMs 
 /** Para pruebas: una pasada de recarga ahora. */
 export const recargarAhora = recargar;
 
-/** El gancho `nombre` con la lógica del repo (`base`) de respaldo. */
-export function gancho<K extends Nombre>(nombre: K, base: (...a: any[]) => any): (...a: any[]) => any {
+/**
+ * El gancho `nombre` con la lógica del repo (`base`) de respaldo. `valida(resultado, ...args)`: lo que el gancho devuelve se usa más
+ * adelante sin red, así que un resultado con otra forma (una zona sin coordenadas, un dorado que no estaba en la lista) cuenta como fallo.
+ */
+export function gancho<K extends Nombre>(nombre: K, base: (...a: any[]) => any, valida: (r: any, ...a: any[]) => boolean = () => true): (...a: any[]) => any {
   return (...a) => {
     const f = vivos[nombre];
     if (!f || (fallos.get(nombre) ?? 0) >= MAX_FALLOS) return base(...a);
     try {
       const r = f(...a);
       if (r === undefined) return base(...a);
+      if (!valida(r, ...a)) throw new Error('resultado con forma inválida');
       fallos.set(nombre, 0);
       return r;
     } catch (e) {

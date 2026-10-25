@@ -62,9 +62,9 @@ function zonaBase({ zonas, yo, visitadas, rank, n }: ZonaArgs): Zone | null {
   }
   return nextZone(zs, yo, visitadas);
 }
-const elegirZona = gancho('elegirZona', zonaBase);
-const dejarMapa = gancho('dejarMapa', huntDryOut);
-const elegirDorado = gancho('elegirDorado', (a: DoradoArgs) => stickyGolden(a.yo, a.objetivo, a.monstruos, a.esDorado));
+const elegirZona = gancho('elegirZona', zonaBase, (r) => r === null || (Number.isFinite(r?.x) && Number.isFinite(r?.y) && Number.isFinite(r?.n)));
+const dejarMapa = gancho('dejarMapa', huntDryOut, (r) => r === null || typeof r === 'string');
+const elegirDorado = gancho('elegirDorado', (a: DoradoArgs) => stickyGolden(a.yo, a.objetivo, a.monstruos, a.esDorado), (r, a: DoradoArgs) => r === null || a.monstruos.some((m) => m === r));
 
 const freshDragonMap = (now: number) => (bot.dragonMap && now - bot.dragonMap.at < DRAGON_MAP_TTL_MS ? bot.dragonMap.map : null);
 

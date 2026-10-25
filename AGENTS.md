@@ -431,7 +431,7 @@ Ver también [HANDOFF.md](HANDOFF.md) (estado y aprendizajes de esa sesión).
 
 ## Datos y aprendizaje (ClickHouse)
 
-> **Dónde vive:** `MUBOT_DB_URL` (en `.env.db`, no se commitea) apunta a otro equipo de la red (`192.168.100.8:8123`), no a `127.0.0.1`. Si "no responde", probá esa URL antes de levantar nada en local (el 25/10 se creyó caído por consultar `127.0.0.1`). Para consultar: `curl -u "$MUBOT_DB_USER:$MUBOT_DB_PASSWORD" "$MUBOT_DB_URL/?database=mubot" --data-binary "SELECT ..."` con `.env.db` cargado.
+> **Dónde vive:** `MUBOT_DB_URL` (en `.env.db`, no se commitea) apunta a otro equipo de la red (la IP está en `.env.db`), no a `127.0.0.1`. Si "no responde", probá esa URL antes de levantar nada en local (el 25/10 se creyó caído por consultar `127.0.0.1`). Para consultar: `curl -u "$MUBOT_DB_USER:$MUBOT_DB_PASSWORD" "$MUBOT_DB_URL/?database=mubot" --data-binary "SELECT ..."` con `.env.db` cargado.
 
 
 - `bun run db:up` levanta ClickHouse en Docker (`db/docker-compose.yml`): solo en `127.0.0.1:8123`, datos
