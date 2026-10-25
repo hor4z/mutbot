@@ -342,9 +342,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const t = ctx.npcs.get(target)!;
       const tDist = chebyshev(world.x, world.y, t.x, t.y);
       ctx.phase = 'fight';
-      bot.doing = `peleando con ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
       const reachSkill = pickAttackSkill();
-      if (tDist <= (reachSkill ? castReach(reachSkill.number) : 1)) {
+      const inReach = tDist <= (reachSkill ? castReach(reachSkill.number) : 1);
+      // El cartel dice lo que hace de verdad: "peleando" solo al alcance; si no, está yendo hacia el monstruo.
+      bot.doing = `${inReach ? 'peleando con' : 'yendo a'} ${monsterName(t.type)} en ${mapName(world.map)} (${world.x},${world.y})`;
+      if (inReach) {
         if (attackTarget !== target) {
           attackTarget = target;
           attackSince = Date.now();
@@ -370,7 +372,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
           await sleep(humanPace(ATTACK_PACE_MS));
         } else {
-          await sleep(humanPace(SKILL_PACE_MS)); // sin maná para el skill: esperar en vez de pegar de lejos
+          // Sin maná para el skill y a más de 1 tile: se acerca a pegar a mano (antes esperaba parado a que volviera el maná y
+          // el cartel seguía diciendo "peleando": Capitan rendía la mitad).
+          bot.doing = `sin maná: acercándome a pegarle a ${monsterName(t.type)}`;
+          ctx.phase = 'walk';
+          await walkTowards(ctx, t.x, t.y);
         }
         continue;
       }
