@@ -7,8 +7,10 @@
 import { SERVER_KEY } from './config';
 import { D } from './directivas';
 import { monsterName, world } from './state';
+import type { Pos } from './util';
 import { lootPolicy, type StatValues } from './farming';
 import { choosePlace, isStrong, type Place } from './place';
+import { isSafeZone } from './terrain';
 import { WARPS, warp } from './warps';
 
 export type Strategy = {
@@ -64,14 +66,41 @@ export const SLOW_SPOTS = [
   { from: () => D.slowBullFromLevel, anchor: { x: 165, y: 55 }, radius: 25, name: 'Lorencia (Bull Fighters)' },
   { from: () => D.slowGiantsFromLevel, anchor: { x: 30, y: 35 }, radius: 30, name: 'Lorencia (Giants)' },
 ] as const;
-/** Lugar de prueba (directiva `slowProbarWarp`): el warp pedido y, como ancla, donde queda el personaje al llegar (radio de pelea chico). */
-let probe: { index: number; map: number; anchor: { x: number; y: number } } | null = null;
+/**
+ * Lugar de prueba (directiva `slowProbarWarp`): el warp pedido y, como ancla, donde queda el personaje al llegar. Si ahí no hay monstruos
+ * (el warp deja en el pueblo), sale a buscarlos: cada 9 s prueba un punto más lejos, en 8 direcciones y cada vez más afuera, y apenas ve
+ * monstruos fuera de zona segura fija el ancla en medio de ellos (radio de pelea 25).
+ */
+const PROBE_LEG_MS = 9_000;
+const PROBE_STEP = 28;
+const PROBE_DIRS: [number, number][] = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, 1], [-1, -1], [1, -1]];
+type Probe = { index: number; home: Pos; anchor: Pos; found: boolean; leg: number; legSince: number };
+let probe: Probe | null = null;
+const clamp = (n: number) => Math.max(2, Math.min(253, Math.round(n)));
 function probePlace(index: number): Place {
   const w = warp(index);
-  // Aterrizó en el mapa del warp: ese punto es el ancla (se fija una vez por prueba).
-  if (world.map === w.map && (!probe || probe.index !== index)) probe = { index, map: w.map, anchor: { x: world.x, y: world.y } };
-  if (world.map !== w.map && probe?.index !== index) probe = null;
-  return { kind: 'tier', warp: w, anchor: probe?.anchor ?? w.arrival ?? { x: world.x, y: world.y }, radius: 25, name: `prueba en ${w.name}` };
+  if (world.map !== w.map) {
+    probe = null; // todavía no llegó (travelTo hace el warp)
+    return { kind: 'tier', warp: w, anchor: w.arrival ?? { x: world.x, y: world.y }, radius: 25, name: `prueba en ${w.name}` };
+  }
+  if (!probe || probe.index !== index) {
+    const home = { x: world.x, y: world.y };
+    probe = { index, home, anchor: home, found: false, leg: 0, legSince: Date.now() };
+  }
+  if (!probe.found) {
+    const visibles = [...world.npcs.values()].filter((n) => !isSafeZone(world.map, n.x, n.y));
+    if (visibles.length) {
+      probe.found = true;
+      probe.anchor = { x: clamp(visibles.reduce((t, n) => t + n.x, 0) / visibles.length), y: clamp(visibles.reduce((t, n) => t + n.y, 0) / visibles.length) };
+    } else if (Date.now() - probe.legSince > PROBE_LEG_MS) {
+      const [dx, dy] = PROBE_DIRS[probe.leg % PROBE_DIRS.length];
+      const ring = 1 + Math.floor(probe.leg / PROBE_DIRS.length);
+      probe.anchor = { x: clamp(probe.home.x + dx * PROBE_STEP * ring), y: clamp(probe.home.y + dy * PROBE_STEP * ring) };
+      probe.leg++;
+      probe.legSince = Date.now();
+    }
+  }
+  return { kind: 'tier', warp: w, anchor: probe.anchor, radius: 25, name: `prueba en ${w.name}${probe.found ? '' : ' (buscando monstruos)'}` };
 }
 
 export function slowPlace(level: number): Place {
