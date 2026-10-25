@@ -135,8 +135,6 @@ export const bot = {
   // Último spot en el que estuvo (tras morir se vuelve a esa entrada).
   lastSpotIndex: null as number | null,
   lastWarpAt: 0,
-  /** última muerte de un monstruo causada por este bot (place.ts: distingue "mata pero no gana exp" de "no hay monstruos") */
-  lastKillAt: 0,
   // Último MapChanged / entrada al mundo (el hambre no mira el primer minuto).
   lastArrivalAt: Date.now(),
   // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.

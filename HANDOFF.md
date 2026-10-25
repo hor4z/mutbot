@@ -3,6 +3,8 @@
 Resumen para quien retome el proyecto (persona o agente). La referencia técnica sigue siendo [AGENTS.md](AGENTS.md); acá va el **estado,
 lo aprendido y lo pendiente**. Todo lo de abajo se probó jugando en vivo salvo donde dice "sin probar".
 
+> **Actualización 25/10:** el usuario pidió volver el algoritmo al de la tarde del 24 (PR #48). Se revirtieron `place.ts`, `farm-loop.ts`, `farming.ts`, `loot.ts`, `progress.ts`, `zones.ts`, `state.ts`, `help.ts` y `bus.ts` a `ff38ef1`: **no hay carreo, ni `follow`, ni zen obligatorio**; lo de abajo sobre eso describe `950e59e`. Lo demás (worker, proxy, panel, altas, creación de personaje) sigue.
+
 ## Estado al cortar
 
 - **Estación:** `bun run estacion` (http://127.0.0.1:8787/panel). Si no responde, reiniciarla: los bots quedan vivos y los readopta.
