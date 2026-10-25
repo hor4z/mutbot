@@ -151,8 +151,12 @@ export const JEWELS = new Set([13, 14, 16, 22, 31]);
  * en la bolsa (`gear`). Sin juez (el default) el comportamiento no cambia.
  */
 export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
+/** Joyas siempre (el Slow las valora; el Fast no, ver arriba): `strategy.ts` lo fija según el servidor. */
+export const lootPolicy = { jewels: false };
+export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS.has(d.num)) || (d.group === 12 && d.num === 15);
 export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?: DropJudge): boolean {
   if (d.isMoney) return fresh;
+  if (lootPolicy.jewels && isJewel(d)) return true;
   if (judge && gear && d.group <= 11) {
     const j = judge(d);
     if (j !== undefined) return j;
@@ -177,7 +181,7 @@ export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, 
   for (const d of drops) {
     if (!isValuableDrop(d, fresh, gear, judge)) continue;
     const dd = cheb(me, d);
-    const score = dd - (d.group === 14 && d.num === 11 ? LOOT_BOX_FIRST : 0);
+    const score = dd - ((d.group === 14 && d.num === 11) || (lootPolicy.jewels && isJewel(d)) ? LOOT_BOX_FIRST : 0);
     if (dd <= radius && score < bd) {
       bd = score;
       best = d;
