@@ -24,7 +24,8 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { choosePlace, farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
+import { farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
+import { strategy } from './strategy';
 import { doReset, investStatPointsInBackground } from './progress';
 import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
 import { warpAndWait } from './warps';
@@ -242,7 +243,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     // --- 2. Compañeros y cacería de dorados ------------------------------------------------------------------------
     partyUp();
     const strong = isStrong();
-    for (const r of drainGold()) onGoldenRequest(r, strong === false);
+    for (const r of drainGold()) if (strategy.hunts) onGoldenRequest(r, strong === false);
     for (const n of ctx.npcs.values()) {
       if (!DRAGON_TYPES.has(n.type)) continue;
       const near = [...world.players.values()].filter((q) => q.name != null && chebyshev(q.x, q.y, n.x, n.y) <= 15);
@@ -250,13 +251,14 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       fights.seen(n.id, n.type, n.x, n.y, nowT, mates, near.length - (mates - 1), bot.dragonMap && Math.abs(nowT - bot.dragonMap.at) < 20 * 60_000 ? bot.dragonMap.at : null);
     }
     for (const e of fights.expire(nowT)) endFight(e);
+    if (bot.hunting && !strategy.hunts) stopHunt(`en el ${strategy.server} no se caza`);
     if (bot.hunting && strong === false && followsLeader()) stopHunt('sigo a mi líder');
     // El débil con un líder que vale la pena no sale a cazar solo: lo sigue (place.ts) y caza como su sombra.
-    if (strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
+    if (strategy.hunts && strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
 
     // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
     const goldHold = !!bot.hunting || golden.holding(nowT);
-    if (!goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
+    if (strategy.resets && !goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
       if (await doReset()) {
         resets++;
         ctx.target = null;
@@ -264,10 +266,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       } else nextResetTry = Date.now() + 2 * 60_000;
       continue;
     }
-    investStatPointsInBackground((n) => { statPointsSpent += n; });
+    if (strategy.spendsPoints) investStatPointsInBackground((n) => { statPointsSpent += n; });
 
     // --- 4. Ir al lugar --------------------------------------------------------------------------------------------
-    const place = bot.hunting ? null : choosePlace();
+    const place = bot.hunting ? null : strategy.choosePlace();
     if (!bot.hunting && !place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
     if (place) {
       if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
