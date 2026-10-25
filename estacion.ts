@@ -21,7 +21,7 @@ import { statPower } from './util';
 import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, SERVERS, type ServerKey, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, SERVERS, isServerKey, type ServerKey, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   parseEnvFile, CHAR_CLASSES, accountProblem, isCharClass,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
@@ -295,12 +295,8 @@ function dbEnv(): Record<string, string> {
 // ~/.mubot/conn.json. La URL del proxy sale de MUBOT_ALTA_URL (.env.alta) y del token en ~/.mubot/alta/proxy-token.
 const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
 const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
-// Servidor del juego por personaje (Fast por defecto). Las cuentas valen en los dos servidores pero los personajes son de cada uno:
-// una tarjeta es un personaje de un servidor. ~/.mubot/server.json: { "<clave>": "slow" }.
-const SERVER_FILE = join(homedir(), '.mubot', 'server.json');
-const serverOf = new Map<string, ServerKey>((() => { try { return Object.entries(JSON.parse(readFileSync(SERVER_FILE, 'utf8')) as Record<string, ServerKey>).filter(([, v]) => v === 'slow'); } catch { return []; } })());
-const saveServer = () => { try { writeFileSync(SERVER_FILE, JSON.stringify(Object.fromEntries(serverOf))); } catch { /* sin disco: no es grave */ } };
-const chosenServer = (key: string): ServerKey => serverOf.get(key) ?? 'fast';
+// Servidor del juego por personaje: columna `characters.server` (las cuentas valen en Fast y Slow, los personajes son de uno).
+const chosenServer = (s: Slot): ServerKey => s.cfg.server;
 const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
 function proxyUrl(): string | null {
   if (!altaUrl) return null;
@@ -313,8 +309,7 @@ function proxyUrl(): string | null {
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   const wantProxy = viaProxy.has(s.cfg.key);
-  const srv = chosenServer(s.cfg.key);
-  if (wantProxy && srv === 'slow') return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero el worker apunta al Fast: pasalo a "Directa" o al servidor Fast.` };
+  const srv = chosenServer(s);
   const base: GameServer = srv === 'slow' ? SERVERS.slow : SERVER;
   const pUrl = wantProxy ? proxyUrl() : null;
   if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
@@ -442,7 +437,7 @@ function view() {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
       conn: viaProxy.has(s.cfg.key) ? 'proxy' : 'direct', connUsed: s.pid != null ? s.conn : null, proxyReady: proxyUrl() != null,
-      server: chosenServer(s.cfg.key), serverUsed: s.pid != null ? s.srv ?? null : null,
+      server: chosenServer(s), serverUsed: s.pid != null ? s.srv ?? null : null,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
@@ -729,10 +724,10 @@ Bun.serve({
         return json({ ok: true, msg: `${s.cfg.char}: conexión ${r.mode === 'proxy' ? 'por proxy' : 'directa'}${live ? ' (se aplica al reconectar)' : ''}` });
       }
       if (r.action === 'server') {
-        if (r.server === 'slow') serverOf.set(s.cfg.key, 'slow'); else serverOf.delete(s.cfg.key);
-        saveServer();
+        if (!db.setServer(s.cfg.char, r.server)) return json({ ok: false, msg: 'no encuentro el personaje en la base' }, 409);
+        refreshSlots();
         const live = s.pid != null && (s.srv ?? 'fast') !== r.server;
-        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label}${viaProxy.has(s.cfg.key) && r.server === 'slow' ? ' (ojo: está en Proxy y el worker solo llega al Fast)' : ''}${live ? ' (se aplica al reconectar)' : ''}` });
+        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label}${live ? ' (se aplica al reconectar)' : ''}` });
       }
       if (r.action === 'follow') {
         if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
@@ -775,7 +770,7 @@ Bun.serve({
       if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
       const body = await req.text();
       if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown };
+      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown; server?: unknown };
       try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
       if (typeof raw.user !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
       if (url.pathname === '/api/cuenta') {
@@ -793,13 +788,12 @@ Bun.serve({
       }
       if (typeof raw.char !== 'string' || !isCharClass(raw.cls)) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
       const replace = typeof raw.replace === 'string' ? raw.replace : undefined;
-      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace);
+      const why = db.addCharToAccount(raw.user, raw.char, raw.cls, replace, isServerKey(raw.server) ? raw.server : 'fast');
       if (why) return json({ ok: false, msg: why }, 409);
       // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
       if (replace && replace !== raw.char) {
         const ok = replace.toLowerCase(), nk = raw.char.toLowerCase();
         if (viaProxy.delete(ok)) { viaProxy.add(nk); saveConn(); }
-        if (serverOf.delete(ok)) { serverOf.set(nk, 'slow'); saveServer(); }
         if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
       }
       refreshSlots();

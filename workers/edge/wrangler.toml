@@ -12,6 +12,7 @@ id = "64b375a970e847a2b906a63fe5ecb4fe"
 
 [vars]
 UPSTREAM_HOST = "mu.mormon.garden"
-ALLOWED_HOSTS = "mu.mormon.garden"
+ALLOWED_HOSTS = "mu.mormon.garden,clasico"
+SLOW_UPSTREAM_HOST = "slow.mu.garden"
 
 # Secretos (no van acá): PUBLIC_KEY, ALTA_TOKEN, STATION_TOKEN, PROXY_TOKEN. Ver workers/alta/README.md.

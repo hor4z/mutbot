@@ -109,7 +109,7 @@ async function postAccount(path: string, body: object): Promise<Result> {
 /** Paso 1: crear la cuenta en el juego (por el worker); queda guardada sin personaje. */
 export const postCuenta = (a: { user: string; pass: string }) => postAccount("/api/cuenta", a);
 /** Paso 2: el personaje y su clase en una cuenta sin personaje; el bot lo crea al conectarlo. */
-export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string }) => postAccount("/api/personaje", a);
+export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string; server?: "fast" | "slow" }) => postAccount("/api/personaje", a);
 /** Cuenta y personaje que ya existen en el juego: se cifran y pasan por el worker. */
 export const postAlta = (a: { user: string; char: string; pass: string; cls?: string }) => postAccount("/api/alta", a);
 
