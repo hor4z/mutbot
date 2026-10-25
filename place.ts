@@ -17,7 +17,7 @@ import { directedLeader, myShadows, setWaiting } from './bus';
 import { isSafeZone, walkableFor } from './terrain';
 import { trackEvent } from './telemetry';
 import { D } from './directivas';
-import { dist, log, type Pos } from './util';
+import { dist, log, sleep, type Pos } from './util';
 import { WARPS, warp } from './warps';
 
 export type Place = { kind: 'corner' | 'shadow' | 'fetch' | 'tier'; warp: Warp; anchor: Pos; radius: number; name: string };
@@ -159,9 +159,34 @@ export function choosePlace(): Place | null {
   return { kind: 'tier', warp: warp(t.warp), anchor: t.anchor, radius: t.radius, name: warp(t.warp).name };
 }
 
-/** Un paso hacia el lugar: warp si está en otro mapa. true = viajó o esperó (el tick ya está usado). */
-export async function travelTo(place: Place): Promise<boolean> {
-  if (world.map === place.warp.map) return false;
+/** Mismo mapa: el warp solo vale si el lugar queda a más de tantos tiles (si no, es más rápido caminar). */
+const SAME_MAP_WARP_MIN = 70;
+/** Dónde dejó cada warp en esta sesión (índice → posición), aprendido al usarlo: dice si un warp del mismo mapa acorta el camino. */
+const landings = new Map<number, { x: number; y: number }>();
+const sameMapTried = new Set<number>();
+let sameMapBlockedUntil = 0;
+
+/**
+ * Un paso hacia el lugar: warp si está en otro mapa. true = viajó o esperó (el tick ya está usado).
+ * `sameMapWarp`: también usa el warp dentro del mismo mapa cuando el lugar queda lejos y el warp deja más cerca (la primera vez que no se
+ * sabe dónde deja, lo prueba una vez y lo anota). Cuesta Zen y respeta la espera entre warps: si no se puede, el bot sigue caminando.
+ */
+export async function travelTo(place: Place, opts: { sameMapWarp?: boolean } = {}): Promise<boolean> {
+  if (world.map === place.warp.map) {
+    if (!opts.sameMapWarp || place.warp.index < 0 || Date.now() < sameMapBlockedUntil || Date.now() - bot.lastWarpAt < WARP_COOLDOWN_MS) return false;
+    const far = dist({ x: world.x, y: world.y }, place.anchor);
+    if (far <= SAME_MAP_WARP_MIN + place.radius) return false;
+    const land = landings.get(place.warp.index) ?? place.warp.arrival;
+    if (land ? dist(land, place.anchor) + 40 >= far : sameMapTried.has(place.warp.index)) return false;
+    sameMapTried.add(place.warp.index);
+    bot.doing = `warp a ${place.warp.name} (el lugar queda a ${Math.round(far)} tiles)`;
+    log(`Warp en el mismo mapa a ${place.warp.name}: ${place.name} queda a ${Math.round(far)} tiles.`);
+    if (!(await warpAndWait(place.warp))) { sameMapBlockedUntil = Date.now() + 5 * 60_000; return true; }
+    await sleep(300);
+    landings.set(place.warp.index, { x: world.x, y: world.y });
+    log(`El warp a ${place.warp.name} deja en (${world.x},${world.y}).`);
+    return true;
+  }
   if (Date.now() - bot.lastWarpAt < WARP_COOLDOWN_MS) {
     bot.doing = `esperando para ir a ${place.name}`;
     return true;

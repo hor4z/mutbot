@@ -49,7 +49,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
   if (ran) return false;
   st ??= { done: new Set(), steps: new Map(), patrol: 0, patrolSteps: 0, visited: [] };
   ctx.target = null;
-  if (await travelTo(TOWN)) return true;
+  if (await travelTo(TOWN, { sameMapWarp: true })) return true;
 
   const npcs = [...world.townNpcs.values()].filter((n) => isTalkable(n.type) && !st!.done.has(n.id));
   const me = { x: world.x, y: world.y };
