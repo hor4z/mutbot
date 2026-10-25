@@ -19,10 +19,8 @@ export type Character = {
   /** a quién sigue como sombra (el orquestador de la estación lo decide) y si el usuario lo apagó */
   shadowOf: string | null;
   shadowOff: boolean;
-  /** conexión elegida (se aplica al próximo conectar), la del proceso que corre ahora y si el proxy está configurado */
-  /** servidor del juego elegido (se aplica al próximo conectar) y el del proceso que corre ahora */
+  /** servidor del personaje: se decide al crearlo y no cambia */
   server: "fast" | "slow";
-  serverUsed: "fast" | "slow" | null;
   game: null | {
     mode: string;
     doing: string;
@@ -107,8 +105,6 @@ async function postAccount(path: string, body: object): Promise<Result> {
 export const postCuenta = (a: { user: string; pass: string; existing?: boolean }) => postAccount("/api/cuenta", a);
 /** Paso 2: el personaje y su clase en una cuenta sin personaje; el bot lo crea al conectarlo. */
 export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string; server?: "fast" | "slow"; existing?: boolean }) => postAccount("/api/personaje", a);
-/** Cuenta y personaje que ya existen en el juego: se cifran y pasan por el worker. */
-export const postAlta = (a: { user: string; char: string; pass: string; cls?: string }) => postAccount("/api/alta", a);
 
 export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
   shadow: (c: Character, on: boolean) => Promise<Result>;

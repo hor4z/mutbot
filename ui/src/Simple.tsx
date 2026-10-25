@@ -4,8 +4,8 @@
  * muestran. Cada mapa es el radar del propio bot (`/panel?mapa` en su puerto): no repite lógica.
  */
 import type { Alert } from "../../estacion-logic";
-import { useState, type FormEvent } from "react";
-import { isOnline, isPaused, postAlta, postCuenta, postPersonaje, useActions, useStationData, type Character, type Result } from "./station-data";
+import { useEffect, useState, type FormEvent } from "react";
+import { isOnline, isPaused, postCuenta, postPersonaje, useActions, useStationData, type Character, type Result } from "./station-data";
 import "./simple.css";
 
 // Personajes que no se muestran aunque la cuenta esté activa (el server ya no deja conectar 3 a la vez).
@@ -37,7 +37,17 @@ const CLASSES: [string, string][] = [["dk", "Dark Knight"], ["dw", "Dark Wizard"
  * Cuenta (compartida entre los dos servidores): se crea en el juego por el worker o, si ya existe, solo se guarda en la estación.
  * No lleva servidor ni personaje: los personajes se crean después, dentro de la pestaña de cada servidor.
  */
+/** Escape cierra el modal. */
+function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [onClose]);
+}
+
 function AccountModal({ onClose }: { onClose: () => void }) {
+  useEscape(onClose);
   const [f, setF] = useState({ user: "", pass: "", existing: false });
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
@@ -52,8 +62,8 @@ function AccountModal({ onClose }: { onClose: () => void }) {
     <div className="simple-modal" role="dialog" aria-modal="true" aria-label="Agregar cuenta" onClick={onClose}>
       <form className="simple-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={submit} autoComplete="off">
         <h2>Agregar cuenta</h2>
-        <small>La cuenta vale en los dos servidores. Después, en la pestaña Fast o Slow, le creás sus personajes.</small>
-        <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego (solo guardarla)</label>
+        <small>Vale en los dos servidores. Los personajes se crean después, en la pestaña de cada uno.</small>
+        <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego</label>
         <label>Usuario<input value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} required maxLength={10} pattern={f.existing ? "[A-Za-z0-9_]{1,10}" : "[A-Za-z0-9]{4,10}"} autoComplete="off" /></label>
         <label>Contraseña<input type="password" value={f.pass} onChange={(e) => setF({ ...f, pass: e.target.value })} required maxLength={f.existing ? 64 : 10} minLength={f.existing ? 1 : 4} autoComplete="new-password" /></label>
         {res && <div className={res.ok ? "simple-ok" : "simple-err"}>{res.msg}</div>}
@@ -71,6 +81,7 @@ function AccountModal({ onClose }: { onClose: () => void }) {
  * existe en el juego, solo el nombre. `preset`: la tarjeta que falló por "no tiene ese personaje" (cuenta y nombre ya puestos).
  */
 function CharacterModal({ server, accounts, preset, onClose }: { server: Srv; accounts: { user: string; n: number }[]; preset: { user: string; char: string } | null; onClose: () => void }) {
+  useEscape(onClose);
   const open = accounts; // sin tope de personajes por cuenta
   const [f, setF] = useState({ user: preset?.user ?? open[0]?.user ?? "", char: preset?.char ?? "", cls: "", existing: false });
   const [busy, setBusy] = useState(false);
@@ -86,7 +97,7 @@ function CharacterModal({ server, accounts, preset, onClose }: { server: Srv; ac
     <div className="simple-modal" role="dialog" aria-modal="true" aria-label={`Agregar personaje al ${SRV_NAME[server]}`} onClick={onClose}>
       <form className="simple-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={submit} autoComplete="off">
         <h2>Personaje en el {SRV_NAME[server]}</h2>
-        <small>{preset ? "El personaje todavía no existe en el juego. Podés cambiarle el nombre y elegir la clase: el bot lo crea la primera vez que lo conectás." : `Se crea en el ${SRV_NAME[server]} (la cuenta vale en los dos). El bot lo crea en el juego la primera vez que lo conectás.`}</small>
+        <small>{preset ? "No existe todavía en el juego: cambiale el nombre si querés y elegí la clase." : "El bot lo crea en el juego la primera vez que lo conectás."}</small>
         {preset ? <label>Cuenta<input value={preset.user} readOnly /></label> : open.length ? (
           <label>Cuenta
             <select value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })}>
@@ -95,14 +106,13 @@ function CharacterModal({ server, accounts, preset, onClose }: { server: Srv; ac
           </label>
         ) : <div className="simple-err">No hay cuentas con lugar: agregá una desde "+ Cuenta" arriba.</div>}
         <label>Personaje<input value={f.char} onChange={(e) => setF({ ...f, char: e.target.value })} required maxLength={10} pattern="[A-Za-z0-9_]{1,10}" autoComplete="off" /></label>
-        {!preset && <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego (no crear)</label>}
+        {!preset && <label className="simple-check"><input type="checkbox" checked={f.existing} onChange={(e) => setF({ ...f, existing: e.target.checked })} /> Ya existe en el juego</label>}
         {!f.existing && (
           <label>Clase
             <select value={f.cls} onChange={(e) => setF({ ...f, cls: e.target.value })} required>
               <option value="" disabled>Elegí una clase</option>
               {CLASSES.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
             </select>
-            {f.cls === "mg" && <small>El Magic Gladiator pide un personaje de nivel alto en la misma cuenta: en una cuenta nueva el servidor puede rechazarlo.</small>}
           </label>
         )}
         {res && <div className={res.ok ? "simple-ok" : "simple-err"}>{res.msg}</div>}
@@ -186,7 +196,7 @@ function Shell() {
               {c.game && inGame(c) && (
                 <>
                   <div className="simple-hp" title={`Vida ${c.game.hp[0]} / ${c.game.hp[1]}`}><i style={{ width: `${c.game.hp[1] > 0 ? Math.max(0, Math.min(100, (100 * c.game.hp[0]) / c.game.hp[1])) : 0}%` }} /></div>
-                  <small>{c.game.resets != null ? `${c.game.resets} resets · ` : ""}{c.game.session ? `${c.game.session.kills} kills · ${c.game.session.deaths} muertes` : ""}</small>
+                  <small>{srv === "fast" && c.game.resets != null ? `${c.game.resets} resets · ` : ""}{c.game.session ? `${c.game.session.kills} kills · ${c.game.session.deaths} muertes` : ""}</small>
                   <small className="simple-doing">{c.game.doing}</small>
                 </>
               )}
@@ -224,7 +234,6 @@ function Shell() {
       <main className={`simple-maps n${Math.min(online.length, 4)}`}>
         {online.map((c) => (
           <section key={c.key} className="simple-map">
-            <header>{c.char}</header>
             <iframe src={`http://127.0.0.1:${c.port}/panel?mapa`} title={`Mapa de ${c.char}`} />
           </section>
         ))}
