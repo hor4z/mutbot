@@ -107,5 +107,5 @@ export const RESET_LEVEL = parseInt(args.get('--reset-level') ?? '400');
 // Fire Ball (4), Lightning (3), Meteorite (2), Inferno (14 — mismo número que un DK, se usa el
 // que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
 // 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
-const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2];
+const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2, 24];
 export const ATTACK_SKILL_POOL = DEFAULT_ATTACK_SKILLS;

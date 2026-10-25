@@ -1,6 +1,6 @@
 /**
  * Loot: los drops en scope (ItemsDropped / ItemDropRemoved) y el paso de ir a levantar uno valioso
- * (cajas, joyas, excelentes, guantes 10/1) y el zen cercano. El equipo común no se levanta.
+ * (cajas, joyas, excelentes, guantes 10/1). El zen y el equipo común no se levantan.
  */
 import { MoneyDropped075Packet } from './packets';
 import { WALK_PACE_MS } from './config';
@@ -11,7 +11,7 @@ import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
-import { isMate, world } from './state';
+import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
@@ -96,7 +96,7 @@ export function watchDrops(): () => void {
 }
 
 // Loot valioso (farming.ts, isValuableDrop): cajas, joyas, excelentes y los
-// guantes 10/1, y el zen cercano (ZEN_RADIUS). El equipo común NO se levanta (cada viaje es tiempo
+// guantes 10/1. El zen y el equipo común NO se levantan (cada viaje es tiempo
 // sin pelear). Se camina hasta el drop (a <= 12 tiles) y se levanta a <= 1;
 // mientras tanto no se pelea, como el agente web. Un drop al que no se llega
 // en LOOT_TIMEOUT_MS se olvida.
@@ -157,9 +157,7 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   const radius = fresh && fightNear ? 1 : LOOT_RADIUS;
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
-  // El zen que cae al lado de un jugador que no es compañero es suyo (Hume se pasaba el tiempo juntando el zen de dos jugadores): no se levanta.
-  const nearStranger = (dr: { x: number; y: number }) => [...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2 && !(p.name && isMate(p.name)));
-  const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine.filter((dr) => !dr.isMoney || !nearStranger(dr));
+  const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
   const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
   if (!d) return false;
   if (!lootState.looting) {

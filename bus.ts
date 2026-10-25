@@ -7,8 +7,8 @@
 import { bot, world } from './state';
 import { statPower } from './util';
 
-export type TeamMember = { char: string; level: number; resets?: number; /** suma de stats (util.statPower); 0 si no la mandó */ power: number; map: number; x: number; y: number; mode: string; at: number; /** espera en la entrada de una Arena a que su líder lo recoja */ waiting: boolean; /** carreo: 0 no lo necesita; 1 necesita que su líder baje a su mapa (todavía no puede pagar un warp); 2 puede hacer warp (que el líder vaya al spot de su nivel) */ carry: 0 | 1 | 2 };
-export type GoldNotice = { from: string; map: number; x: number; y: number; note: string; at: number };
+export type TeamMember = { char: string; level: number; resets?: number; /** suma de stats (util.statPower); 0 si no la mandó */ power: number; map: number; x: number; y: number; mode: string; at: number; /** espera en la entrada de una Arena a que su líder lo recoja */ waiting: boolean };
+export type GoldNotice = { from: string; map: number; x: number; y: number; note: string; at: number; dragon: boolean };
 
 /** Posición vista hace más que esto = el compañero ya no está. */
 const FRESH_MS = 3000;
@@ -16,15 +16,10 @@ const STATE_EVERY_MS = 250;
 let waitingForPickup = false;
 /** Avisar a los compañeros que estoy esperando en la entrada a que mi líder me recoja (place.ts lo marca cada tick). */
 export const setWaiting = (on: boolean) => { waitingForPickup = on; };
-let needsCarry: 0 | 1 | 2 = 0;
-/** Avisar al líder que soy de nivel bajo y necesito que baje (1) o que vaya al spot de mi nivel porque ya puedo hacer warp (2). place.ts lo marca cada tick. */
-export const setNeedsCarry = (v: 0 | 1 | 2) => { needsCarry = v; };
 
 const members = new Map<string, TeamMember>();
 // Orden de la estación (orquestador): a quién seguir. Vale mientras llegue; si deja de llegar, el bot vuelve a decidir solo.
-let directive: { leader: string; shadows: string[]; at: number; follow: FollowHuman | null } | null = null;
-/** Un jugador humano (de los propios, ej. el usuario jugando a mano) al que seguir: se lo ve por el scope, no por el bus. map/x/y: pista de dónde está. */
-export type FollowHuman = { name: string; map?: number; x?: number; y?: number };
+let directive: { leader: string; shadows: string[]; at: number } | null = null;
 const DIRECTIVE_FRESH_MS = 3000;
 const STATION_PORT = Number(process.env.MUBOT_BUS_STATION) || 9090;
 let notices: GoldNotice[] = [];
@@ -42,16 +37,14 @@ function onPacket(buf: Uint8Array, fromPort: number) {
   if (m.t === 'o' && fromPort === STATION_PORT) {
     // l = a quién sigo (o null); s = quiénes me siguen a mí.
     const shadows = Array.isArray(m.s) ? m.s.filter(name) : [];
-    const f = m.f as Record<string, unknown> | undefined;
-    const follow: FollowHuman | null = f && name(f.n) ? { name: f.n, map: num(f.m, 0, 255) ? f.m : undefined, x: num(f.x, 0, 255) ? f.x : undefined, y: num(f.y, 0, 255) ? f.y : undefined } : null;
-    directive = { leader: typeof m.l === 'string' && name(m.l) ? m.l : '', shadows, at: Date.now(), follow };
+    directive = { leader: typeof m.l === 'string' && name(m.l) ? m.l : '', shadows, at: Date.now() };
     return;
   }
   if (!name(m.c) || m.c.toLowerCase() === bot.charName.toLowerCase()) return;
   if (m.t === 's' && num(m.l, 0, 1000) && num(m.m, 0, 255) && num(m.x, 0, 255) && num(m.y, 0, 255)) {
-    members.set(m.c.toLowerCase(), { char: m.c, level: m.l, resets: num(m.r, 0, 100_000) ? m.r : undefined, power: num(m.p, 0, 10_000_000) ? m.p : 0, map: m.m, x: m.x, y: m.y, mode: typeof m.d === 'string' ? m.d.slice(0, 10) : '', at: Date.now(), waiting: m.w === 1, carry: m.k === 2 ? 2 : m.k === 1 ? 1 : 0 });
+    members.set(m.c.toLowerCase(), { char: m.c, level: m.l, resets: num(m.r, 0, 100_000) ? m.r : undefined, power: num(m.p, 0, 10_000_000) ? m.p : 0, map: m.m, x: m.x, y: m.y, mode: typeof m.d === 'string' ? m.d.slice(0, 10) : '', at: Date.now(), waiting: m.w === 1 });
   } else if (m.t === 'g' && num(m.m, 0, 255) && num(m.x, 0, 255) && num(m.y, 0, 255)) {
-    notices.push({ from: m.c, map: m.m, x: m.x, y: m.y, note: typeof m.n === 'string' ? m.n.slice(0, 80) : '', at: Date.now() });
+    notices.push({ from: m.c, map: m.m, x: m.x, y: m.y, note: typeof m.n === 'string' ? m.n.slice(0, 80) : '', at: Date.now(), dragon: m.k === 1 });
     if (notices.length > 50) notices.shift();
   }
 }
@@ -74,7 +67,7 @@ export async function startBus() {
   }
   setInterval(() => {
     if (!bot.inGameAt || bot.kicked) return;
-    broadcast({ t: 's', c: bot.charName, l: world.level, r: world.resets ?? 0, p: statPower(world.stats), m: world.map, x: world.x, y: world.y, d: bot.paused ? 'paused' : bot.hunting ? 'hunt' : 'farm', w: waitingForPickup ? 1 : 0, k: needsCarry });
+    broadcast({ t: 's', c: bot.charName, l: world.level, r: world.resets ?? 0, p: statPower(world.stats), m: world.map, x: world.x, y: world.y, d: bot.paused ? 'paused' : bot.hunting ? 'hunt' : 'farm', w: waitingForPickup ? 1 : 0 });
   }, STATE_EVERY_MS);
 }
 
@@ -85,11 +78,11 @@ export const teammates = (): TeamMember[] => {
 };
 
 /** Avisar un dorado a los compañeros, al instante; como mucho uno por dorado (misma nota) cada `everyMs`. true si salió. */
-export function announceGold(map: number, x: number, y: number, note: string, everyMs = 15_000): boolean {
+export function announceGold(map: number, x: number, y: number, note: string, everyMs = 15_000, dragon = false): boolean {
   const now = Date.now();
   if (now - (announcedAt.get(note) ?? 0) < everyMs) return false;
   announcedAt.set(note, now);
-  broadcast({ t: 'g', c: bot.charName, m: map, x, y, n: note });
+  broadcast({ t: 'g', c: bot.charName, m: map, x, y, n: note, k: dragon ? 1 : 0 });
   return true;
 }
 
@@ -104,12 +97,6 @@ export function drainGold(): GoldNotice[] {
 export function directedLeader(): TeamMember | null {
   if (!directive?.leader || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return null;
   return teammates().find((m) => m.char.toLowerCase() === directive!.leader.toLowerCase()) ?? null;
-}
-
-/** El humano que la estación me mandó a seguir (o null). */
-export function followHumanTarget(): FollowHuman | null {
-  if (!directive?.follow || Date.now() - directive.at > DIRECTIVE_FRESH_MS) return null;
-  return directive.follow;
 }
 
 /** Los compañeros que la estación mandó a seguirme (los que veo). */

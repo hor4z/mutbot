@@ -152,10 +152,17 @@ function scanProcs(): Running[] {
   return out;
 }
 
+/** ¿La línea de comandos del bot apunta al connect server de esta estación? (sin --cs-host se asume que sí) */
+function sameServer(cmdline: string[]): boolean {
+  const i = cmdline.indexOf('--cs-host');
+  return i < 0 || cmdline[i + 1] === SERVER.csHost;
+}
+
 function syncRunning() {
   const procs = scanProcs();
   for (const s of slots.values()) {
-    const p = procs.find((r) => processRunsAccount(r.cmdline, r.environ, s.cfg));
+    // Solo bots de este servidor: uno suelto contra otro (ej. el Slow, `--cs-host clasico`) no es el personaje de la estación ni se mantiene vivo.
+    const p = procs.find((r) => processRunsAccount(r.cmdline, r.environ, s.cfg) && sameServer(r.cmdline));
     if (p) {
       if (s.pid !== p.pid) {
         s.pid = p.pid;
@@ -471,6 +478,13 @@ function keepAlive() {
   for (const s of slots.values()) {
     const k = s.cfg.key;
     if (s.pid != null && s.status === 'on' && !wanted.has(k)) { wanted.add(k); saveWanted(); }
+    // Una cuenta juega con un solo personaje a la vez: el que no está conectado lo dice en su tarjeta y no se reintenta.
+    const sibling = s.pid == null ? [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase()) : undefined;
+    if (sibling) {
+      if (s.status === 'off') s.msg = `la cuenta la usa ${sibling.cfg.char}`;
+      if (wanted.delete(k)) saveWanted();
+      continue;
+    }
     if (!wanted.has(k)) continue;
     const r = retry.get(k) ?? { at: 0, n: 0, okSince: 0 };
     if (s.pid == null) {
@@ -528,6 +542,8 @@ try {
 // cooperar (cada uno en su spot o juntos en party) y no quedarse de acompañante. Cada segundo la estación
 // manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de llegar, vuelve a decidir solo.
 const SHADOW_POWER_RATIO = 0.5;
+/** MUBOT_SHADOWS=0 apaga las sombras: cada uno farmea lo suyo y se hace party si coinciden. */
+const SHADOWS_ENABLED = process.env.MUBOT_SHADOWS !== '0';
 const shadowOff = new Set<string>();
 /** A quién sigue cada personaje, si es un humano (en memoria: se vuelve a pedir tras reiniciar la estación). */
 const followTargets = new Map<string, { name: string; map?: number; x?: number; y?: number }>();
@@ -537,7 +553,7 @@ function orchestrate() {
   const power = (s: Slot) => statPower(s.state!.char.stats);
   const leader = on.length > 1 ? on.reduce((a, b) => (power(b) > power(a) ? b : a)) : null;
   shadowOf.clear();
-  for (const s of on) if (leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
+  for (const s of on) if (SHADOWS_ENABLED && leader != null && s !== leader && !shadowOff.has(s.cfg.key) && power(s) > 0 && power(s) < power(leader) * SHADOW_POWER_RATIO) shadowOf.set(s.cfg.key, leader.cfg.char);
   // Quien sigue a un humano no es sombra de ningún bot.
   for (const k of followTargets.keys()) shadowOf.delete(k);
   // Primero se reparten todos los roles; recién después se manda a cada uno su orden (a quién sigue y quiénes lo siguen).
@@ -559,6 +575,12 @@ void Bun.udpSocket({
     data(_s, buf) {
       try {
         const m = JSON.parse(Buffer.from(buf).toString('utf8')) as { t?: string; c?: string; n?: string; m?: number };
+        // Un bot lanzado antes de que existiera otro personaje no lo tiene en sus pares (se fijan al lanzar): la estación, que
+        // los oye a todos, reenvía el estado a los demás para que se vean igual (los duplicados no molestan: se pisan por nombre).
+        if (m.t === 's' && typeof m.c === 'string') {
+          for (const o of slots.values()) if (o.cfg.char.toLowerCase() !== m.c.toLowerCase()) busSock?.send(buf, busPort(o), '127.0.0.1');
+          return;
+        }
         if (m.t !== 'g' || typeof m.c !== 'string' || typeof m.n !== 'string') return;
         const key = `${m.c}:${m.n}`;
         const now = Date.now();
@@ -668,9 +690,10 @@ Bun.serve({
         const res = await retryNow(s);
         return json(res, res.ok ? 200 : 409);
       }
-      if (r.action === 'connect') { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
       if (r.action === 'disconnect') { wanted.delete(s.cfg.key); saveWanted(); }
       const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
+      // Solo se lo quiere vivo si el pedido prosperó (si la cuenta la usa otro personaje, no queda anotado para reconectarlo en bucle).
+      if (r.action === 'connect' && res.ok) { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
       return json(res, res.ok ? 200 : 409);
     }
     if (req.method === 'POST' && url.pathname === '/api/alta') {

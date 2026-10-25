@@ -121,6 +121,8 @@ function Shell() {
         {error && <div className="simple-err">{error}</div>}
         {chars.map((c) => {
           const st = stateOf(c);
+          // Una cuenta juega con un solo personaje a la vez: si otro de la misma cuenta está conectado, este no se puede conectar.
+          const sibling = isOnline(c) ? undefined : chars.find((o) => o !== c && o.user === c.user && isOnline(o));
           return (
             <div key={c.key} className="simple-row">
               <div className="simple-head">
@@ -141,6 +143,7 @@ function Shell() {
                   <option value="proxy" disabled={!c.proxyReady}>Proxy{c.proxyReady ? "" : " (sin configurar)"}</option>
                 </select>
               </label>
+              {sibling && <small className="simple-wait">La cuenta la usa {sibling.char}: desconectala para jugar con {c.char}.</small>}
               {c.status === "failed" && <small className="simple-err">{c.msg}</small>}
               {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
                 <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setAltaOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
@@ -164,7 +167,7 @@ function Shell() {
                 {c.status === "starting" && c.game?.mode === "connecting" && (
                   <button className="pause" onClick={() => void actions.retry(c)} title="Corta el intento actual y vuelve a probar sin esperar">Reintentar ahora</button>
                 )}
-                <button className={isOnline(c) ? "stop" : "go"} disabled={st.tone === "wait" && c.status !== "starting"} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
+                <button className={isOnline(c) ? "stop" : "go"} disabled={(st.tone === "wait" && c.status !== "starting") || !!sibling} onClick={() => void (isOnline(c) ? actions.disconnect(c) : actions.connect(c))}>
                   {c.status === "starting" ? "Cancelar" : isOnline(c) ? "Desconectar" : "Conectar"}
                 </button>
               </div>

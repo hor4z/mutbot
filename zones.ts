@@ -91,32 +91,3 @@ export function nextZone(zones: readonly Zone[], me: { x: number; y: number }, v
   }
   return best;
 }
-
-// Zonas con monstruos a la vista (celdas de 16 tiles con al menos 8 fotos de algún personaje con 3 o más monstruos cerca; `n` = densidad
-// × raíz de la cantidad de fotos). El carreo lleva a la sombra a la mejor cercana: en la plaza de un pueblo no hay monstruos. Se aprenden
-// solas de `ticks`; sin datos del mapa, el líder se queda junto a la sombra.
-let lowCache: { at: number; byMap: Map<number, Zone[]> } = { at: 0, byMap: new Map() };
-let lowLoading = false;
-const LOW_ZONES_SQL = `SELECT map, intDiv(x, 16) * 16 + 8 AS zx, intDiv(y, 16) * 16 + 8 AS zy, round(avg(monsters_near) * sqrt(count()), 1) AS n
-FROM ticks WHERE monsters_near >= 3 AND ts > now() - INTERVAL 30 DAY
-GROUP BY map, zx, zy HAVING count() >= 8 FORMAT JSONEachRow`;
-
-/** Zonas con monstruos del mapa (se recargan cada 5 min). */
-export function lowLevelZones(map: number, now = Date.now()): Zone[] {
-  if (now - lowCache.at > REFRESH_MS && !lowLoading) {
-    lowLoading = true;
-    void queryDb<{ map: number; zx: number; zy: number; n: string }>(LOW_ZONES_SQL)
-      .then((rows) => {
-        const byMap = new Map<number, Zone[]>();
-        for (const r of rows) {
-          const list = byMap.get(+r.map) ?? [];
-          list.push({ x: +r.zx, y: +r.zy, n: +r.n });
-          byMap.set(+r.map, list);
-        }
-        if (rows.length || !lowCache.at) lowCache = { at: Date.now(), byMap };
-        else lowCache.at = Date.now();
-      })
-      .finally(() => { lowLoading = false; });
-  }
-  return lowCache.byMap.get(map) ?? [];
-}

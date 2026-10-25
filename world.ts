@@ -239,7 +239,7 @@ export function trackWorld() {
     }
     world.inventory.clear();
     for (const it of items) world.inventory.set(it.slot, it);
-    log(`Inventario: ${world.inventory.size} item(s).`);
+    log(`Inventario: ${world.inventory.size} item(s)${world.inventory.size <= 12 ? ' [' + [...world.inventory.values()].map((i) => `slot ${i.slot}: ${i.group}/${i.num}${i.level ? ' +' + i.level : ''}`).join(', ') + ']' : ''}.`);
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {

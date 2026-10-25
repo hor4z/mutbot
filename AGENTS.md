@@ -46,7 +46,7 @@ la sesión vieja del propio bot). Lo pasa la estación.
 La explicación completa (partes, flujo de un tick, cómo se coopera, cómo mejorar un bot) está en **`docs/arquitectura.md`**. Resumen:
 
 El bot es un loop corto (`farm-loop.ts`, ~500 líneas) sobre módulos de protocolo y de decisión pura. Cada bot es un proceso;
-la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cuenta; se hablan directo por UDP (`bus.ts`) y la estación los orquesta (sombra, recogida, mantenerlos vivos).
+la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cuenta; se hablan directo por UDP (`bus.ts`) y la estación los mantiene vivos (las sombras se apagan con `MUBOT_SHADOWS=0`).
 
 | Archivo | Qué es |
 |---|---|
@@ -54,7 +54,6 @@ la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cue
 | `farm-loop.ts` | El loop: ciego/trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda > reset > ruta > loot > objetivo > pelear. |
 | `help.ts` | Party: invita el más fuerte (por stats); si pasan 40 s sin party invita también el más débil (los roles se invierten con los resets). Reintenta rápido (15 s x4) y acepta resolviendo el nombre al responder. |
 | `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
-| `place.ts` (carreo) | Un personaje de nivel < 40 que sigue a un líder le pide por el bus (`k`) que baje a su mapa y pelee a su lado en party; sin nivel para ningún warp (< 10) farmea donde está. El líder usa un lugar `fetch` sobre la sombra. Ver `CARRY_UNTIL`. |
 | `alta-sync.ts` | Altas por el worker: la estación trae cada minuto las cuentas cifradas de `workers/edge`, las descifra y las suma a la base; también cifra/envía las del panel y crea la cuenta en el juego por el worker. |
 | `state.ts` / `config.ts` | Estado compartido (`world`, `bot`, `learned`) y flags/ritmos humanos. |
 | `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
@@ -417,19 +416,11 @@ El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un wor
 - **Límite del servidor:** deja 2 conexiones a la vez (`ServerIsFull` al tercero). El panel muestra el motivo en la tarjeta ("Servidor
   lleno: reintento en N s") y no dibuja el mapa de un personaje que todavía no entró al juego.
 
-## Personajes nuevos, carreo y seguir a un humano (2026-10-24)
+## Personajes nuevos, worker y Slow (2026-10-24)
+
+> **2026-10-25:** el algoritmo de lugar/loot/stats (`place.ts`, `farm-loop.ts`, `farming.ts`, `loot.ts`, `progress.ts`, `zones.ts`, `state.ts`, `help.ts`, `bus.ts`) volvió al de la tarde del 24 (PR #48): sin carreo, sin reparto de a 10, sin zen obligatorio ni orden `follow`. El carreo y lo demás de esa sesión (zen siempre, Roamer, seguir a un humano) hacían que Hume y Zamu perdieran exp (juntaban zen con ~2.100 M y bajaban a buscar a una sombra débil). La versión anterior está en el commit `950e59e`.
 
 Ver también [HANDOFF.md](HANDOFF.md) (estado y aprendizajes de esa sesión).
-- **Stats:** con stats chicos (suma < 1500) se reparte cada 10 puntos (`progress.ts`, `SMALL_STAT_BATCH`); con stats grandes, el lote de `--stat-batch`.
-- **Zen:** siempre se levanta el zen cercano (`ZEN_RADIUS` = 6 en `farming.ts`), salvo el que cae junto a un jugador que no es compañero (`loot.ts`).
-- **Warp sin zen:** `place.ts` (`canWarpNow`): tras un warp sin respuesta no se reintenta hasta tener ≥ 500 zen más; mientras tanto el personaje farmea donde está.
-  Si no hay monstruos en 25 s sin ganar exp ni matar, `Roamer` pasa a la mejor zona cercana no visitada (zonas de `ticks`, `zones.ts`). Los spots de más nivel que Lorencia
-  piden vida (`TIER_MIN_HP`).
-- **Carreo:** un personaje que sigue a un líder y no aguanta lo de Arena 2 (`canFarmMonster(…, 63)`) avisa por el bus (`k`: 1 = hace falta que el líder baje a su mapa,
-  2 = puede hacer warp). El líder va a un lugar `fetch`: su mapa mientras no pueda pagar el warp; con warp, el spot del menor de los dos niveles
-  (`CARRY_TIERS`: Lorencia, Devias 4, Atlans desde 70, Tarkan desde 140). `MUBOT_CARRY=0` lo apaga. El cronómetro de "3 min sin exp" no cuenta mientras viaja (`lastTravelAt`) ni en carreo.
-- **Seguir a un humano:** `POST /api/do {action:'follow', char, target, map?, x?, y?}` (`target: null` lo quita; vive en memoria de la estación). El bot lo busca por scope, va al mapa/posición
-  de la pista, le pide party (`help.ts`) y se pone a ~7 casillas (`bus.ts`: `followHumanTarget`).
 - **Creación de personaje:** `MUBOT_CREATE_CLASS` (lo pasa la estación desde `characters.class`): si el personaje no está en la cuenta, el bot lo crea al entrar (`world.ts`, F3/01).
 - **Worker:** el proxy WebSocket devuelve el `fetch` del servidor sin reenviar mensajes (si no, agota los 10 ms de CPU del plan gratuito a los ~20 s). `net/socket.ts` imprime la URL del WebSocket (con el token).
 - **Slow (Beta):** proxy `wss://slow.mu.garden/ws`, connect server `clasico:44405`, game `clasico:55901`. El login de una cuenta del Fast devolvió `NoChargeInfo` (9); hipótesis sin confirmar: solo VIP.

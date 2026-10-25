@@ -70,9 +70,13 @@ export function onGoldenRequest(r: GoldNotice, weak: boolean) {
     decide(`${r.from} vio ${r.note} en (${r.x},${r.y}): voy.`);
     return;
   }
-  if (bot.hunting || bot.resetting || bot.paused || weak || world.level < HUNT_MIN_LEVEL) return;
+  // Un dragón es el objetivo principal y muy duro: van todos (con resets son fuertes aunque el nivel sea bajo) y dejan lo que hacen,
+  // incluso otra cacería. Un dorado común solo lo atiende el libre, fuerte y de nivel.
+  if (bot.resetting || bot.paused) return;
+  if (!r.dragon && (bot.hunting || weak || world.level < HUNT_MIN_LEVEL)) return;
   const hm = HUNT_MAPS.find((h) => h.map === r.map);
   if (!hm || world.level < hm.reqLevel) return;
+  if (bot.hunting) stopHunt(`${r.from} vio ${r.note}`);
   bot.hunting = newHunt(hm, now, { auto: true, spots: new Map([[-r.at, spot]]) });
   decide(`${r.from} vio ${r.note}: voy a ayudarlo a cazar.`);
 }
@@ -170,7 +174,7 @@ export async function huntPick(ctx: LoopCtx, unreachable: { has(id: number): boo
       if (!isGolden(n)) continue;
       h.lastSeenAt = now;
       if (!spots.has(n.id)) {
-        announceGold(world.map, n.x, n.y, monsterName(n.type), SHARE_MS);
+        announceGold(world.map, n.x, n.y, monsterName(n.type), SHARE_MS, DRAGON_TYPES.has(n.type));
         trackEvent('golden_seen', monsterName(n.type), n.type, n.id, { gx: n.x, gy: n.y });
       }
       spots.set(n.id, { x: n.x, y: n.y, type: n.type, at: now });
