@@ -6,6 +6,7 @@
  * responde se reintenta cada vez más espaciado y, si se acumulan más de MAX_ROWS, se tiran las más viejas.
  * Sin MUBOT_DB_URL (lo pasa la estación desde .env.db) no hace nada.
  */
+import { SERVER_KEY } from './config';
 import { bot, world } from './state';
 import { log } from './util';
 
@@ -40,7 +41,8 @@ export const setPolicy = (p: string) => { policy = p; };
 
 /** Consulta de solo lectura a la base (FORMAT JSONEachRow); [] si no hay base o falla. */
 export async function queryDb<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  if (!telemetryOn()) return [];
+  // Las vistas son del Fast (db/views.sql): un bot de otro servidor no decide con conocimiento ajeno.
+  if (!telemetryOn() || SERVER_KEY !== 'fast') return [];
   try {
     const r = await fetch(`${DB_URL}/?database=mubot`, {
       method: 'POST', body: sql, signal: AbortSignal.timeout(5_000),
@@ -99,7 +101,7 @@ export const chTime = (ms: number) => new Date(ms).toISOString().replace('T', ' 
 /** Anotar una fila (con ts, personaje y sesión). */
 export function track(t: Table, row: Row, now = Date.now()) {
   if (!telemetryOn()) return;
-  buffer.push(t, { ts: chTime(now), char: bot.charName, ...(t === 'players_seen' ? {} : { session: SESSION, version: VERSION, policy }), ...row });
+  buffer.push(t, { ts: chTime(now), char: bot.charName, server: SERVER_KEY, ...(t === 'players_seen' ? {} : { session: SESSION, version: VERSION, policy }), ...row });
   timer ??= setInterval(() => void flush(), FLUSH_MS);
 }
 

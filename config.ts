@@ -36,6 +36,8 @@ if (unknownFlags.length) {
 export const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
 export const CS_HOST = args.get('--cs-host') ?? '127.0.0.1';
 export const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
+/** Servidor del juego (Fast o Slow): la estación lo manda en MUBOT_SERVER; sin eso se deduce del connect server (`clasico` = Slow). */
+export const SERVER_KEY: 'fast' | 'slow' = process.env.MUBOT_SERVER === 'slow' || (!process.env.MUBOT_SERVER && CS_HOST === 'clasico') ? 'slow' : 'fast';
 // Credenciales: mejor en .env (Bun lo carga solo, está en .gitignore) que en
 // la línea de comandos, donde quedan en el historial del shell.
 export const USERNAME = args.get('--user') ?? process.env.MUBOT_USER ?? 'test1';

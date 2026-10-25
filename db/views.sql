@@ -1,50 +1,51 @@
 -- Base de conocimiento: respuestas fijas sobre los datos (scripts/aprender.ts las lee).
+-- Todas las vistas son del servidor Fast (`server = 'fast'`): lo del Slow se guarda aparte y no las ensucia.
 -- exp/min = promedio de exp_min_1m de los ticks farmeando (5 s cada uno: 12 ticks = 1 min medido).
 
 -- Exp/min por personaje, mapa, lado de la esquina, party y hora del día.
 CREATE OR REPLACE VIEW v_exp_spot AS
 SELECT char, map, side, in_party, toHour(ts) AS hour,
        count() AS ticks, round(avg(exp_min_1m)) AS exp_min
-FROM ticks WHERE mode = 'farm'
+FROM ticks WHERE server = 'fast' AND mode = 'farm'
 GROUP BY char, map, side, in_party, hour;
 
 -- Dúo en la esquina de Arena 2 (map 83) con un compañero cerca: con party contra sin party.
 CREATE OR REPLACE VIEW v_party AS
 SELECT char, in_party, count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
        round(quantileExact(0.5)(exp_min_1m)) AS exp_min_p50
-FROM ticks WHERE mode = 'farm' AND map = 83 AND side != '' AND mates_near > 0
+FROM ticks WHERE server = 'fast' AND mode = 'farm' AND map = 83 AND side != '' AND mates_near > 0
 GROUP BY char, in_party;
 
 -- Skill confirmado por el server según haya o no rivales cerca (Decay 38 contra Evil Spirit 9).
 CREATE OR REPLACE VIEW v_skill AS
 SELECT char, skill, rivals_near > 0 AS contested, count() AS ticks, round(avg(exp_min_1m)) AS exp_min
-FROM ticks WHERE mode = 'farm' AND skill != 0
+FROM ticks WHERE server = 'fast' AND mode = 'farm' AND skill != 0
 GROUP BY char, skill, contested;
 
 -- Quién nos mata.
 CREATE OR REPLACE VIEW v_killers AS
 SELECT text AS killer, num2 = 1 AS player, count() AS deaths, groupUniqArray(char) AS victims,
        max(ts) AS last
-FROM events WHERE kind = 'death'
+FROM events WHERE server = 'fast' AND kind = 'death'
 GROUP BY killer, player;
 
 -- Rivales a la vista: dónde y a qué hora aparecen.
 CREATE OR REPLACE VIEW v_rivals AS
 SELECT name, map, toHour(ts) AS hour, count() AS seen, min(ts) AS first, max(ts) AS last
-FROM players_seen WHERE mate = 0 AND name != ''
+FROM players_seen WHERE server = 'fast' AND mate = 0 AND name != ''
 GROUP BY name, map, hour;
 
 -- Ciclos de reset (minutos) por personaje.
 CREATE OR REPLACE VIEW v_cycles AS
 SELECT char, count() AS cycles, round(avg(num1), 1) AS avg_min, min(num1) AS best_min, max(num1) AS worst_min,
        round(1440 / avg(num1)) AS resets_day
-FROM events WHERE kind = 'cycle' AND num1 > 0
+FROM events WHERE server = 'fast' AND kind = 'cycle' AND num1 > 0
 GROUP BY char;
 
 -- Dorados vistos por mapa y hora.
 CREATE OR REPLACE VIEW v_golden AS
 SELECT map, text AS monster, toHour(ts) AS hour, count() AS seen
-FROM events WHERE kind = 'golden_seen'
+FROM events WHERE server = 'fast' AND kind = 'golden_seen'
 GROUP BY map, monster, hour;
 
 -- Resultado de cada decisión: exp/min de los 5 min antes contra los 5 min después (desde el minuto 1,
@@ -60,7 +61,7 @@ SELECT e.char AS char, e.ts AS ts, e.kind AS kind, e.text AS text,
          maxIf(t.level, t.ts > e.ts) < minIf(t.level, t.ts < e.ts) AS crosses_reset
 FROM events AS e
 INNER JOIN ticks AS t ON t.session = e.session
-WHERE e.kind IN ('decide', 'travel')
+WHERE e.server = 'fast' AND e.kind IN ('decide', 'travel')
   AND t.ts >= e.ts - INTERVAL 5 MINUTE AND t.ts <= e.ts + INTERVAL 6 MINUTE
 GROUP BY char, ts, kind, text;
 
@@ -80,7 +81,7 @@ SELECT char, map, intDiv(x, 8) * 8 AS cx, intDiv(y, 8) * 8 AS cy, mate_spot,
        sum(kills_me) AS mine, sum(kills_mate) AS mate, sum(kills_rival) AS rivals,
        round(100 * sum(kills_me + kills_mate) / greatest(1, sum(kills_me + kills_mate + kills_rival))) AS pct_ours,
        topKIf(3)(top_rival, top_rival != '') AS main_rivals
-FROM ticks WHERE mode = 'farm'
+FROM ticks WHERE server = 'fast' AND mode = 'farm'
 GROUP BY char, map, cx, cy, mate_spot;
 
 -- Ritmo de resets de cada jugador del ranking (resets por hora entre la primera y la última foto del día).
@@ -88,12 +89,12 @@ CREATE OR REPLACE VIEW v_rival_pace AS
 SELECT name, toDate(ts) AS day, max(resets) - min(resets) AS resets_gained,
        round((max(resets) - min(resets)) / greatest(1, dateDiff('minute', min(ts), max(ts)) / 60), 2) AS per_hour,
        argMax(pos, ts) AS pos
-FROM ranking GROUP BY name, day;
+FROM ranking WHERE server = 'fast' GROUP BY name, day;
 
 -- Zonas de avistamiento de dragones (Golden Dragon 79, Dragón Rojo 44): celdas de 15 tiles con el
 -- centro promedio de donde se vieron. Las usa la cacería (ir primero ahí) y el radar.
 CREATE OR REPLACE VIEW v_dragon_zones AS
 SELECT map, round(avg(JSONExtractInt(data, 'gx'))) AS x, round(avg(JSONExtractInt(data, 'gy'))) AS y,
        count() AS n, uniq(char, num2) AS dragons, max(ts) AS last
-FROM events WHERE kind = 'golden_seen' AND num1 IN (44, 79) AND JSONExtractInt(data, 'gx') > 0
+FROM events WHERE server = 'fast' AND kind = 'golden_seen' AND num1 IN (44, 79) AND JSONExtractInt(data, 'gx') > 0
 GROUP BY map, intDiv(JSONExtractInt(data, 'gx'), 15), intDiv(JSONExtractInt(data, 'gy'), 15);
