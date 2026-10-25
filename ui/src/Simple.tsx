@@ -136,6 +136,13 @@ function Shell() {
                   {c.shadowOf ? `Sombra de ${c.shadowOf}` : "Seguir al más fuerte"}
                 </label>
               )}
+              <label className="simple-conn" title="Las cuentas valen en los dos servidores, pero cada personaje es de uno. Se aplica al próximo conectar.">
+                Servidor
+                <select value={c.server} onChange={(e) => void actions.server(c, e.target.value as "fast" | "slow")}>
+                  <option value="fast">Fast</option>
+                  <option value="slow">Slow</option>
+                </select>
+              </label>
               <label className="simple-conn" title="Directa: el bot habla con el servidor. Proxy: pasa por el worker de Cloudflare. Se aplica al próximo conectar.">
                 Conexión
                 <select value={c.conn} onChange={(e) => void actions.conn(c, e.target.value as "direct" | "proxy")}>
@@ -148,6 +155,7 @@ function Shell() {
               {c.status === "failed" && /no tiene ese personaje/.test(c.msg) && (
                 <button className="pause" onClick={() => { setPreset({ user: c.user, char: c.char }); setAltaOpen(true); }} title="El bot lo crea en el juego al conectarlo">Crear personaje…</button>
               )}
+              {c.serverUsed && c.serverUsed !== c.server && <small className="simple-wait">Ahora conectado al {c.serverUsed === "slow" ? "Slow" : "Fast"}; el cambio se aplica al reconectar.</small>}
               {c.connUsed && c.connUsed !== c.conn && <small className="simple-wait">Ahora conectado {c.connUsed === "proxy" ? "por proxy" : "directo"}; el cambio se aplica al reconectar.</small>}
               {c.game && !inGame(c) && isOnline(c) && <small className="simple-doing simple-wait">{c.game.doing}</small>}
               {c.game && inGame(c) && (

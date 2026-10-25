@@ -21,7 +21,7 @@ import { statPower } from './util';
 import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
 import {
-  BOT_PORT_BASE, DEFAULT_SERVER, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
+  BOT_PORT_BASE, DEFAULT_SERVER, SERVERS, type ServerKey, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
   parseEnvFile, CHAR_CLASSES, accountProblem, isCharClass,
   type Alert, newAlertMemory, diffAlerts, pushAlert,
   routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
@@ -52,6 +52,8 @@ type Slot = {
   cfg: DbChar;
   /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
   conn: 'direct' | 'proxy';
+  /** servidor del juego del proceso que corre ahora */
+  srv?: ServerKey;
   port: number;
   pid: number | null;
   status: CharStatus;
@@ -156,8 +158,9 @@ function scanProcs(): Running[] {
 /** ¿La línea de comandos del bot apunta al connect server de esta estación? (sin --cs-host se asume que sí) */
 function sameServer(cmdline: string[]): boolean {
   const i = cmdline.indexOf('--cs-host');
-  return i < 0 || cmdline[i + 1] === SERVER.csHost;
+  return i < 0 || cmdline[i + 1] === SERVER.csHost || cmdline[i + 1] === SERVERS.slow.csHost;
 }
+const srvOfCmdline = (cmdline: string[]): ServerKey => (cmdline[cmdline.indexOf('--cs-host') + 1] === SERVERS.slow.csHost ? 'slow' : 'fast');
 
 function syncRunning() {
   const procs = scanProcs();
@@ -168,6 +171,7 @@ function syncRunning() {
       if (s.pid !== p.pid) {
         s.pid = p.pid;
         s.conn = p.cmdline.some((a) => /\/p\/[^/]+\/ws/.test(a)) ? 'proxy' : 'direct';
+        s.srv = srvOfCmdline(p.cmdline);
         if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
           s.status = p.wsPort ? 'on' : 'external';
           s.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
@@ -291,6 +295,12 @@ function dbEnv(): Record<string, string> {
 // ~/.mubot/conn.json. La URL del proxy sale de MUBOT_ALTA_URL (.env.alta) y del token en ~/.mubot/alta/proxy-token.
 const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
 const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
+// Servidor del juego por personaje (Fast por defecto). Las cuentas valen en los dos servidores pero los personajes son de cada uno:
+// una tarjeta es un personaje de un servidor. ~/.mubot/server.json: { "<clave>": "slow" }.
+const SERVER_FILE = join(homedir(), '.mubot', 'server.json');
+const serverOf = new Map<string, ServerKey>((() => { try { return Object.entries(JSON.parse(readFileSync(SERVER_FILE, 'utf8')) as Record<string, ServerKey>).filter(([, v]) => v === 'slow'); } catch { return []; } })());
+const saveServer = () => { try { writeFileSync(SERVER_FILE, JSON.stringify(Object.fromEntries(serverOf))); } catch { /* sin disco: no es grave */ } };
+const chosenServer = (key: string): ServerKey => serverOf.get(key) ?? 'fast';
 const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
 function proxyUrl(): string | null {
   if (!altaUrl) return null;
@@ -303,6 +313,9 @@ function proxyUrl(): string | null {
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   syncRunning();
   const wantProxy = viaProxy.has(s.cfg.key);
+  const srv = chosenServer(s.cfg.key);
+  if (wantProxy && srv === 'slow') return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero el worker apunta al Fast: pasalo a "Directa" o al servidor Fast.` };
+  const base: GameServer = srv === 'slow' ? SERVERS.slow : SERVER;
   const pUrl = wantProxy ? proxyUrl() : null;
   if (wantProxy && !pUrl) return { ok: false, msg: `${s.cfg.char} está en "Proxy" pero falta configurar el worker (MUBOT_ALTA_URL en .env.alta y bun run alta:keys). Pasalo a "Directa" o configuralo.` };
   if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
@@ -347,12 +360,13 @@ function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
   env.MUBOT_PASS = pass;
   // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
   Object.assign(env, dbEnv());
-  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...SERVER, proxy: pUrl } : SERVER, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
+  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...base, proxy: pUrl } : base, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, detached: true, stdin: 'ignore', stdout: fd, stderr: fd,
   });
   closeSync(fd);
   s.pid = proc.pid;
   s.conn = pUrl ? 'proxy' : 'direct';
+  s.srv = srv;
   ownExits.add(proc.pid);
   s.status = 'starting';
   s.msg = 'conectando…';
@@ -428,6 +442,7 @@ function view() {
       key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
       shadowOf: shadowOf.get(s.cfg.key) ?? null, shadowOff: shadowOff.has(s.cfg.key),
       conn: viaProxy.has(s.cfg.key) ? 'proxy' : 'direct', connUsed: s.pid != null ? s.conn : null, proxyReady: proxyUrl() != null,
+      server: chosenServer(s.cfg.key), serverUsed: s.pid != null ? s.srv ?? null : null,
       stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
       panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
       game: st && {
@@ -713,6 +728,12 @@ Bun.serve({
         const live = s.pid != null && s.conn !== r.mode;
         return json({ ok: true, msg: `${s.cfg.char}: conexión ${r.mode === 'proxy' ? 'por proxy' : 'directa'}${live ? ' (se aplica al reconectar)' : ''}` });
       }
+      if (r.action === 'server') {
+        if (r.server === 'slow') serverOf.set(s.cfg.key, 'slow'); else serverOf.delete(s.cfg.key);
+        saveServer();
+        const live = s.pid != null && (s.srv ?? 'fast') !== r.server;
+        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label}${viaProxy.has(s.cfg.key) && r.server === 'slow' ? ' (ojo: está en Proxy y el worker solo llega al Fast)' : ''}${live ? ' (se aplica al reconectar)' : ''}` });
+      }
       if (r.action === 'follow') {
         if (r.target == null) { followTargets.delete(s.cfg.key); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
         followTargets.set(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
@@ -778,6 +799,7 @@ Bun.serve({
       if (replace && replace !== raw.char) {
         const ok = replace.toLowerCase(), nk = raw.char.toLowerCase();
         if (viaProxy.delete(ok)) { viaProxy.add(nk); saveConn(); }
+        if (serverOf.delete(ok)) { serverOf.set(nk, 'slow'); saveServer(); }
         if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
       }
       refreshSlots();
