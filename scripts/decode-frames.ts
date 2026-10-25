@@ -23,7 +23,7 @@ decryptor.decryptionKeys = SimpleModulusDecryptor.DefaultClientKey;
 
 const hexBytes = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
 const counts = new Map<string, number>();
-let outCount = 0, bad = 0;
+let outCount = 0, bad = 0, desync = 0;
 for (const line of readFileSync(file, 'utf8').split('\n')) {
   if (!line.startsWith('{')) continue;
   const { d, t, h } = JSON.parse(line) as { d: string; t?: number; h?: string };
@@ -38,7 +38,9 @@ for (const line of readFileSync(file, 'utf8').split('\n')) {
     let p = bytes.slice(0, len);
     if (type >= 0xc3) {
       const [ok, dec] = decryptor.Decrypt(p);
-      if (!ok) { bad++; bytes = bytes.slice(len); continue; }
+      // `ok` compara el contador de secuencia desde el inicio de la conexión: registrando a mitad de sesión nunca coincide, pero el contenido es válido.
+      if (!ok) desync++;
+      if (dec.length < 4) { bad++; bytes = bytes.slice(len); continue; }
       p = Uint8Array.from(dec);
     }
     const ci = getSizeOfPacketType(type) === 3 ? 3 : 2;
@@ -53,6 +55,6 @@ for (const line of readFileSync(file, 'utf8').split('\n')) {
   }
 }
 if (!list && dumpCode == null) {
-  console.log(`salientes: ${outCount}  ilegibles: ${bad}`);
+  console.log(`salientes: ${outCount}  ilegibles: ${bad}  contador desfasado (contenido válido): ${desync}`);
   for (const [k, n] of [...counts].sort((a, b) => b[1] - a[1])) console.log(String(n).padStart(6), k);
 }
