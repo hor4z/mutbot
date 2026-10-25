@@ -292,12 +292,32 @@ function dbEnv(): Record<string, string> {
 const CONN_FILE = join(homedir(), '.mubot', 'conn.json');
 const viaProxy = new Set<string>((() => { try { return JSON.parse(readFileSync(CONN_FILE, 'utf8')) as string[]; } catch { return []; } })());
 const saveConn = () => { try { writeFileSync(CONN_FILE, JSON.stringify([...viaProxy])); } catch { /* sin disco: no es grave */ } };
+const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
+/** Workers de respaldo (MUBOT_PROXY_URLS en .env.alta, separados por coma): mismo código que el principal, solo con PROXY_TOKEN. */
+let proxyBases: string[] = [];
+const proxyUp = new Map<string, boolean>();
+const wsBase = (base: string, token: string): string | null => {
+  try { const u = new URL(base); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
+};
+/** El primer worker (el principal y después los de respaldo) que respondió bien en la última comprobación; si ninguno, el principal. */
 function proxyUrl(): string | null {
-  if (!altaUrl) return null;
-  let token = '';
-  try { token = readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return null; }
+  const token = proxyToken();
   if (!token) return null;
-  try { const u = new URL(altaUrl); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
+  const bases = proxyBases.length ? proxyBases : altaUrl ? [altaUrl] : [];
+  const base = bases.find((b) => proxyUp.get(b) !== false) ?? bases[0];
+  return base ? wsBase(base, token) : null;
+}
+/** Sin token no hay prueba; con token, un GET sin upgrade da 426 si el worker vive y acepta el token (401 si no) y no abre nada contra el juego. */
+async function probeProxies() {
+  const token = proxyToken();
+  if (!token) return;
+  await Promise.all(proxyBases.map(async (b) => {
+    const u = wsBase(b, token)?.replace(/^ws/, 'http');
+    let ok = false;
+    try { ok = !!u && (await fetch(u, { signal: AbortSignal.timeout(4000) })).status === 426; } catch { /* caído */ }
+    if (proxyUp.get(b) !== ok) say(ok ? `Proxy ${new URL(b).host}: responde.` : `Proxy ${new URL(b).host}: no responde${proxyBases.length > 1 ? '; uso el siguiente' : ''}.`);
+    proxyUp.set(b, ok);
+  }));
 }
 
 function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
@@ -524,7 +544,10 @@ setInterval(keepAlive, 10_000);
 // Altas que llegan por el worker (workers/edge): MUBOT_ALTA_URL en .env.alta; claves en ~/.mubot/alta/ (scripts/alta-keys.ts).
 let altaUrl = '';
 try {
-  altaUrl = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8')).MUBOT_ALTA_URL ?? '';
+  const envAlta = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8'));
+  altaUrl = envAlta.MUBOT_ALTA_URL ?? '';
+  proxyBases = altaUrl ? [altaUrl, ...(envAlta.MUBOT_PROXY_URLS ?? '').split(',').map((x) => x.trim()).filter((x) => x && x !== altaUrl)] : [];
+  if (proxyBases.length) { void probeProxies(); setInterval(() => { void probeProxies(); }, 30_000); }
   if (altaUrl) startAltaSync({
     url: altaUrl,
     addChar: (u, p, c, k) => {
