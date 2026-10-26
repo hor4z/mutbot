@@ -44,6 +44,7 @@ import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
 import { trackPanelPackets } from './events';
+import { loadGameData } from './gamedata';
 import { revertBrain, takeBrain, watchBrain } from './hot';
 import type { LoopResult } from './farm-loop';
 import { drops, lootState } from './loot-state';
@@ -153,6 +154,9 @@ async function main() {
   // Con el proxy del worker el token va en la ruta (/p/<token>/ws): no se escribe en el log.
   console.log(`\nBot headless contra proxy=${PROXY.replace(/\/p\/[^/]+\//, '/p/***/')} connectServer=${CS_HOST}:${CS_PORT}`);
   console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
+
+  // Los datos del juego (monstruos, skills, ítems, spawns) salen de la base: sin ellos el bot no sabe qué es un monstruo.
+  await loadGameData();
 
   if (WS_PORT_ARG) {
     const wsPort = parseInt(WS_PORT_ARG);

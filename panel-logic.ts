@@ -1,7 +1,7 @@
 /**
  * Datos puros del panel: nombres de mapa e ítems. Sin estado ni red (se importa también desde scripts/).
  */
-import itemsData from './data/items.json';
+import { items, onGameData } from './gamedata';
 
 // Índices de mapa del 0.97d.
 export const MAP_NAMES: Record<number, string> = {
@@ -10,11 +10,12 @@ export const MAP_NAMES: Record<number, string> = {
 };
 export const mapName = (n: number): string => MAP_NAMES[n] ?? `mapa ${n}`;
 
-// Ítems: nombre y tamaño en la grilla del inventario (data/items.json del cliente).
-const ITEM_INFO = new Map<number, { name: string; w: number; h: number }>(
-  (itemsData as { Group: number; Index: number; ItemName: string; X: number; Y: number }[])
-    .map((i) => [i.Group * 512 + i.Index, { name: i.ItemName, w: i.X || 1, h: i.Y || 1 }]),
-);
+// Ítems: nombre y tamaño en la grilla del inventario (tabla `items` de la base, `gamedata.ts`).
+const ITEM_INFO = new Map<number, { name: string; w: number; h: number }>();
+onGameData('items', () => {
+  ITEM_INFO.clear();
+  for (const i of items) ITEM_INFO.set(i.grp * 512 + i.idx, { name: i.name, w: i.w || 1, h: i.h || 1 });
+});
 export function itemInfo(group: number, num: number): { name: string; w: number; h: number } {
   return ITEM_INFO.get(group * 512 + num) ?? { name: `ítem ${group}/${num}`, w: 1, h: 1 };
 }

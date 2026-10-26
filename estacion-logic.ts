@@ -7,23 +7,8 @@ import { isPanelCommand, type PanelCommand } from './panel-protocol';
 /** Servidor Slow: el connect server es interno (`clasico`); el WebSocket del worker lo reenvía. */
 export const SLOW = { csHost: 'clasico', csPort: 44405 } as const;
 
-/** El personaje que juega (~/.mubot/personaje.json): la clave nunca va en la línea de comandos, se pasa por MUBOT_PASS. */
+/** El personaje que juega (tabla `character` de la base): la clave nunca va en la línea de comandos, se pasa por MUBOT_PASS. */
 export type Personaje = { user: string; pass: string; char: string };
-
-/** Lee un archivo de env (formato de Bun: KEY=valor, comentarios con #, comillas opcionales). */
-export function parseEnvFile(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!m) continue;
-    let v = m[2].trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-    out[m[1]] = v;
-  }
-  return out;
-}
 
 /**
  * Argumentos de `bun` para lanzar el bot. `--env-file=/dev/null` para que Bun no cargue el `.env` de la raíz. `--exit-if-in-use`: si la
@@ -46,7 +31,7 @@ export function exitStatus(code: number | null): { status: BotStatus; msg: strin
   if (code === 6) return { status: 'failed', msg: 'la cuenta no tiene ese personaje en el Slow (¿nombre mal escrito?).' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
-  if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá ~/.mubot/personaje.json.' };
+  if (code === 5) return { status: 'failed', msg: 'el server rechazó el login (clave, cuenta o versión): revisá la tabla `character` de la base.' };
   if (code === 0 || code === null) return { status: 'off', msg: 'desconectado' };
   if (code === 2) return { status: 'failed', msg: 'el bot no arrancó: flag desconocido o servidor no local sin --allow-remote (mirá el log)' };
   return { status: 'failed', msg: `el bot terminó con error (código ${code}); mirá el log` };

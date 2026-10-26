@@ -2,8 +2,12 @@
  * Panel de Capitan (Slow): un solo personaje, una sola pantalla. Izquierda: conexión, estado, vitales y stats. Centro: el radar del bot en
  * tiempo real. Derecha: lo que decide el bot y por qué, una línea por decisión.
  */
+import {
+  Activity, Backpack, ChevronsUp, CircleCheck, Coins, Droplet, Dumbbell, Gauge, Heart, House, Info, ListChecks, MapPin, Pause, Play, Plug, RotateCw, Route,
+  ShieldAlert, Skull, Swords, Terminal, TriangleAlert, TrendingUp, Unplug, X, Zap, Anchor, type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PanelState } from "../../panel-protocol";
+import type { NoteKind, PanelState } from "../../panel-protocol";
 import { Radar } from "./Radar";
 import { Badge, Bar, Button, Label, Panel, Stat, cn, type Tone } from "./components";
 import { useActions, useStation, type Result } from "./station-data";
@@ -26,6 +30,11 @@ const STATUS: Record<string, { text: string; tone: Tone }> = {
   off: { text: "Desconectado", tone: "default" },
 };
 
+/** Un icono por tipo de decisión (se ve de un vistazo qué pasó). */
+const NOTE_ICON: Record<NoteKind, LucideIcon> = {
+  spot: MapPin, travel: Route, flee: ShieldAlert, stat: Dumbbell, loot: Backpack, order: Terminal, stuck: Anchor, death: Skull, fight: Swords, system: Info,
+};
+
 /** Lo que decide el bot y por qué: una línea por decisión, la más nueva abajo. */
 function Feed({ g }: { g: PanelState | null }) {
   const box = useRef<HTMLDivElement>(null);
@@ -38,18 +47,24 @@ function Feed({ g }: { g: PanelState | null }) {
   return (
     <div
       ref={box}
-      className="flex min-h-0 flex-1 flex-col overflow-auto"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden"
       onScroll={(e) => {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
     >
-      {notes.map((n, i) => (
-        <p key={`${n.at}-${i}`} className={cn("border-t border-line py-1.5 first:border-t-0", (n.kind === "death" || n.kind === "flee") && "text-danger")}>
-          <time className="mr-2 font-mono text-xs text-faint">{hhmm(n.at)}</time>
-          {n.text}
-        </p>
-      ))}
+      {notes.map((n, i) => {
+        const Icon = NOTE_ICON[n.kind] ?? Info;
+        return (
+          <p key={`${n.at}-${i}`} className={cn("flex gap-2 border-t border-line py-1.5 first:border-t-0", (n.kind === "death" || n.kind === "flee") && "text-danger")}>
+            <Icon size={14} className="mt-[3px] text-faint" aria-hidden />
+            <span className="min-w-0 break-words">
+              <time className="mr-2 font-mono text-xs text-faint">{hhmm(n.at)}</time>
+              {n.text}
+            </span>
+          </p>
+        );
+      })}
       {!notes.length && <p className="py-3 text-faint">Cuando el bot entre al juego, acá aparece cada decisión con su motivo.</p>}
     </div>
   );
@@ -88,15 +103,18 @@ export function App() {
           <div className="flex flex-wrap gap-1.5">
             {online && data.status !== "starting" && (
               <Button disabled={!inGame} onClick={() => void act.order({ cmd: paused ? "resume" : "pause" })}>
+                {paused ? <Play size={13} /> : <Pause size={13} />}
                 {paused ? "Reanudar" : "Pausar"}
               </Button>
             )}
             {data.status === "starting" && (
               <Button title="Corta el intento actual y vuelve a probar sin esperar" onClick={() => void act.retry()}>
+                <RotateCw size={13} />
                 Reintentar
               </Button>
             )}
             <Button variant={online ? "outline" : "primary"} disabled={data.status === "stopping"} onClick={() => void (online ? act.disconnect() : act.connect())}>
+              {data.status === "starting" ? <X size={13} /> : online ? <Unplug size={13} /> : <Plug size={13} />}
               {data.status === "starting" ? "Cancelar" : online ? "Desconectar" : "Conectar"}
             </Button>
           </div>
@@ -110,10 +128,11 @@ export function App() {
         {inGame && g && (
           <>
             <Panel>
-              <Label>Ahora</Label>
+              <Label icon={Activity}>Ahora</Label>
               <p className="text-lg">{g.doing}</p>
               <div>
                 <Button title="Va a Lorencia y queda en pausa" onClick={() => void act.order({ cmd: "town" })}>
+                  <House size={13} />
                   Ir al pueblo
                 </Button>
               </div>
@@ -126,20 +145,20 @@ export function App() {
                   {g.where.mapName} · {g.where.x},{g.where.y}
                 </span>
               </div>
-              <Bar value={Math.max(0, g.char.hp[0])} max={g.char.hp[1]} tone="danger" label="Vida" />
-              <Bar value={Math.max(0, g.char.mp[0])} max={g.char.mp[1]} tone="info" label="Maná" />
+              <Bar value={Math.max(0, g.char.hp[0])} max={g.char.hp[1]} tone="danger" label="Vida" icon={Heart} />
+              <Bar value={Math.max(0, g.char.mp[0])} max={g.char.mp[1]} tone="info" label="Maná" icon={Droplet} />
               <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-line pt-2">
-                <Stat label="Exp 1 min">{fmtExp(g.exp.perMin1)}/min</Stat>
-                <Stat label="Exp 5 min">{fmtExp(g.exp.perMin5)}/min</Stat>
-                <Stat label="Zen">{g.char.zen != null ? g.char.zen.toLocaleString("es") : "—"}</Stat>
-                <Stat label="Sesión">{g.session ? `${g.session.kills} kills · ${g.session.deaths} muertes` : "—"}</Stat>
-                <Stat label="Subió">{g.session ? `${g.char.level - g.session.level0} niveles en ${ago(g.session.since, now)}` : "—"}</Stat>
-                <Stat label="Ataque">{g.session?.skill ?? "—"}</Stat>
+                <Stat label="Exp 1 min" icon={TrendingUp}>{fmtExp(g.exp.perMin1)}/min</Stat>
+                <Stat label="Exp 5 min" icon={Gauge}>{fmtExp(g.exp.perMin5)}/min</Stat>
+                <Stat label="Zen" icon={Coins}>{g.char.zen != null ? g.char.zen.toLocaleString("es") : "—"}</Stat>
+                <Stat label="Sesión" icon={Swords}>{g.session ? `${g.session.kills} kills · ${g.session.deaths} muertes` : "—"}</Stat>
+                <Stat label="Subió" icon={ChevronsUp}>{g.session ? `${g.char.level - g.session.level0} niveles en ${ago(g.session.since, now)}` : "—"}</Stat>
+                <Stat label="Ataque" icon={Zap}>{g.session?.skill ?? "—"}</Stat>
               </dl>
             </Panel>
 
             <Panel>
-              <Label>Stats</Label>
+              <Label icon={Dumbbell}>Stats</Label>
               {stats && (
                 <div className="grid grid-cols-2 gap-1.5">
                   {STAT_KEYS.map((k) => (
@@ -173,7 +192,7 @@ export function App() {
       </main>
 
       <section className="flex min-h-0 flex-col gap-1.5 rounded-lg bg-soft px-4 py-3">
-        <Label>Decisiones</Label>
+        <Label icon={ListChecks}>Decisiones</Label>
         <Feed g={g} />
       </section>
     </div>
@@ -181,17 +200,19 @@ export function App() {
 }
 
 function Note({ tone = "default", children }: { tone?: "default" | "success" | "danger"; children: React.ReactNode }) {
+  const Icon = tone === "danger" ? TriangleAlert : tone === "success" ? CircleCheck : Info;
   return (
     <div
       role="status"
       className={cn(
-        "rounded-lg bg-soft px-3 py-2 text-sm",
+        "flex items-start gap-2 rounded-lg bg-soft px-3 py-2 text-sm",
         tone === "default" && "text-muted",
         tone === "success" && "bg-[color-mix(in_srgb,var(--paper)_86%,var(--success))] text-success",
         tone === "danger" && "bg-[color-mix(in_srgb,var(--paper)_86%,var(--danger))] text-danger",
       )}
     >
-      {children}
+      <Icon size={14} className="mt-0.5" aria-hidden />
+      <span>{children}</span>
     </div>
   );
 }

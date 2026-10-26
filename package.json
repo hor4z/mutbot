@@ -3,18 +3,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "bot": "bun run headless-bot.ts",
+    "bot": "bun --env-file=.env.db run headless-bot.ts",
     "proxy": "bun run proxy.ts",
     "db:up": "docker compose --env-file .env.db -f db/docker-compose.yml up -d",
-    "db:init": "bun --env-file=.env.db scripts/db.ts init",
     "tsc": "tsc --noEmit && bun run --cwd workers/edge tsc",
     "extract": "bun run extract-packets.ts",
-    "estacion": "bun run estacion.ts",
+    "estacion": "bun --env-file=.env.db run estacion.ts",
     "ui:build": "vite build --config ui/vite.config.ts",
     "ui:dev": "vite --config ui/vite.config.ts",
     "alta:keys": "bun run scripts/alta-keys.ts",
     "edge:dev": "bun run --cwd workers/edge dev",
-    "edge:deploy": "bun run --cwd workers/edge deploy"
+    "edge:deploy": "bun run --cwd workers/edge deploy",
+    "db:migrate": "bun --env-file=.env.db scripts/db.ts migrate",
+    "db:seed": "bun --env-file=.env.db scripts/db.ts seed",
+    "db:status": "bun --env-file=.env.db scripts/db.ts status",
+    "db:init": "bun --env-file=.env.db scripts/db.ts init",
+    "db:importar": "bun --env-file=.env.db scripts/importar-local.ts"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",

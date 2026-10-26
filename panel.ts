@@ -41,7 +41,17 @@ export async function handlePanelCommand(c: PanelCommand): Promise<CommandResult
   return r;
 }
 
-// Cambios de modo: se detectan en el tick de 1 s del panel (cubre todo: órdenes, muerte, reconexión).
+// Cambios de modo: se detectan en el tick de 1 s del panel (cubre todo: órdenes, muerte, reconexión) y se cuentan en palabras.
+const MODE_TEXT: Record<string, string> = {
+  'connecting>farm': 'Entró al juego y empieza a farmear.',
+  'connecting>paused': 'Entró al juego en pausa.',
+  'farm>paused': 'Quedó en pausa.',
+  'paused>farm': 'Volvió a farmear.',
+  'farm>dead': 'Murió.',
+  'paused>dead': 'Murió.',
+  'dead>farm': 'Revivió y vuelve a farmear.',
+  'dead>paused': 'Revivió y sigue en pausa.',
+};
 let lastMode: BotMode | null = null;
 export function noteModeChange() {
   const m = currentMode();
@@ -49,7 +59,8 @@ export function noteModeChange() {
   const from = lastMode;
   lastMode = m;
   if (from == null) return;
-  decide(`Modo: ${from} → ${m}.`, { kind: 'system', from, to: m });
+  const text = m === 'connecting' ? 'Se desconectó del juego, reconecta.' : (MODE_TEXT[`${from}>${m}`] ?? `Cambió de estado: ${from} a ${m}.`);
+  decide(text, { kind: 'system', from, to: m });
 }
 
 // Rastro para el radar: una posición cada 2 s, solo del mapa actual.

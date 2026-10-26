@@ -24,7 +24,7 @@ panel (ui/, React + Tailwind)  ◀── GET /api/state, POST /api/do ──▶ 
 - **Estación** (`estacion.ts`, `estacion-logic.ts`): un personaje, reconexión con espera creciente, adopta el bot que ya corre.
 - **Panel** (`ui/src`): estado y vitales, radar táctico (`Radar.tsx`, `Tactical.tsx`) y feed de decisiones (`App.tsx`). Tema de sherpa en
   `index.css`; piezas base en `components.tsx`.
-- **Datos** (`db/`): `schema.sql` y `views.sql` de la base `mubot_slow`; `scripts/` (informe, ingesta del cliente web, análisis).
+- **Datos** (`db/`): `migrations/` (esquema y vistas) y `seeds/` (datos del juego) de la base `mubot_slow`; `db.ts` y `gamedata.ts` (núcleo) leen y escriben; `scripts/` (migrate/seed, informe, ingesta del cliente web, análisis). Nada vive en JSON locales.
 
 ## 2. Un tick del bot (`farm-loop.ts`)
 

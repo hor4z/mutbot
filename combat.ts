@@ -8,7 +8,7 @@ import { sendToGS } from './connection';
 import { sendAreaSkill, sendTargetedSkill } from './actions';
 import { world, type ItemSlot, type SkillInfo } from './state';
 import { directionTowards, log } from './util';
-import skillsData from './data/skills.json';
+import { onGameData, skills as skillsData } from './gamedata';
 
 // --- Pociones ---------------------------------------------------------------
 // Las pociones del set clásico están en el Group 14 (curación 1-3, mana 4-6,
@@ -68,13 +68,21 @@ export function checkSurvival(): boolean {
 // Skills de área (AreaSkill 0x1E). El resto se manda como TargetedSkill.
 // 41 (Twisting Slash) verificado en una captura del cliente real; 42 (Rageful
 // Blow) es área en OpenMU, sin verificar todavía.
-// Tabla de skills del cliente web (data/skills.json, sacada del bundle de mu.mormon.garden): tipo
+// Tabla de skills del cliente web (tabla `skills` de la base, sacada del bundle de mu.mormon.garden): tipo
 // (DirectHit / AreaSkillAutomaticHits / AreaSkillExplicitTarget / Buff / Other) y distancia de cast.
 // Sin esto Evil Spirit (9) e Inferno (14) iban como TargetedSkill y el server no hacía nada: Melu sin
 // navegador caminaba entre monstruos sin ganar exp (2026-10-11).
 type SkillRow = { num: number; name: string; type: string; distance: number; damage: number; mana: number; level?: number; ag?: number };
-export const SKILL_TABLE = new Map<number, SkillRow>((skillsData as SkillRow[]).map((r) => [r.num, r]));
-export const AREA_SKILLS = new Set([41, 42, ...[...SKILL_TABLE.values()].filter((r) => r.type.startsWith('AreaSkill')).map((r) => r.num)]);
+export const SKILL_TABLE = new Map<number, SkillRow>();
+export const AREA_SKILLS = new Set<number>([41, 42]);
+// Se arman con la tabla de skills del cliente (base, gamedata.ts) cuando llega y si se recarga.
+onGameData('combat', () => {
+  SKILL_TABLE.clear();
+  AREA_SKILLS.clear();
+  for (const r of skillsData) SKILL_TABLE.set(r.num, r);
+  for (const n of [41, 42]) AREA_SKILLS.add(n);
+  for (const r of skillsData) if (r.type.startsWith('AreaSkill')) AREA_SKILLS.add(r.num);
+});
 // Mago (DW/SM): Evil Spirit primero (pedido del usuario), después Decay, Inferno, Hellfire...
 const MAGE_ATTACK_SKILLS = [9, 38, 14, 10, 12, 13, 5, 17, 11, 7, 4, 3, 2, 1];
 export const isMage = () => world.skills.has(9) || world.skills.has(14) || world.skills.has(38);

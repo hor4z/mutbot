@@ -10,6 +10,10 @@ import { readFileSync } from 'node:fs';
 import { SimpleModulusDecryptor } from '../net/encryption';
 import { getPacketSize, getSizeOfPacketType } from '../net/utils';
 import { monsterName } from '../state';
+import { loadGameData } from '../gamedata';
+
+// Los datos del juego salen de la base (tablas sembradas con `bun run db:seed`).
+await loadGameData();
 
 const file = process.argv[2];
 if (!file) { console.error('uso: bun scripts/analyze-session.ts <frames.ndjson>'); process.exit(2); }

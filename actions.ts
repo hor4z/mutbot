@@ -86,7 +86,7 @@ export function sendEcho() {
 // (Lorencia = 2). El server valida nivel y zen.
 export function warpTo(warpIndex: number) {
   sendToGS(rawPacket([0xc1, 0x0a, 0x8e, 0x02, 0, 0, 0, 0, warpIndex, warpIndex >> 8]));
-  log(`Warp → índice ${warpIndex}`);
+  log(`Warp al índice ${warpIndex}`);
 }
 
 // Chat público: C1 len 00 <nombre 10 bytes> <texto>. Los comandos del server

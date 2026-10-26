@@ -1,13 +1,10 @@
 /**
- * Directivas en caliente: perillas de comportamiento que se cambian sin reiniciar el bot. Viven en `~/.mubot/directivas.json`
- * (`{ "probarWarp": 38, ... }`); el proceso relee el archivo cuando cambia y muta `D` en el lugar, así que el código lee
- * `D.agiTarget` en cada decisión, sin copiarlo.
- * Se cambian con `POST /api/directivas` de la estación (valida con este mismo esquema) o a mano. Una clave desconocida o de tipo
- * equivocado se ignora y se avisa: nunca rompe al bot. Para sumar una perilla: agregarla a ESQUEMA y leer `D.<clave>` donde decide.
+ * Directivas en caliente: perillas de comportamiento que se cambian sin reiniciar el bot. Viven en la tabla `directives` de la base (db.ts); el
+ * proceso la relee cada pocos segundos y muta `D` en el lugar, así que el código lee `D.agiTarget` en cada decisión, sin copiarlo.
+ * Se cambian desde el panel (`POST /api/directivas` de la estación, que valida con este mismo esquema) o escribiendo en la tabla. Una clave
+ * desconocida o de tipo equivocado se ignora y se avisa: nunca rompe al bot. Para sumar una perilla: agregarla a ESQUEMA y leer `D.<clave>` donde decide.
  */
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { deleteDirective, readDirectives, writeDirective } from './db';
 
 type Spec = { def: boolean | number; min?: number; max?: number; doc: string };
 
@@ -24,7 +21,6 @@ const defaults = () => Object.fromEntries(Object.entries(ESQUEMA).map(([k, s]) =
 /** Los valores vivos de este proceso. */
 export const D: Valores = defaults();
 
-export const ARCHIVO = join(homedir(), '.mubot', 'directivas.json');
 export type Archivo = Record<string, boolean | number>;
 
 /** Valida un valor contra el esquema: el valor limpio o un motivo de rechazo. */
@@ -37,19 +33,14 @@ export function validar(clave: string, v: unknown): { ok: true; v: boolean | num
   return { ok: true, v };
 }
 
-export function leerArchivo(): Archivo {
-  try {
-    const raw = JSON.parse(readFileSync(ARCHIVO, 'utf8'));
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Archivo) : {};
-  } catch { return {}; }
+/** Guarda cambios en la base (ya validados): `set` escribe, `unset` borra (vuelve al valor por defecto). */
+export async function guardarDirectivas(set: Record<string, boolean | number>, unset: string[] = []) {
+  for (const [k, v] of Object.entries(set)) await writeDirective(k, v);
+  for (const k of unset) await deleteDirective(k);
 }
 
-/** Escribe el archivo entero de una vez (por un temporal): el bot no lo lee a medias. */
-export function guardarArchivo(a: Archivo) {
-  const tmp = `${ARCHIVO}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(a, null, 2));
-  renameSync(tmp, ARCHIVO);
-}
+/** Lo que hay guardado en la base. */
+export const leerDirectivas = readDirectives;
 
 /** Aplica el archivo sobre los defaults; devuelve lo que cambió y lo que se rechazó. */
 export function aplicar(a: Archivo): { cambios: string[]; rechazos: string[] } {
@@ -63,24 +54,26 @@ export function aplicar(a: Archivo): { cambios: string[]; rechazos: string[] } {
   const cambios: string[] = [];
   for (const [k, v] of Object.entries(next)) {
     if ((D as Record<string, boolean | number>)[k] !== v) {
-      cambios.push(`${k}: ${(D as Record<string, boolean | number>)[k]} → ${v}`);
+      cambios.push(`${k} pasó de ${(D as Record<string, boolean | number>)[k]} a ${v}`);
       (D as Record<string, boolean | number>)[k] = v;
     }
   }
   return { cambios, rechazos };
 }
 
-let mtime = -1;
-/** Relee el archivo cada `cadaMs` (sin archivo, todo en sus defaults). `aviso` recibe cada cambio. */
-export function iniciarDirectivas(aviso: (msg: string) => void = console.log, cadaMs = 2000) {
-  const tick = () => {
-    const m = existsSync(ARCHIVO) ? statSync(ARCHIVO).mtimeMs : 0;
-    if (m === mtime) return;
-    mtime = m;
-    const { cambios, rechazos } = aplicar(leerArchivo());
-    for (const c of cambios) aviso(`Directiva ${c}`);
-    for (const r of rechazos) aviso(`Directiva ignorada ${r}`);
+let avisoError = 0;
+/** Relee la tabla cada `cadaMs` (sin filas, todo en sus defaults). `aviso` recibe cada cambio. */
+export function iniciarDirectivas(aviso: (msg: string) => void = console.log, cadaMs = 5000) {
+  const tick = async () => {
+    try {
+      const { cambios, rechazos } = aplicar(await readDirectives());
+      for (const c of cambios) aviso(`Directiva ${c}`);
+      for (const r of rechazos) aviso(`Directiva ignorada ${r}`);
+    } catch (e) {
+      // La base no responde: se siguen usando los valores que ya tiene `D` (se avisa una vez cada 10 min).
+      if (Date.now() - avisoError > 10 * 60_000) { avisoError = Date.now(); aviso(`Directivas: no pude leer la base (${(e as Error).message}); sigo con las que tengo.`); }
+    }
   };
-  try { tick(); } catch { /* sin disco: defaults */ }
-  setInterval(() => { try { tick(); } catch { /* un archivo a medias se reintenta en el próximo ciclo */ } }, cadaMs).unref?.();
+  void tick();
+  setInterval(() => void tick(), cadaMs).unref?.();
 }

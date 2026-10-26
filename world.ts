@@ -311,7 +311,7 @@ export function trackWorld() {
     const h = parseHitExtended(toBytes(raw));
     if (h) {
       // Layout sin verificar contra bytes reales: los primeros paquetes quedan en el log para confirmarlo.
-      if (hitRawLogged++ < 6) log(`Hit extendido raw: ${Buffer.from(toBytes(raw)).toString('hex')} → id=${h.id} vida=${h.healthStatus}/250 daño=${h.damage}`);
+      if (hitRawLogged++ < 6) log(`Hit extendido raw: ${Buffer.from(toBytes(raw)).toString('hex')}: id=${h.id} vida=${h.healthStatus}/250 daño=${h.damage}`);
       if (world.npcs.has(h.id)) {
         const prev = world.hits.get(h.id);
         world.hits.set(h.id, { pct: Math.max(0, Math.min(100, Math.round((h.healthStatus / 250) * 100))), dealt: (prev?.dealt ?? 0) + h.damage, at: Date.now() });
@@ -325,7 +325,7 @@ export function trackWorld() {
       if (world.x !== f.x || world.y !== f.y) learnBlocked(world.map, world.x, world.y);
       if ((world.x !== f.x || world.y !== f.y) && Date.now() - lastFixLog > 10_000) {
         lastFixLog = Date.now();
-        log(`Posición corregida por el server: (${world.x},${world.y}) → (${f.x},${f.y}).`);
+        log(`Posición corregida por el server: de (${world.x},${world.y}) a (${f.x},${f.y}).`);
       }
       world.x = f.x;
       world.y = f.y;
@@ -429,7 +429,7 @@ export function trackWorld() {
     world.map = p.MapNumber;
     world.x = p.PositionX;
     world.y = p.PositionY;
-    log(`Cambio de mapa → map=${world.map} pos=(${world.x},${world.y})`);
+    log(`Cambio de mapa: map=${world.map} pos=(${world.x},${world.y})`);
     // Lo que había en scope era del mapa viejo: si no se limpia, el bot
     // persigue NPCs y drops que ya no existen (el server no manda el remove).
     world.npcs.clear();

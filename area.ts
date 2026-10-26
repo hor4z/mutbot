@@ -84,7 +84,7 @@ const S: AreaState = ((globalThis as { __area?: AreaState }).__area ??= { cur: n
 export const lastPlace: { v: Place | null } = { v: null };
 
 const rand = Math.random;
-const areaName = (map: number, p: Pos) => `${mapName(map)} ${p.x >> 4},${p.y >> 4}`;
+const areaName = (map: number, p: Pos) => `${mapName(map)}, zona ${p.x >> 4},${p.y >> 4}`;
 const here = (): Pos => ({ x: world.x, y: world.y });
 
 /** Lo que se ve ahora: una celda con monstruos atacables es una candidata aunque el spawns.json no la tenga (monstruos custom). */

@@ -9,7 +9,7 @@ Las instrucciones del proyecto están en **[AGENTS.md](AGENTS.md)**. Leé ese ar
 - el alcance y los límites (solo infraestructura propia, ritmos humanos, qué no tocar)
 - los comandos y la estructura en **núcleo** (siempre conectado) y **cerebro** (se recarga en caliente, sin desconectar)
 - cómo decide el bot y cómo aprende (zonas por exp/min medido, valor por tipo de monstruo, muertes y zonas vacías)
-- la estación, el panel y la base (ClickHouse `mubot_slow`)
+- la estación, el panel y la base (ClickHouse `mubot_slow`): **nada vive en JSON locales**, todo con migrations y seeds (`bun run db:migrate`, `db:seed`)
 - las trampas de protocolo: packets donde los parsers generados están mal para 0.97d y el bot queda ciego sin avisar
 
 Para "correlo", "arrancalo", "ponelo a jugar": `bun run estacion` (`http://127.0.0.1:8787`) y Conectar, o
@@ -24,6 +24,7 @@ Reglas rápidas:
 - `packets/` es generado: no se edita a mano, se regenera con `MU_SRC=~/self/mu/src bun run extract`.
 - `net/utils.ts` y `net/encryption/` son copias literales del cliente. No reescribirlas: una versión "más limpia" ya rompió el cifrado y
   el parseo de skills.
+- El esquema se cambia con una migration nueva en `db/migrations/` (nunca editando una ya aplicada) y los datos del juego con seeds en `db/seeds/`. No agregar archivos JSON de configuración ni de estado.
 - Antes de dar algo por terminado: `bun run tsc` limpio. Los tests se eliminaron a pedido del usuario (2026-10-23, están en el historial).
 - Nunca correr el bot con una cuenta que el usuario tenga abierta en su navegador. Una cuenta desconectada desde el panel es el usuario
   jugando: no reconectarla.

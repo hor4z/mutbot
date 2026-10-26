@@ -3,7 +3,9 @@
  *
  *   bun run estacion            → http://127.0.0.1:8787
  *
- * - Un solo personaje: `~/.mubot/personaje.json` ({ user, pass, char }). La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
+ * - Un solo personaje: tabla `character` de la base ({ user, pass, char }). La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
+ * - Nada vive en archivos locales: el personaje, los ajustes (token del worker, URL, "lo quiero conectado") y las directivas están en la base
+ *   (`bun run db:migrate`, `db:seed`, `db:importar`). Solo quedan los logs y las credenciales de la base (`.env.db`).
  * - El bot (`headless-bot.ts`) corre en su propia sesión (`detached`) y escribe en ~/.mubot/logs/<personaje>.log: cerrar o reiniciar la
  *   estación NO lo desconecta. Al arrancar, la estación adopta el que ya corre (lo busca con `ps` y lee su --ws-port).
  * - Nunca dos sesiones de la cuenta: el bot va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
@@ -11,12 +13,13 @@
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
  * - Conexión siempre por el worker (workers/edge): URL en MUBOT_ALTA_URL de .env.alta, token en ~/.mubot/alta/proxy-token.
  */
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ARCHIVO, D, ESQUEMA, guardarArchivo, iniciarDirectivas, leerArchivo, validar } from './directivas';
+import { D, ESQUEMA, guardarDirectivas, iniciarDirectivas, leerDirectivas, validar } from './directivas';
+import { dbOn, readCharacter, readSettings, writeSetting, type CharacterRow } from './db';
 import {
-  BOT_PORT, NO_RETRY_CODES, RECENT_STOP_MS, botArgs, exitStatus, parseEnvFile, parseStationRequest,
+  BOT_PORT, NO_RETRY_CODES, RECENT_STOP_MS, botArgs, exitStatus, parseStationRequest,
   type BotStatus, type Personaje,
 } from './estacion-logic';
 import type { PanelServerMessage, PanelState } from './panel-protocol';
@@ -33,33 +36,34 @@ const RECONNECT_GAP_MS = 5_000;
 const FROZEN_RESTART_MS = 10 * 60_000;
 const say = (...a: unknown[]) => console.log('[estación]', ...a);
 
-// --- Personaje y proxy ------------------------------------------------------------------------------------------------
-function leerPersonaje(): Personaje | null {
+// --- Personaje y proxy (de la base) -------------------------------------------------------------------------------------------------------
+// Se leen al arrancar y se refrescan cada 15 s y antes de conectar: un cambio en la base se toma sin reiniciar la estación.
+let personaje = null as CharacterRow | null;
+let settings = {} as Record<string, string>;
+let dbOk = false as boolean;
+async function refreshConfig() {
+  if (!dbOn()) { dbOk = false; return; }
   try {
-    const p = JSON.parse(readFileSync(join(DIR, 'personaje.json'), 'utf8'));
-    return typeof p.user === 'string' && typeof p.pass === 'string' && typeof p.char === 'string' ? p : null;
-  } catch { return null; }
+    personaje = await readCharacter();
+    settings = await readSettings();
+    dbOk = true;
+  } catch (e) {
+    if (dbOk) say(`no pude leer la configuración de la base (${(e as Error).message}); sigo con la última que tengo.`);
+    dbOk = false;
+  }
 }
-const personaje = leerPersonaje();
-
-let altaUrl = '';
-try { altaUrl = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8')).MUBOT_ALTA_URL ?? ''; } catch { /* sin .env.alta: no hay worker */ }
-const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
+/** El proxy del worker (URL y token de la tabla `settings`). */
 function proxyUrl(): string | null {
-  const token = proxyToken();
-  if (!token || !altaUrl) return null;
-  try { const u = new URL(altaUrl); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
+  const token = settings.proxy_token?.trim();
+  const url = settings.worker_url?.trim();
+  if (!token || !url) return null;
+  try { const u = new URL(url); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
 }
 
-/** Datos a ClickHouse (telemetry.ts): credenciales de .env.db, si existe. */
+/** Las credenciales de la base que se le pasan al bot (telemetry.ts, db.ts). */
 function dbEnv(): Record<string, string> {
   const out: Record<string, string> = {};
-  try {
-    for (const line of readFileSync(join(ROOT, '.env.db'), 'utf8').split('\n')) {
-      const m = /^(MUBOT_DB_[A-Z_]+)=(.*)$/.exec(line.trim());
-      if (m) out[m[1]] = m[2];
-    }
-  } catch { /* sin base: el bot juega igual */ }
+  for (const [k, v] of Object.entries(process.env)) if (k.startsWith('MUBOT_DB_') && v != null) out[k] = v;
   return out;
 }
 
@@ -78,10 +82,12 @@ type Bot = {
 };
 const bot: Bot = { pid: null, status: 'off', msg: 'desconectado', state: null, ws: null, nextId: 1, waiting: new Map(), stoppedAt: 0, exitCode: null, connectTimer: null };
 
-// `wanted`: el usuario lo quiere conectado. Un desconectado a mano deja de ser deseado.
-const ESTADO = join(DIR, 'estado.json');
-let wanted = (() => { try { return JSON.parse(readFileSync(ESTADO, 'utf8')).wanted === true; } catch { return false; } })();
-const setWanted = (v: boolean) => { wanted = v; try { writeFileSync(ESTADO, JSON.stringify({ wanted })); } catch { /* sin disco: no es grave */ } };
+// `wanted`: el usuario lo quiere conectado (ajuste `wanted` de la base). Un desconectado a mano deja de ser deseado.
+let wanted = false;
+const setWanted = (v: boolean) => {
+  wanted = v;
+  writeSetting('wanted', v ? '1' : '0').catch((e) => say(`no pude guardar "lo quiero conectado" en la base (${(e as Error).message})`));
+};
 
 // --- Bot que ya corre (el nuestro o lanzado a mano) -------------------------------------------------------------------
 function scanProc(): { pid: number; wsPort: number | null } | null {
@@ -162,9 +168,9 @@ const ownExits = new Set<number>();
 
 function connect(): { ok: boolean; msg: string } {
   syncRunning();
-  if (!personaje) return { ok: false, msg: 'Falta ~/.mubot/personaje.json ({ "user": …, "pass": …, "char": … }).' };
+  if (!personaje) return { ok: false, msg: dbOk ? 'Falta el personaje en la tabla `character` de la base (bun run db:importar).' : 'No puedo leer la base: sin ella no hay personaje (revisá .env.db).' };
   const pUrl = proxyUrl();
-  if (!pUrl) return { ok: false, msg: 'Falta configurar el worker: sin él el bot no puede conectar (MUBOT_ALTA_URL en .env.alta y bun run alta:keys).' };
+  if (!pUrl) return { ok: false, msg: 'Falta configurar el worker: sin él el bot no puede conectar (ajustes `worker_url` y `proxy_token` en la base; bun run db:importar).' };
   if (bot.pid != null) return { ok: false, msg: `${personaje.char} ya está corriendo (pid ${bot.pid})` };
   // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba "fantasma". Se espera y se conecta solo.
   const waitMs = bot.stoppedAt + RECONNECT_GAP_MS - Date.now();
@@ -296,10 +302,12 @@ async function postBody(req: Request, max = 2048): Promise<{ raw: unknown } | { 
   try { return { raw: JSON.parse(body) }; } catch { return { err: json({ ok: false, msg: 'no es JSON' }, 400) }; }
 }
 
+await refreshConfig();
+wanted = settings.wanted === '1';
+setInterval(() => void refreshConfig(), 15_000);
 syncRunning();
 setInterval(syncRunning, 2000);
 iniciarDirectivas((m) => say(m));
-if (existsSync(join(DIR, 'personaje.json'))) try { chmodSync(join(DIR, 'personaje.json'), 0o600); } catch { /* otro dueño */ }
 
 Bun.serve({
   hostname: '127.0.0.1',
@@ -311,10 +319,10 @@ Bun.serve({
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
       if (url.pathname === '/api/state') return json({
-        char: personaje?.char ?? null, status: bot.status, msg: bot.msg, pid: bot.pid, wanted, panel: bot.ws?.readyState === WebSocket.OPEN,
+        char: personaje?.char ?? null, db: dbOk, status: bot.status, msg: bot.msg, pid: bot.pid, wanted, panel: bot.ws?.readyState === WebSocket.OPEN,
         game: bot.state, now: Date.now(),
       });
-      if (url.pathname === '/api/directivas') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), vivos: D });
+      if (url.pathname === '/api/directivas') return json({ ok: true, esquema: ESQUEMA, valores: await leerDirectivas().catch(() => ({})), vivos: D });
       if (url.pathname === '/api/log' && personaje) return new Response(tail(join(LOG_DIR, `${personaje.char.toLowerCase()}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
       // Terreno del mapa (EncTerrainN.att descifrado, 256×256 bytes de atributos): paredes y zona segura.
       const tm = url.pathname.match(/^\/terrain\/(\d{1,3})$/);
@@ -331,16 +339,15 @@ Bun.serve({
       const raw = b.raw as { set?: unknown; unset?: unknown } | null;
       const set = raw?.set && typeof raw.set === 'object' && !Array.isArray(raw.set) ? (raw.set as Record<string, unknown>) : {};
       const unset = Array.isArray(raw?.unset) ? raw.unset.filter((k: unknown): k is string => typeof k === 'string') : [];
-      const archivo = leerArchivo();
+      const guardar: Record<string, boolean | number> = {};
       for (const [k, v] of Object.entries(set)) {
         const r = validar(k, v);
         if (!r.ok) return json({ ok: false, msg: `${k}: ${r.why}` }, 400);
-        archivo[k] = r.v;
+        guardar[k] = r.v;
       }
-      for (const k of unset) delete archivo[k];
-      guardarArchivo(archivo);
+      try { await guardarDirectivas(guardar, unset); } catch (e) { return json({ ok: false, msg: `no pude guardar en la base: ${(e as Error).message}` }, 502); }
       say(`directivas: ${JSON.stringify(set)}${unset.length ? ` sin ${unset.join(', ')}` : ''}`);
-      return json({ ok: true, msg: 'guardado: el bot lo toma en ~2 s', valores: archivo });
+      return json({ ok: true, msg: 'guardado en la base: el bot lo toma en unos segundos', valores: await leerDirectivas().catch(() => guardar) });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
       const b = await postBody(req);
@@ -355,6 +362,7 @@ Bun.serve({
         say(`orden ${JSON.stringify(r.command)}: ${res.ok ? '' : 'rechazada, '}${res.msg}`);
         return json(res, res.ok ? 200 : 409);
       }
+      if (r.action === 'connect' || r.action === 'retry') await refreshConfig();
       const res = r.action === 'connect' ? connect() : r.action === 'disconnect' ? disconnect() : await retryNow();
       // Solo se lo quiere vivo si el pedido prosperó.
       if (r.action === 'connect' && res.ok) { setWanted(true); retry.n = 0; }
@@ -363,4 +371,4 @@ Bun.serve({
     return new Response('No.', { status: 405 });
   },
 });
-say(`http://127.0.0.1:${PORT}  (personaje: ${personaje?.char ?? 'ninguno: falta ~/.mubot/personaje.json'})`);
+say(`http://127.0.0.1:${PORT}  (personaje: ${personaje?.char ?? 'ninguno'}; base: ${dbOk ? 'ok' : 'sin conexión'})`);

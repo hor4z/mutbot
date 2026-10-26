@@ -10,54 +10,27 @@ import { CHAR_NAME, type StatName } from './config';
 import { ExpLog } from './farming';
 import type { Warp } from './warps';
 import type { StatusServer } from './ws-server';
-import monstersData from './data/monsters.json';
+import { monsters, onGameData } from './gamedata';
 
-// TypeNumber reales de monstruos (del propio dataset del juego), para no confundir
-// un NPC amistoso del pueblo (vendedor, etc.) con algo atacable.
-// monsters.json incluye también los NPC amistosos del pueblo (Amy la de las
-// pociones, Berdysh Guard, Malron...), así que el Numb solo no alcanza: hay que
-// filtrar también por atributos de combate. Los monstruos reales se mueven poco
-// (Move <= 12) y tienen AttType != 0; los NPC de pueblo se quedan quietos y no
-// atacan. Antes de este filtro el bot atacaba a Amy y no lograba ninguna kill.
-type MonsterRow = {
-  Numb: number;
-  Name: string;
-  Move: number;
-  AttType: number;
-  HP: number;
-  Level: number;
-  AttSpeed: number;
-};
-// Move es el rango de patrulla, no la velocidad: monstruos reales llegan a ~22
-// (Skeleton), los guardias del pueblo (no atacables) tienen 100. Con tope 12 el
-// bot descartaba Skeletons y quedaba ciego en Dungeon.
-//
-// Esto es solo "lo que monsters.json conoce como atacable". La regla final la
-// aplica isMonsterType() (explore.ts): fuera de 200-299 (NPC de pueblo/servicio
-// del 0.97) Y (en este set O TypeNumber >= 300, los custom de este server, ej.
-// 690/692, que monsters.json no tiene).
-//
-// Sin tope de Move (2026-10-11): con Move <= 50 el bot quedaba ciego en Arena 2/3/4 (Deathvim Knight 220,
-// Phantom Knight 270, Gaint Drakan 305) y en casi todo lo de nivel alto. Los guardias del pueblo ya los
-// excluye isMonsterType (rango 200-299).
-export const MONSTER_TYPE_NUMBERS = new Set([
-  ...(monstersData as MonsterRow[])
-    .filter((m) => m.AttType !== 0 && m.Move > 0 && m.HP > 0)
-    .map((m) => m.Numb),
-]);
-// Nombre por TypeNumber (para el panel y los logs de la cacería).
-const MONSTER_NAMES = new Map<number, string>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Name]));
+// Tablas derivadas de la de monstruos del cliente (base, `gamedata.ts`): se llenan cuando los datos llegan y se rehacen si se recargan.
+// MONSTER_TYPE_NUMBERS: los tipos que son monstruos de verdad (AttType != 0, se mueven y tienen vida). Los NPC de pueblo y los custom del server
+// que no atacan (vendedores, cofres: AttType 0) quedan afuera, así que el bot no los toma por algo atacable. Sin tope de Move: los de nivel alto
+// (Deathvim Knight, Phantom Knight, Gaint Drakan…) se mueven mucho.
+export const MONSTER_TYPE_NUMBERS = new Set<number>();
+const MONSTER_NAMES = new Map<number, string>();
+const MONSTER_MAX_HP = new Map<number, number>();
+const MONSTER_LEVELS = new Map<number, number>();
+onGameData('state', () => {
+  MONSTER_TYPE_NUMBERS.clear(); MONSTER_NAMES.clear(); MONSTER_MAX_HP.clear(); MONSTER_LEVELS.clear();
+  for (const m of monsters) {
+    if (m.AttType !== 0 && m.Move > 0 && m.HP > 0) MONSTER_TYPE_NUMBERS.add(m.Numb);
+    MONSTER_NAMES.set(m.Numb, m.Name);
+    if (m.HP > 0) MONSTER_MAX_HP.set(m.Numb, m.HP);
+    MONSTER_LEVELS.set(m.Numb, m.Level);
+  }
+});
 
-// Vida máxima por TypeNumber. El cliente web la lee del attributeSystem del
-// monstruo (`maxHealth`); en el protocolo headless no llega en ningún packet
-// que parseemos (AddNpcsToScope095 trae id/tipo/posición, nada más), así que
-// sale de data/monsters.json (`HP` por `Numb`). Para los custom >= 300 de
-// este server no hay dato: farming.ts estima con la mediana de lo medido.
-const MONSTER_MAX_HP = new Map<number, number>(
-  (monstersData as MonsterRow[]).filter((m) => m.HP > 0).map((m) => [m.Numb, m.HP]),
-);
-
-/** Vida máxima de un tipo de monstruo según data/monsters.json (null: custom sin dato). */
+/** Vida máxima de un tipo de monstruo según la tabla del cliente (null: sin dato). */
 export const monsterMaxHp = (type: number): number | null => MONSTER_MAX_HP.get(type) ?? null;
 
 /**
@@ -72,8 +45,6 @@ export type ItemSlot = { slot: number; group: number; num: number; level?: numbe
 export type SkillInfo = { index: number; number: number; level: number };
 
 export const monsterName = (type: number) => MONSTER_NAMES.get(type) ?? `tipo ${type}`;
-// Nivel por TypeNumber (farmeo inicial: solo monstruos acordes al personaje). Custom >= 300: sin dato.
-const MONSTER_LEVELS = new Map<number, number>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Level]));
 export const monsterLevel = (type: number): number | null => MONSTER_LEVELS.get(type) ?? null;
 // ---------------------------------------------------------------------------
 // Estado del mundo (lo que el bot cree de sí mismo) — se actualiza con los

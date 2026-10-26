@@ -87,7 +87,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
     const name = monsterName(npc.type);
     trackEvent('shop_list', name, got.items?.length ?? 0, npc.type, { npc: npc.type, map: world.map, x: npc.x, y: npc.y, window: got.window, items: got.items ?? [] });
     st.visited.push(`${name}: ${got.items ? `${got.items.length} ítems` : got.window ? 'ventana sin tienda' : 'sin respuesta'}`);
-    log(`Tiendas: ${name} (${npc.x},${npc.y}) → ${got.items ? got.items.map((i) => i.name).join(', ') : got.window ? `ventana ${got.window}` : 'sin respuesta'}`);
+    log(`Tiendas: ${name} (${npc.x},${npc.y}): ${got.items ? got.items.map((i) => i.name).join(', ') : got.window ? `ventana ${got.window}` : 'sin respuesta'}`);
     sendToGS(new DataView(buildCloseNpc().buffer));
     await sleep(700);
     return true;

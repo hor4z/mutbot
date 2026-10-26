@@ -49,7 +49,10 @@ export async function investStatPoints(force = false): Promise<number> {
   const capped = capStats(raw, world.stats);
   const plan = (['str', 'agi', 'vit', 'ene'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
   if (!plan.length) return 0;
-  decide(`Reparto ${points} puntos: ${plan.map(([name, n]) => `+${n} ${name}`).join(', ')} (plan: Agi hasta ${D.agiTarget}, después 45/30/15/10).`, { points, plan: Object.fromEntries(plan), kind: 'stat' as const });
+  const NAMES: Record<StatName, string> = { str: 'fuerza', agi: 'agilidad', vit: 'vitalidad', ene: 'energía' };
+  const parts = plan.map(([name, n]) => `${n} en ${NAMES[name]}`);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} y ${parts[parts.length - 1]}` : parts[0]!;
+  decide(`Repartí ${points} puntos: ${list}.${world.stats.agi < D.agiTarget ? ` Primero agilidad, hasta ${D.agiTarget}.` : ''}`, { points, plan: Object.fromEntries(plan), kind: 'stat' as const });
   statTry = { points, at: Date.now(), level: world.level };
   let spent = 0;
   for (const [name, n] of plan) {

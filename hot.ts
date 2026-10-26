@@ -30,9 +30,7 @@ let next: { mod: Brain; id: string } | null = null;
 let previous: { mod: Brain; id: string } | null = null;
 let seq = 0;
 
-/** Los datos que el cerebro lleva dentro del bundle: si cambian, hay que recompilar. */
-const DATA = ['monsters', 'spawns', 'skills'].map((n) => join(ROOT, 'data', `${n}.json`));
-const brainFiles = () => [...[...BRAIN].map((n) => join(ROOT, `${n}.ts`)), ...DATA];
+const brainFiles = () => [...BRAIN].map((n) => join(ROOT, `${n}.ts`));
 const signature = () => brainFiles().map((f) => (existsSync(f) ? statSync(f).mtimeMs : 0)).join('|');
 
 /** Compila el cerebro a un archivo propio y lo carga. Tira si no compila o no carga. */
@@ -48,7 +46,6 @@ async function build(): Promise<{ mod: Brain; id: string }> {
       setup(b) {
         b.onResolve({ filter: /^\.\.?\// }, (args) => {
           const file = Bun.resolveSync(args.path, dirname(args.importer));
-          if (file.endsWith('.json')) return undefined; // datos: van dentro del bundle
           if (dirname(file) === ROOT && BRAIN.has(basename(file, '.ts'))) return undefined; // del cerebro: se recompila
           return { path: file, external: true }; // núcleo: el mismo módulo (y el mismo estado) que usa el proceso
         });

@@ -12,6 +12,10 @@ import { getPacketSize, getSizeOfPacketType } from '../net/utils';
 import { decodeItemDetail, parseItemAdded, parseItemsDropped } from '../protocol097';
 import { itemInfo } from '../panel-logic';
 import { monsterName } from '../state';
+import { loadGameData } from '../gamedata';
+
+// Los datos del juego salen de la base (tablas sembradas con `bun run db:seed`).
+await loadGameData();
 
 const [char, rawFile, portArg, serverArg] = process.argv.slice(2);
 if (!char || !rawFile) { console.error('uso: bun --env-file=.env.db scripts/ingest-frames.ts <personaje> <crudo.ndjson> [puerto] [servidor]'); process.exit(2); }
