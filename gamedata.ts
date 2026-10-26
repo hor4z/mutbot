@@ -13,8 +13,13 @@ export type MonsterRow = {
   Attri: number; ItemR: number; MoneyR: number; MaxI: number; ResWind: number; ResPois: number; ResIce: number; ResWater: number; ResFire: number;
 };
 export type SkillRow = { num: number; name: string; classes: string; damageType: string; damage: number; distance: number; ag: number; mana: number; level: number; energy: number; type: string; target: string; range: number };
-export type ItemRow = { grp: number; idx: number; name: string; w: number; h: number };
+/** Un ítem del cliente. `equipSlot`: dónde se usa (0 mano derecha, 1 izquierda, 2 casco, 3 armadura, 4 pantalón, 5 guantes, 6 botas, 7 alas, 8 mascota, 9 colgante, 10 y 11 anillos; -1 no es equipo). `cls`: clases que lo usan (1 caballero, 2 mago, 4 elfo, 8 gladiador). */
+export type ItemRow = { grp: number; idx: number; name: string; w: number; h: number; equipSlot: number; reqLevel: number; cls: number; def: number; dmg: number; mag: number };
 export type Spawn = { type: number; rect: [number, number, number, number]; qty: number };
+
+const itemIndex = new Map<number, ItemRow>();
+/** El ítem del cliente por grupo y número (undefined: no está en la tabla). */
+export const itemRow = (group: number, num: number): ItemRow | undefined => itemIndex.get(group * 512 + num);
 
 export const monsters: MonsterRow[] = [];
 export const skills: SkillRow[] = [];
@@ -41,7 +46,7 @@ export async function loadGameDataOnce(): Promise<void> {
   const [m, s, i, sp] = await Promise.all([
     dbRows<Record<string, unknown>>('SELECT * FROM monsters ORDER BY Numb'),
     dbRows<Record<string, unknown>>('SELECT * FROM skills ORDER BY num'),
-    dbRows<Record<string, unknown>>('SELECT grp, idx, name, w, h FROM items'),
+    dbRows<Record<string, unknown>>('SELECT grp, idx, name, w, h, equip_slot, req_level, cls, def, dmg, mag FROM items'),
     dbRows<{ map: number; type: number; x1: number; y1: number; x2: number; y2: number; qty: number }>('SELECT map, type, x1, y1, x2, y2, qty FROM spawns'),
   ], );
   const vacias = [['monsters', m], ['skills', s], ['items', i], ['spawns', sp]].filter(([, rows]) => !(rows as unknown[]).length).map(([n]) => n);
@@ -51,7 +56,9 @@ export async function loadGameDataOnce(): Promise<void> {
   skills.length = 0;
   for (const r of s) skills.push(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, ['name', 'classes', 'damageType', 'type', 'target'].includes(k) ? String(v) : num(v)])) as unknown as SkillRow);
   items.length = 0;
-  for (const r of i) items.push({ grp: num(r.grp), idx: num(r.idx), name: String(r.name), w: num(r.w), h: num(r.h) });
+  for (const r of i) items.push({ grp: num(r.grp), idx: num(r.idx), name: String(r.name), w: num(r.w), h: num(r.h), equipSlot: num(r.equip_slot), reqLevel: num(r.req_level), cls: num(r.cls), def: num(r.def), dmg: num(r.dmg), mag: num(r.mag) });
+  itemIndex.clear();
+  for (const r of items) itemIndex.set(r.grp * 512 + r.idx, r);
   for (const k of Object.keys(spawns)) delete spawns[k];
   for (const r of sp) (spawns[String(num(r.map))] ??= []).push({ type: num(r.type), rect: [num(r.x1), num(r.y1), num(r.x2), num(r.y2)], qty: num(r.qty) });
   loaded = true;

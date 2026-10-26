@@ -19,7 +19,7 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, recoveryWarp, targetValue, travelTo, type Place } from './area';
+import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, noteProgress, recoveryWarp, targetValue, travelTo, type Place } from './area';
 import { noteExp, noteKill } from './learning';
 import { investStatPointsInBackground } from './progress';
 import { scoutShopsStep } from './shop-scout';
@@ -139,6 +139,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const added = new ExperienceGainedPacket(raw).AddedExperience;
     totalExpGained += added;
     noteExp(added);
+    noteProgress();
     ctx.expTotal += added;
     expLog.add(added, Date.now());
   };
@@ -281,7 +282,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
 
     // --- 4. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
     const targetInMelee = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;
-    if (!targetInMelee && (await lootStep(true, false))) {
+    if (!targetInMelee && (await lootStep())) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;

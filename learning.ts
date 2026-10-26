@@ -34,6 +34,16 @@ const L: LearnState = ((globalThis as { __learn?: LearnState }).__learn ??= {
   startedAt: Date.now(), loadedAt: 0, loading: false, cells: new Map(), deathCells: new Map(), kills: new Map(), group: null,
 });
 
+/** Los mapas con zonas medidas (desde MIN_TICKS), de mejor a peor, con lo mejor que rindió una celda de cada uno. */
+export function measuredMaps(): { map: number; expMin: number }[] {
+  const best = new Map<number, number>();
+  for (const [k, st] of L.cells) {
+    if (st.ticks < MIN_TICKS) continue;
+    const map = Number(k.split(':')[0]);
+    best.set(map, Math.max(best.get(map) ?? 0, st.expMin));
+  }
+  return [...best].map(([map, expMin]) => ({ map, expMin })).sort((a, b) => b.expMin - a.expMin);
+}
 export const cellStat = (map: number, x: number, y: number): CellStat | undefined => L.cells.get(cellKey(map, x, y));
 export const deathsIn = (map: number, x: number, y: number) => L.deathCells.get(cellKey(map, x, y)) ?? 0;
 

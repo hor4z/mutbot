@@ -131,59 +131,41 @@ export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_
   return out;
 }
 
-export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean };
+// --- Qué se levanta del piso ---------------------------------------------------------------------------------------------------------------
+// Solo cuatro cosas (usuario, 2026-10-26: "lo otro es basura, nos llena el inventario"): el zen, las joyas, los ítems excelentes y los que
+// mejoran el equipo que ya tenemos. Todo lo demás se deja en el piso: pociones, cajas, armas y armaduras comunes, anillos, etc.
+export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean; level?: number };
 
-// Lo que vale en este server (2026-10-23): las cajas (14/11, Box of Kundun) y los Cristales (14/31): la
-// moneda de la tienda del creador (el Mercado cobra en Cristales) y del Alquimista; también los
-// talismanes (14/7 Protección, 14/12 +14, 14/20 +15). Siempre, con o sin lugar (son de 1x1 y se apilan).
-// Con lugar en la bolsa (`gear`), los excelentes: el Alquimista los cristaliza en Cristales. Las joyas no
-// valen nada para comerciar (usuario: "las joyas no valen nada"): no se levantan.
-/**
- * `fresh` (personaje nuevo): además el zen (en este server llega como ítem 14/15), las
- * pociones (manzana y pociones de vida, 14/0-3), las joyas y, si `gear`, el equipo (grupos 0-11: armas,
- * escudos, armaduras) para equiparse o venderlo. Sin zen no paga el warp a Devias (2.500) ni compra
- * nada: Hume llegó a nivel 27 con 0.
- */
-export const JEWELS = new Set([13, 14, 16, 22, 31]);
-/**
- * Opinión opcional sobre el equipo (grupos 0-11) que cae, p. ej. `makeDropJudge` de item-score.ts: true =
- * levantarlo, false = dejarlo, undefined = no opina (rige la regla de siempre). Solo se consulta con lugar
- * en la bolsa (`gear`). Sin juez (el default) el comportamiento no cambia.
- */
-export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
-/** Joyas siempre y con prioridad: en el Slow son lo más valioso. */
-export const lootPolicy = { jewels: true };
-/** En el Slow casi todo vale: grupo 12 (alas, orbes, Chaos), 13 (anillos, colgantes, mascotas), 14 (joyas, cajas, pociones) y cualquier excelente. */
-export const isSlowValuable = (d: DropInfo) => d.group === 12 || d.group === 13 || d.group === 14 || !!d.excellent;
-export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS.has(d.num)) || (d.group === 12 && d.num === 15);
-export function isValuableDrop(d: DropInfo, fresh = false, gear = false, judge?: DropJudge): boolean {
-  if (d.isMoney) return fresh;
-  if (lootPolicy.jewels && isSlowValuable(d)) return true;
-  if (judge && gear && d.group <= 11) {
-    const j = judge(d);
-    if (j !== undefined) return j;
-  }
-  if (fresh && d.group === 14 && (d.num <= 3 || d.num === 15 || JEWELS.has(d.num))) return true;
-  if (fresh && d.group === 12 && d.num === 15) return true; // Jewel of Chaos
-  if (fresh && gear && d.group <= 11) return true;
-  if (d.group === 14 && CURRENCY_ITEMS.has(d.num)) return true;
-  return gear && !!d.excellent && d.group <= 11;
+/** Joyas: Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31 (los Cristales) y Chaos 12/15. */
+const JEWELS_GROUP_14 = new Set([13, 14, 16, 22, 31]);
+export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS_GROUP_14.has(d.num)) || (d.group === 12 && d.num === 15);
+
+export type LootReason = 'zen' | 'joya' | 'excelente' | 'mejora';
+/** Lo que el loop sabe y farming.ts no: si el ítem mejora el equipo puesto y si cabe en la bolsa. */
+export type LootRules = { upgrade: (d: DropInfo) => boolean; room: (d: DropInfo) => boolean };
+
+/** Por qué vale la pena levantar este drop (o null si es basura). Sin lugar en la bolsa solo se levanta el zen. */
+export function lootReason(d: DropInfo, rules: LootRules): LootReason | null {
+  if (d.isMoney) return 'zen';
+  if (!rules.room(d)) return null;
+  if (isJewel(d)) return 'joya';
+  if (d.excellent) return 'excelente';
+  if (rules.upgrade(d)) return 'mejora';
+  return null;
 }
 
-/** Cajas, Cristales y talismanes (grupo 14): ver isValuableDrop. */
-export const CURRENCY_ITEMS: ReadonlySet<number> = new Set([11, 31, 7, 12, 20]);
+/** Lo que no es zen va primero aunque haya zen hasta este número de tiles más cerca. */
+const PRIORITY_BONUS = 8;
 
-/** Orden de recolección: la caja primero aunque una joya esté hasta LOOT_BOX_FIRST tiles más cerca. */
-const LOOT_BOX_FIRST = 8;
-
-// El drop valioso más cercano a <= radius (o null).
-export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius = 12, fresh = false, gear = false, judge?: DropJudge): D | null {
+// El drop que vale la pena más cercano a <= radius (o null).
+export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, radius: number, rules: LootRules): D | null {
   let best: D | null = null;
   let bd = Infinity;
   for (const d of drops) {
-    if (!isValuableDrop(d, fresh, gear, judge)) continue;
+    const why = lootReason(d, rules);
+    if (!why) continue;
     const dd = cheb(me, d);
-    const score = dd - ((d.group === 14 && d.num === 11) || (lootPolicy.jewels && isSlowValuable(d)) ? LOOT_BOX_FIRST : 0);
+    const score = dd - (why === 'zen' ? 0 : PRIORITY_BONUS);
     if (dd <= radius && score < bd) {
       bd = score;
       best = d;
@@ -191,4 +173,3 @@ export function pickLoot<D extends DropInfo & Pos>(me: Pos, drops: Iterable<D>, 
   }
   return best;
 }
-

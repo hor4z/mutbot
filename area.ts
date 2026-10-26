@@ -12,7 +12,7 @@
 import { D } from './directivas';
 import { decide } from './journal';
 import { classFamily, planByClass, type StatValues } from './farming';
-import { cellKey, cellStat, deathsIn, learnedReady, MIN_TICKS, refreshLearned, valueOf } from './learning';
+import { cellKey, cellStat, deathsIn, learnedReady, measuredMaps, MIN_TICKS, refreshLearned, valueOf } from './learning';
 import { mapName } from './panel-logic';
 import { canFarmMonster, type Fighter } from './power';
 import { hotspots, isMonster, spawnsOf, type Hotspot } from './spawns';
@@ -63,6 +63,10 @@ const REDECIDE_MS = 20 * 60_000;
 const EXPLORE_P = 0.2;
 /** Mientras tanto un mapa nuevo se cambia como mucho una vez por esto. */
 const RELOCATE_COOLDOWN_MS = 2 * 60_000;
+/** Sin ganar exp tanto tiempo en una zona, se la deja (ya sea que no haya monstruos que aguante, o que no llegue a ellos). */
+const NO_PROGRESS_MS = 150_000;
+const GIVE_UP_AVOID_MS = 30 * 60_000;
+const BAD_MAP_MS = 60 * 60_000;
 
 type Pick = { map: number; anchor: Pos; why: string; at: number };
 type AreaState = {
@@ -76,9 +80,16 @@ type AreaState = {
   avoid: Map<string, number>;
   /** Lo visto en pantalla (monstruos que se pueden atacar), por celda: suma a las candidatas donde el spawns.json no sabe. */
   seen: Map<string, { map: number; x: number; y: number; n: number; at: number }>;
+  /** Cuándo fue la última vez que ganó exp (el loop llama a `noteProgress`): si pasa NO_PROGRESS_MS sin ganar nada, la zona no sirve. */
+  progressAt: number;
+  /** Mapas que se evitan hasta cierto momento (no daban exp, o murió ahí). */
+  mapBad: Map<number, number>;
 };
 // En globalThis para que la recarga en caliente del cerebro no mande al personaje a otra zona ni olvide dónde murió.
-const S: AreaState = ((globalThis as { __area?: AreaState }).__area ??= { cur: null, homeMap: null, emptySince: 0, lastRelocateAt: 0, lastAnnounced: '', avoid: new Map(), seen: new Map() });
+const S: AreaState = ((globalThis as { __area?: AreaState }).__area ??= { cur: null, homeMap: null, emptySince: 0, lastRelocateAt: 0, lastAnnounced: '', avoid: new Map(), seen: new Map(), progressAt: 0, mapBad: new Map() });
+// Una versión anterior del módulo pudo dejar el estado sin estos campos (recarga en caliente).
+S.mapBad ??= new Map();
+S.progressAt ||= Date.now();
 
 /** El panel y la base conocen el lugar actual por este nombre. */
 export const lastPlace: { v: Place | null } = { v: null };
@@ -98,6 +109,11 @@ export function noteSeen() {
     s.at = now;
     S.seen.set(k, s);
   }
+}
+
+/** El loop avisa cada vez que gana exp: la zona elegida sirve. */
+export function noteProgress() {
+  S.progressAt = Date.now();
 }
 
 /** La muerte marca la zona para evitarla un buen rato (y se vuelve a decidir). */
@@ -167,6 +183,7 @@ type MapOption = { map: number; potential: number; measured: number };
  */
 function mapOption(map: number): MapOption | null {
   const now = Date.now();
+  if ((S.mapBad.get(map) ?? 0) > now) return null;
   const ok = (t: number) => isMonster(t) && MONSTER_TYPE_NUMBERS.has(t) && canFarm(t);
   const hs = hotspots(map, ok).filter((h) => h.walkable >= 0.7 && (S.avoid.get(cellKey(map, h.x, h.y)) ?? 0) <= now);
   if (!hs.length) return null;
@@ -228,6 +245,21 @@ function checkEmpty(pick: Pick) {
   }
 }
 
+/**
+ * Lleva NO_PROGRESS_MS sin ganar nada de exp en la zona elegida: no sirve (monstruos que no aguanta y que no la dejan avanzar, un camino cerrado…).
+ * Se evita la zona un rato, el mapa se marca como malo una hora y se vuelve al mejor mapa medido.
+ */
+function giveUpArea(pick: Pick, now: number) {
+  S.avoid.set(cellKey(pick.map, pick.anchor.x, pick.anchor.y), now + GIVE_UP_AVOID_MS);
+  S.mapBad.set(pick.map, now + BAD_MAP_MS);
+  const back = measuredMaps().find((m) => m.map !== pick.map && (S.mapBad.get(m.map) ?? 0) <= now);
+  S.homeMap = back?.map ?? null;
+  S.cur = null;
+  S.lastRelocateAt = 0; // sin esperar el enfriamiento: hay que salir de ahí
+  S.progressAt = now;
+  decide(`Hace ${Math.round(NO_PROGRESS_MS / 1000)} s que no gano exp en ${areaName(pick.map, pick.anchor)}: dejo ese mapa por una hora${back ? ` y vuelvo a ${mapName(back.map)}, que sí rindió (${Math.round(back.expMin / 1000)}k exp/min)` : ''}.`, { kind: 'stuck', map: pick.map });
+}
+
 /** El lugar donde farmea ahora, o null si todavía no se puede decidir (faltan stats y vida). */
 export function choosePlace(): Place | null {
   return (lastPlace.v = decidePlace());
@@ -240,9 +272,11 @@ function decidePlace(): Place | null {
   noteSeen();
   const now = Date.now();
   if (S.cur) checkEmpty(S.cur);
+  if (S.cur && now - S.progressAt > NO_PROGRESS_MS) giveUpArea(S.cur, now);
   if (S.cur && now - S.cur.at > REDECIDE_MS) S.cur = null; // un cambio de zona cada tanto, para seguir midiendo y probando
   if (!S.cur) {
-    S.homeMap ??= world.map;
+    // Al arrancar, el mapa base es el que mejor rindió (no donde haya quedado el personaje: pudo quedar en una prueba que salió mal).
+    S.homeMap ??= measuredMaps().find((m) => (S.mapBad.get(m.map) ?? 0) <= now)?.map ?? world.map;
     // Reaparece en el pueblo tras morir: se decide sobre el mapa donde farmeaba, no sobre el pueblo.
     let map = S.homeMap;
     let prefix = '';
@@ -264,6 +298,7 @@ function decidePlace(): Place | null {
       } else log('Área: no hay zonas que pueda farmear en ningún mapa a mi alcance; espero.');
     }
     if (pick) S.cur = { map, anchor: { x: pick.c.x, y: pick.c.y }, why: `${prefix}${pick.why}`, at: now };
+    if (S.cur && S.cur.at === now) S.progressAt = now;
   }
   if (!S.cur) return null;
   const place: Place = {

@@ -7,7 +7,8 @@ import { WALK_PACE_MS } from './config';
 import { sendToGS } from './connection';
 import { step, sendPickup } from './actions';
 import { itemInfo } from './panel-logic';
-import { pickLoot, type DropJudge } from './farming';
+import { classFamily, lootReason, pickLoot, type DropInfo, type LootRules } from './farming';
+import { itemRow } from './gamedata';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
@@ -16,8 +17,6 @@ import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
-/** Juez opcional del equipo que cae (item-score.ts `makeDropJudge`). Vacío por defecto: nada cambia hasta que alguien lo conecte. */
-export const lootPolicy: { judge?: DropJudge } = {};
 
 
 // Bug real encontrado jugando (cuenta melu): 'ItemsDropped' (C2/0x20) y
@@ -89,50 +88,68 @@ export function watchDrops(): () => void {
   };
 }
 
-// Loot valioso (farming.ts, isValuableDrop): cajas, joyas, excelentes y los
-// guantes 10/1. El zen y el equipo común NO se levantan (cada viaje es tiempo
-// sin pelear). Se camina hasta el drop (a <= 12 tiles) y se levanta a <= 1;
-// mientras tanto no se pelea, como el agente web. Un drop al que no se llega
-// en LOOT_TIMEOUT_MS se olvida.
+// Qué se levanta (farming.ts, lootReason): zen, joyas, excelentes y lo que mejora el equipo puesto; todo lo demás se deja. Se camina hasta el
+// drop (a <= 12 tiles) y se levanta a <= 1; mientras tanto no se pelea. Un drop al que no se llega en LOOT_TIMEOUT_MS se olvida.
 const LOOT_RADIUS = 12;
 const LOOT_TIMEOUT_MS = 8000;
 // Desde 2026-10-18 las cajas, cristales y excelentes no se pueden levantar los primeros 2 s y, si varios
 // los piden, se sortean: un solo pedido al caer se perdía. Se insiste cada PICKUP_RETRY_MS mientras siga
 // en el piso (ItemDropRemoved lo saca de `drops`); una caja (queda 3 min) hasta LOOT_BOX_TIMEOUT_MS.
 const PICKUP_RETRY_MS = 600;
-const LOOT_BOX_TIMEOUT_MS = 20_000;
-const isBox = (d: { group: number; num: number }) => d.group === 14 && d.num === 11;
 // "This item doesn't belong to you" (la caja es del que más daño hizo): soltarla ya y no volver a pedirla
 // hasta FOREIGN_RETRY_MS después (por si queda libre). Insistir 20 s en plena invasión era perder dorados.
 const FOREIGN_RETRY_MS = 10_000;
 const foreignUntil = new Map<number, number>();
-// Cajas ajenas a esperar adyacente (snipe.ts) y el último pedido de cada una.
-const SNIPE_HOLD_MAX_MS = 14_000;
-const snipeIds = new Set<number>();
-const snipePickAt = new Map<number, number>();
-// Joyas, excelentes y equipo solo con lugar en el inventario (casillas libres de las 64): que siempre
-// entren las cajas, el zen y las pociones.
-const LOOT_GEAR_MIN_FREE = 12;
+/** Casillas libres de la bolsa (64 de 8×8; las 12 primeras son el equipo puesto). */
 export function bagRoom(): number {
   let used = 0;
   for (const it of world.inventory.values()) if (it.slot >= 12 && it.slot < 76) { const i = itemInfo(it.group, it.num); used += i.w * i.h; }
   return 64 - used;
 }
 
+// --- ¿Mejora lo que ya tenemos? -----------------------------------------------------------------------------------------------------------
+/** Máscara de clase del personaje (gamedata.ts `cls`): 1 caballero, 2 mago, 4 elfo, 8 gladiador. */
+const CLASS_MASK = { knight: 1, wizard: 2, elf: 4, gladiator: 8 } as const;
+/** Cuánto vale un ítem para comparar: lo mayor entre defensa, daño y poder mágico, más 3 por cada +1 de nivel y un 20 % si es excelente. */
+const scoreOf = (group: number, num: number, level = 0, excellent = false): number => {
+  const r = itemRow(group, num);
+  if (!r) return 0;
+  const base = Math.max(r.def, r.dmg, r.mag);
+  return base + level * 3 + (excellent ? base * 0.2 : 0);
+};
+/** El equipo puesto en un slot (0 a 11): los slots de anillo (10 y 11) se comparan con el peor de los dos. */
+const wornIn = (slot: number) => (slot === 10 || slot === 11 ? [10, 11] : [slot]).map((s) => world.inventory.get(s));
+
+/** ¿El drop es equipo que podemos usar y que supera lo que llevamos puesto en ese slot (por más de un 5 %)? */
+function isUpgrade(d: DropInfo): boolean {
+  const r = itemRow(d.group, d.num);
+  if (!r || r.equipSlot < 0) return false;
+  const family = classFamily(world.classId);
+  if (!family || !(r.cls & CLASS_MASK[family])) return false;
+  if (r.reqLevel > world.level) return false;
+  const mine = scoreOf(d.group, d.num, d.level ?? 0, !!d.excellent);
+  if (mine <= 0) return false; // sin defensa, daño ni poder (anillos, colgantes, mascotas): solo cuentan si son excelentes
+  const worn = wornIn(r.equipSlot);
+  if (worn.some((w) => !w)) return true; // un slot libre: cualquier equipo que podamos usar mejora
+  return worn.every((w) => mine > scoreOf(w!.group, w!.num, w!.level ?? 0, !!w!.excellent) * 1.05);
+}
+/** ¿Cabe en la bolsa? (aproximado por casillas: no mira la forma del hueco). Sin lugar solo se levanta el zen. */
+const hasRoom = (d: DropInfo) => { const i = itemInfo(d.group, d.num); return bagRoom() >= i.w * i.h; };
+export const RULES: LootRules = { upgrade: isUpgrade, room: hasRoom };
+
 // Devuelve true si hizo algo (un paso o el pickup).
 /**
- * `fresh` (personaje nuevo): además de lo valioso, zen/pociones/equipo; pero primero pelea (con un
- * atacable a <= 8 solo levanta lo que está pegado) y no levanta lo que cae al lado de otro jugador (es
- * suyo: Hume se pasaba el tiempo juntando el zen de dos jugadores y no sumaba exp, 2026-10-12).
+ * Un paso hacia el drop que vale la pena (zen, joya, excelente o mejora). No levanta lo que cae al lado de otro jugador (es suyo: se pasaba el
+ * tiempo juntando el zen de otros y no sumaba exp).
  */
 let bagWarnedAt = 0;
 const BAG_WARN_MS = 60 * 60_000;
-export async function lootStep(fresh = false, fightNear = false): Promise<boolean> {
-  // Aviso (panel y log) para que el usuario vacíe la bolsa: con poco lugar solo entran cajas.
+export async function lootStep(): Promise<boolean> {
+  // Aviso (panel y log) para que el usuario vacíe la bolsa: sin lugar solo se levanta el zen.
   const room = bagRoom();
-  if (room < LOOT_GEAR_MIN_FREE && world.inventory.size && Date.now() - bagWarnedAt > BAG_WARN_MS) {
+  if (room < 2 && world.inventory.size && Date.now() - bagWarnedAt > BAG_WARN_MS) {
     bagWarnedAt = Date.now();
-    decide(`${room <= 0 ? 'La bolsa está llena' : `A la bolsa le quedan ${room} casillas`}: solo levanto cajas, Cristales y talismanes hasta que la vacíes.`, { kind: 'loot' });
+    decide(`${room <= 0 ? 'La bolsa está llena' : 'A la bolsa le queda una casilla'}: solo levanto zen hasta que la vacíes.`, { kind: 'loot' });
   }
   if (!drops.size) {
     lootState.looting = null;
@@ -141,20 +158,22 @@ export async function lootStep(fresh = false, fightNear = false): Promise<boolea
   const now = Date.now();
   const looting = lootState.looting;
   const lootingDrop = looting ? drops.get(looting.id) : undefined;
-  if (looting && (!lootingDrop || now - looting.since > (isBox(lootingDrop) ? LOOT_BOX_TIMEOUT_MS : LOOT_TIMEOUT_MS))) {
+  if (looting && (!lootingDrop || now - looting.since > LOOT_TIMEOUT_MS)) {
     if (drops.has(looting.id)) {
       log(`No llego al drop Id=${looting.id}, lo dejo.`);
       drops.delete(looting.id);
     }
     lootState.looting = null;
   }
-  const radius = fresh && fightNear ? 1 : LOOT_RADIUS;
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
-  const pool = fresh ? mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2)) : mine;
-  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, radius, fresh, bagRoom() >= LOOT_GEAR_MIN_FREE, lootPolicy.judge);
+  const pool = mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2));
+  const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, LOOT_RADIUS, RULES);
   if (!d) return false;
   if (!lootState.looting) {
+    const why = lootReason(d, RULES);
+    // Lo que no es zen se cuenta en el feed: qué se va a buscar y por qué.
+    if (why && why !== 'zen') decide(`Voy a levantar ${itemInfo(d.group, d.num).name}${d.level ? ` +${d.level}` : ''}${d.excellent ? ' excelente' : ''}: ${why === 'mejora' ? 'mejora lo que llevo puesto' : why}.`, { kind: 'loot', group: d.group, num: d.num });
     journal('pickup', `levantar ${d.group}/${d.num}${d.excellent ? ' exc' : ''} (Id=${d.id}) en (${d.x},${d.y})`, { itemId: d.id, group: d.group, num: d.num, excellent: !!d.excellent, x: d.x, y: d.y });
     lootState.looting = { id: d.id, since: now, drop: { group: d.group, num: d.num, x: d.x, y: d.y } };
   }

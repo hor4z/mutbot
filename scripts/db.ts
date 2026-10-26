@@ -85,14 +85,22 @@ export async function migrate(): Promise<void> {
 }
 
 // --- Seeds -------------------------------------------------------------------------------------------------------------------------------
-type Seed = { name: string; file: string; table: string; rows: (json: any) => object[] };
+/** `version`: se suma al checksum; subirla fuerza a recargar un seed cuando cambia el mapeo (no el archivo). */
+type Seed = { name: string; file: string; table: string; version?: number; rows: (json: any) => object[] };
 /** Los datos del juego (del cliente web): cada seed vacía su tabla y la vuelve a llenar desde su archivo. */
 const SEEDS: Seed[] = [
   { name: 'monsters', file: 'monsters.json', table: 'monsters', rows: (j: Record<string, unknown>[]) => j },
   { name: 'skills', file: 'skills.json', table: 'skills', rows: (j: Record<string, unknown>[]) => j },
   {
-    name: 'items', file: 'items.json', table: 'items',
-    rows: (j: { Group: number; Index: number; ItemName: string; X: number; Y: number }[]) => j.map((i) => ({ grp: i.Group, idx: i.Index, name: i.ItemName, w: i.X || 1, h: i.Y || 1, raw: JSON.stringify(i) })),
+    name: 'items', file: 'items.json', table: 'items', version: 3,
+    // El cliente nombra distinto las mismas columnas según el tipo de ítem (ReqLvl o RequiredLvl, Def o DefRate…): se unifican acá.
+    rows: (j: Record<string, any>[]) => j.map((i) => ({
+      grp: i.Group, idx: i.Index, name: i.ItemName, w: i.X || 1, h: i.Y || 1, raw: JSON.stringify(i),
+      equip_slot: i.ItemSlot ?? -1,
+      req_level: i.ReqLvl ?? i.RequiredLvl ?? 0,
+      cls: (i['DK/BK'] > 0 ? 1 : 0) | (i['DW/SM'] > 0 ? 2 : 0) | (i['Elf/ME'] > 0 ? 4 : 0) | (i.MG > 0 ? 8 : 0),
+      def: Math.max(i.Def || 0, i.DefRate || 0), dmg: i.DmgMax || 0, mag: i.MagicPwr || 0,
+    })),
   },
   {
     name: 'spawns', file: 'spawns.json', table: 'spawns',
@@ -107,7 +115,7 @@ export async function seed(force = false): Promise<void> {
   let ran = 0;
   for (const s of SEEDS) {
     const text = readFileSync(join(ROOT, 'seeds', s.file), 'utf8');
-    const sum = checksum(text);
+    const sum = checksum(`${text}#${s.version ?? 1}`);
     if (!force && done.get(s.name) === sum) continue;
     const rows = s.rows(JSON.parse(text));
     // Atómico: se llena una tabla nueva y se intercambia (EXCHANGE TABLES); si algo falla en el medio, la tabla vigente queda como estaba.
@@ -133,7 +141,7 @@ export async function status(): Promise<void> {
   for (const m of listMigrations()) console.log(`${applied.get(m.version) === m.sum ? 'aplicada ' : applied.has(m.version) ? 'CAMBIÓ   ' : 'pendiente'} ${m.file}`);
   const done = new Map((await query<{ name: string; sum: string; rows: number }>(`SELECT name, argMax(checksum, applied_at) AS sum, argMax(rows, applied_at) AS rows FROM schema_seeds GROUP BY name FORMAT JSONEachRow`)).map((r) => [r.name, r]));
   for (const s of SEEDS) {
-    const sum = checksum(readFileSync(join(ROOT, 'seeds', s.file), 'utf8'));
+    const sum = checksum(`${readFileSync(join(ROOT, 'seeds', s.file), 'utf8')}#${s.version ?? 1}`);
     const d = done.get(s.name);
     console.log(`${d?.sum === sum ? 'cargado  ' : d ? 'CAMBIÓ   ' : 'pendiente'} seed ${s.name}${d ? ` (${d.rows} filas)` : ''}`);
   }
