@@ -1,5 +1,6 @@
 /**
- * Importa UNA vez la configuración que vivía en archivos locales a la base, y archiva esos archivos (no los borra):
+ * Importa UNA vez la configuración que vivía en archivos locales a la base, y archiva esos archivos (no los borra; si un archivo está mal
+ * formado se avisa y se deja donde está):
  *   ~/.mubot/personaje.json   → tabla `character`
  *   ~/.mubot/directivas.json  → tabla `directives`
  *   ~/.mubot/estado.json      → ajuste `wanted`
@@ -10,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { deleteDirective, readCharacter, readDirectives, writeCharacter, writeDirective, writeSetting } from '../db';
+import { readCharacter, readDirectives, writeCharacter, writeDirective, writeSetting } from '../db';
 
 const DIR = join(homedir(), '.mubot');
 const ARCHIVO = join(DIR, 'archivo-local');
@@ -40,13 +41,12 @@ if (existsSync(estado)) {
   archive(estado);
 }
 const token = join(DIR, 'alta', 'proxy-token');
-if (existsSync(token)) { await writeSetting('proxy_token', readFileSync(token, 'utf8').trim()); console.log('proxy_token a la base'); }
+if (existsSync(token)) { await writeSetting('proxy_token', readFileSync(token, 'utf8').trim()); console.log('proxy_token a la base'); archive(token); }
 const envAlta = join(import.meta.dir, '..', '.env.alta');
 if (existsSync(envAlta)) {
   const m = /^MUBOT_ALTA_URL=(.+)$/m.exec(readFileSync(envAlta, 'utf8'));
-  if (m) { await writeSetting('worker_url', m[1]!.trim()); console.log(`worker_url: ${m[1]!.trim()}`); }
+  if (m) { await writeSetting('worker_url', m[1]!.trim()); console.log(`worker_url: ${m[1]!.trim()}`); archive(envAlta); }
 }
 console.log(moved.length ? `archivados en ${ARCHIVO}: ${moved.map((f) => f.split('/').pop()).join(', ')}` : 'nada local que archivar');
 const c = await readCharacter();
 console.log(`en la base: personaje ${c?.char ?? 'ninguno'}, ${Object.keys(await readDirectives()).length} directiva(s)`);
-void deleteDirective;

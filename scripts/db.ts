@@ -3,7 +3,8 @@
  *
  *   migrate          aplica las migrations pendientes de db/migrations/ en orden (NNNN_nombre.sql) y re-aplica las repetibles (R__nombre.sql, p. ej.
  *                    las vistas) cuando cambia su contenido. Una migration ya aplicada no se puede editar: se agrega una nueva.
- *   seed [--force]   carga los datos del juego de db/seeds/ en sus tablas (vacía la tabla y la llena); solo si el archivo cambió, o siempre con --force.
+ *   seed [--force]   carga los datos del juego de db/seeds/ en sus tablas (llena una tabla nueva y la intercambia, así nunca queda a medias); solo si el
+ *                    archivo cambió, o siempre con --force.
  *   status           qué migrations y seeds están aplicados y cuáles faltan.
  *   init             migrate + seed.
  *
@@ -11,7 +12,7 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DB_NAME, DB_URL, DB_USER, DB_PASSWORD } from '../db';
+import { DB_NAME, DB_URL, DB_USER, DB_PASSWORD, dbOn } from '../db';
 
 const ROOT = join(import.meta.dir, '..', 'db');
 const headers = { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD };
@@ -109,8 +110,16 @@ export async function seed(force = false): Promise<void> {
     const sum = checksum(text);
     if (!force && done.get(s.name) === sum) continue;
     const rows = s.rows(JSON.parse(text));
-    await query(`TRUNCATE TABLE ${s.table}`);
-    await insert(s.table, rows);
+    // Atómico: se llena una tabla nueva y se intercambia (EXCHANGE TABLES); si algo falla en el medio, la tabla vigente queda como estaba.
+    const tmp = `${s.table}__new`;
+    await query(`DROP TABLE IF EXISTS ${tmp}`);
+    await query(`CREATE TABLE ${tmp} AS ${s.table}`);
+    try {
+      await insert(tmp, rows);
+      await query(`EXCHANGE TABLES ${s.table} AND ${tmp}`);
+    } finally {
+      await query(`DROP TABLE IF EXISTS ${tmp}`);
+    }
     await insert('schema_seeds', [{ name: s.name, checksum: sum, rows: rows.length }]);
     console.log(`db: seed ${s.name}: ${rows.length} filas`);
     ran++;
@@ -131,6 +140,10 @@ export async function status(): Promise<void> {
 }
 
 if (import.meta.main) {
+  if (!dbOn()) {
+    console.error('Falta MUBOT_DB_URL: corré esto con `bun run db:migrate` / `db:seed` (cargan .env.db) o con `bun --env-file=.env.db scripts/db.ts <comando>`.');
+    process.exit(2);
+  }
   const [cmd, flag] = process.argv.slice(2);
   if (cmd === 'migrate') await migrate();
   else if (cmd === 'seed') await seed(flag === '--force');

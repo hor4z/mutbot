@@ -11,7 +11,7 @@
  * - Nunca dos sesiones de la cuenta: el bot va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
  * - Desconectar desde el panel = el usuario va a jugar a mano: no se reconecta solo (`~/.mubot/estado.json`).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
- * - Conexión siempre por el worker (workers/edge): URL en MUBOT_ALTA_URL de .env.alta, token en ~/.mubot/alta/proxy-token.
+ * - Conexión siempre por el worker (workers/edge): URL y token en la tabla `settings` de la base (`worker_url`, `proxy_token`).
  */
 import { closeSync, fstatSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -30,7 +30,6 @@ const ROOT = import.meta.dir;
 const PORT = Number(process.env.ESTACION_PORT ?? 8787);
 const DIR = join(homedir(), '.mubot');
 const LOG_DIR = join(DIR, 'logs');
-const ALTA_DIR = join(DIR, 'alta');
 const LOG_ROTATE_BYTES = 50 * 1024 * 1024;
 const RECONNECT_GAP_MS = 5_000;
 const FROZEN_RESTART_MS = 10 * 60_000;
@@ -41,12 +40,19 @@ const say = (...a: unknown[]) => console.log('[estación]', ...a);
 let personaje = null as CharacterRow | null;
 let settings = {} as Record<string, string>;
 let dbOk = false as boolean;
+let configLoaded = false;
 async function refreshConfig() {
   if (!dbOn()) { dbOk = false; return; }
   try {
-    personaje = await readCharacter();
-    settings = await readSettings();
+    // Las dos lecturas juntas: si una falla no queda la configuración a medias (personaje nuevo con ajustes viejos).
+    const [p, s] = await Promise.all([readCharacter(), readSettings()]);
+    personaje = p;
+    settings = s;
     dbOk = true;
+    // "Lo quiero conectado" se toma de la base la primera vez que se lee (aunque la base haya tardado en responder al arrancar); después manda
+    // lo que se decide acá y se guarda con setWanted. Si una escritura quedó pendiente, se reintenta.
+    if (!configLoaded) { configLoaded = true; wanted = s.wanted === '1'; }
+    else if (wantedDirty) setWanted(wanted);
   } catch (e) {
     if (dbOk) say(`no pude leer la configuración de la base (${(e as Error).message}); sigo con la última que tengo.`);
     dbOk = false;
@@ -84,9 +90,12 @@ const bot: Bot = { pid: null, status: 'off', msg: 'desconectado', state: null, w
 
 // `wanted`: el usuario lo quiere conectado (ajuste `wanted` de la base). Un desconectado a mano deja de ser deseado.
 let wanted = false;
+/** La última escritura de `wanted` falló: se reintenta cuando la base vuelva (refreshConfig). */
+let wantedDirty = false;
 const setWanted = (v: boolean) => {
   wanted = v;
-  writeSetting('wanted', v ? '1' : '0').catch((e) => say(`no pude guardar "lo quiero conectado" en la base (${(e as Error).message})`));
+  wantedDirty = true;
+  writeSetting('wanted', v ? '1' : '0').then(() => { wantedDirty = false; }).catch((e) => say(`no pude guardar "lo quiero conectado" en la base (${(e as Error).message}); lo reintento.`));
 };
 
 // --- Bot que ya corre (el nuestro o lanzado a mano) -------------------------------------------------------------------
@@ -303,7 +312,6 @@ async function postBody(req: Request, max = 2048): Promise<{ raw: unknown } | { 
 }
 
 await refreshConfig();
-wanted = settings.wanted === '1';
 setInterval(() => void refreshConfig(), 15_000);
 syncRunning();
 setInterval(syncRunning, 2000);

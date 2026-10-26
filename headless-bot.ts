@@ -44,7 +44,7 @@ import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
 import { trackPanelPackets } from './events';
-import { loadGameData } from './gamedata';
+import { MissingGameDataError, loadGameData } from './gamedata';
 import { revertBrain, takeBrain, watchBrain } from './hot';
 import type { LoopResult } from './farm-loop';
 import { drops, lootState } from './loot-state';
@@ -72,6 +72,8 @@ const EXIT_BLOCKED = 4;
 const EXIT_LOGIN_REFUSED = 5;
 // El personaje no está en la cuenta: la estación lo muestra.
 const EXIT_CREATE_FAILED = 6;
+// Faltan los datos del juego en la base (db:seed): no se arregla reintentando.
+const EXIT_NO_GAME_DATA = 7;
 
 // Tras una sesión trabada (ciego), esto antes de volver a entrar.
 const BLIND_WAIT_MS = 5_000;
@@ -155,9 +157,6 @@ async function main() {
   console.log(`\nBot headless contra proxy=${PROXY.replace(/\/p\/[^/]+\//, '/p/***/')} connectServer=${CS_HOST}:${CS_PORT}`);
   console.log(`Cuenta=${USERNAME} Personaje=${CHAR_NAME}\n`);
 
-  // Los datos del juego (monstruos, skills, ítems, spawns) salen de la base: sin ellos el bot no sabe qué es un monstruo.
-  await loadGameData();
-
   if (WS_PORT_ARG) {
     const wsPort = parseInt(WS_PORT_ARG);
     bot.statusServer = startStatusServer({ port: wsPort });
@@ -170,6 +169,18 @@ async function main() {
       bot.statusServer?.broadcastPanelState(buildPanelState(now));
     }, 1000);
   }
+
+  // Los datos del juego (monstruos, skills, ítems, spawns) salen de la base: sin ellos el bot no sabe qué es un monstruo. El panel ya está arriba
+  // (la estación ve que el bot vive y qué espera); si la base responde pero faltan los seeds, se sale enseguida.
+  bot.doing = 'esperando los datos del juego (base)';
+  try {
+    await loadGameData();
+  } catch (e) {
+    if (!(e instanceof MissingGameDataError)) throw e;
+    console.error(`${e.message}. No arranco.`);
+    process.exit(EXIT_NO_GAME_DATA);
+  }
+  bot.doing = 'conectando';
 
   watchBrain();
 

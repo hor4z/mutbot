@@ -12,7 +12,7 @@ import { onGameData, skills as skillsData } from './gamedata';
 
 // --- Pociones ---------------------------------------------------------------
 // Las pociones del set clásico están en el Group 14 (curación 1-3, mana 4-6,
-// SD 35-37) y el Group 13 (Potion of Illusion). Salen de data/items.json.
+// SD 35-37) y el Group 13 (Potion of Illusion). Salen de la tabla `items` de la base.
 // Para un bot que solo necesita sobrevivir, la Small Healing Potion (14/1) es
 // la mejor: se compra barata, se stacks (X=1 Y=1) y alcanza para todo el farm.
 const POTION_GROUP = 14;

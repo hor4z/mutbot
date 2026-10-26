@@ -23,7 +23,6 @@ export const items: ItemRow[] = [];
 export const spawns: Record<string, Spawn[]> = {};
 
 let loaded = false;
-export const gameDataReady = () => loaded;
 const subscribers = new Map<string, () => void>();
 
 /** Avisa cuando los datos están (o ya están): `key` evita duplicar la suscripción si el módulo se recarga en caliente. */
@@ -34,6 +33,9 @@ export function onGameData(key: string, fn: () => void) {
 
 const num = (v: unknown) => Number(v);
 
+/** Faltan datos en la base (no se corrió `bun run db:seed`): no se arregla reintentando. */
+export class MissingGameDataError extends Error {}
+
 /** Lee las cuatro tablas y avisa a los suscriptores. Tira si la base no responde o las tablas están vacías (falta `bun run db:seed`). */
 export async function loadGameDataOnce(): Promise<void> {
   const [m, s, i, sp] = await Promise.all([
@@ -42,7 +44,8 @@ export async function loadGameDataOnce(): Promise<void> {
     dbRows<Record<string, unknown>>('SELECT grp, idx, name, w, h FROM items'),
     dbRows<{ map: number; type: number; x1: number; y1: number; x2: number; y2: number; qty: number }>('SELECT map, type, x1, y1, x2, y2, qty FROM spawns'),
   ], );
-  if (!m.length) throw new Error('la tabla monsters está vacía: falta `bun run db:seed`');
+  const vacias = [['monsters', m], ['skills', s], ['items', i], ['spawns', sp]].filter(([, rows]) => !(rows as unknown[]).length).map(([n]) => n);
+  if (vacias.length) throw new MissingGameDataError(`las tablas ${vacias.join(', ')} están vacías: falta correr \`bun run db:seed\``);
   monsters.length = 0;
   for (const r of m) monsters.push(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'Name' ? String(v) : num(v)])) as unknown as MonsterRow);
   skills.length = 0;
@@ -55,7 +58,7 @@ export async function loadGameDataOnce(): Promise<void> {
   for (const fn of subscribers.values()) fn();
 }
 
-/** Carga los datos esperando a la base todo lo que haga falta (cada 5 s): sin ellos el bot no arranca. */
+/** Carga los datos esperando a la base todo lo que haga falta (cada 5 s); si la base responde pero faltan los seeds, falla enseguida. */
 export async function loadGameData(): Promise<void> {
   if (!dbOn()) throw new Error('falta MUBOT_DB_URL (.env.db): los datos del juego salen de la base');
   for (let n = 1; ; n++) {
@@ -64,6 +67,7 @@ export async function loadGameData(): Promise<void> {
       log(`Datos del juego cargados de la base: ${monsters.length} monstruos, ${skills.length} skills, ${items.length} ítems, ${Object.values(spawns).reduce((t, l) => t + l.length, 0)} spawns.`);
       return;
     } catch (e) {
+      if (e instanceof MissingGameDataError) throw e;
       if (n === 1 || n % 12 === 0) log(`Datos del juego: no pude leerlos de la base (${(e as Error).message}); reintento cada 5 s.`);
       await sleep(5_000);
     }

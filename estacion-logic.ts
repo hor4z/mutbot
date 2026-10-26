@@ -28,6 +28,7 @@ export type BotStatus = 'off' | 'starting' | 'on' | 'stopping' | 'in-use' | 'fai
 
 /** Cómo se lee la salida del bot. */
 export function exitStatus(code: number | null): { status: BotStatus; msg: string } {
+  if (code === 7) return { status: 'failed', msg: 'faltan los datos del juego en la base: corré `bun run db:seed` (y `db:migrate` si hace falta).' };
   if (code === 6) return { status: 'failed', msg: 'la cuenta no tiene ese personaje en el Slow (¿nombre mal escrito?).' };
   if (code === 3) return { status: 'in-use', msg: 'la cuenta ya está conectada en otro lado (¿la pestaña del navegador?). Cerrala y volvé a conectar.' };
   if (code === 4) return { status: 'failed', msg: 'el server bloqueó la cuenta (AccountBlocked): no la vuelvo a conectar. Consultá a los admins.' };
@@ -38,7 +39,7 @@ export function exitStatus(code: number | null): { status: BotStatus; msg: strin
 }
 
 /** Códigos de salida que no se arreglan reintentando. */
-export const NO_RETRY_CODES = [2, 4, 5, 6] as const;
+export const NO_RETRY_CODES = [2, 4, 5, 6, 7] as const;
 
 /** Pedido del navegador a la estación. Todo lo demás se rechaza. */
 export type StationRequest =
