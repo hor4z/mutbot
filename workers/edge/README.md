@@ -7,9 +7,9 @@ Worker de Cloudflare de la estación. Hace dos cosas:
    privada (`~/.mubot/alta/private.jwk`, nunca sale del equipo) y agrega la cuenta con `db.addChar` (`alta-sync.ts`).
    La cuenta tiene que existir ya en el juego: si el personaje no existe, el bot lo informa al entrar.
 2. **Proxy WebSocket.** `wss://<worker>/p/<PROXY_TOKEN>/ws?host=H&port=P` abre la conexión con el servidor (`UPSTREAM_HOST`,
-   su `/ws`) y pasa los mensajes. Solo acepta los destinos de `ALLOWED_HOSTS`. Para que los bots lo usen:
-   `MUBOT_PROXY=wss://<worker>/p/$(cat ~/.mubot/alta/proxy-token)/ws bun run estacion` (el token queda en la línea de
-   comandos de los bots, visible con `ps` para los usuarios de este equipo).
+   su `/ws`) y pasa los mensajes. Solo acepta los destinos de `ALLOWED_HOSTS`. La estación arma esa URL con los ajustes `worker_url` y
+   `proxy_token` de la tabla `settings` de la base (el token queda en la línea de comandos de los bots, visible con `ps` para los usuarios de
+   este equipo).
 
 ## Primer despliegue (lo hace el usuario; nada se publica solo)
 
@@ -26,7 +26,8 @@ bunx wrangler secret put PROXY_TOKEN   < ~/.mubot/alta/proxy-token
 bun run deploy
 ```
 
-Después, en la raíz: `echo 'MUBOT_ALTA_URL=https://mutbot-edge.<tu-subdominio>.workers.dev' > .env.alta` (git lo ignora) y reiniciar la
-estación. La clave de acceso del formulario es `~/.mubot/alta/form-token`.
+Después, guardar la URL del worker y el token en la base (ajustes `worker_url` y `proxy_token` de la tabla `settings`; `bun run db:importar`
+los pasa desde los archivos viejos `.env.alta` y `~/.mubot/alta/proxy-token`) y reiniciar la estación. La clave de acceso del formulario es
+`~/.mubot/alta/form-token`.
 
 Desarrollo local: `bun run edge:dev`. Typecheck: `bun run tsc` (raíz) corre también el del worker.

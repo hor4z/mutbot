@@ -5,7 +5,7 @@
  *     una sin medir (exploración, la de más densidad cerca). Se re-decide cada REDECIDE_MS.
  *  3. Si el área está vacía EMPTY_MS estando ahí, se marca como vacía un rato y se busca otra. Si el personaje muere, esa zona se evita.
  *  4. Si el mapa no tiene zonas que sirvan, cambia de mapa por warp (el de mejor rendimiento medido o, sin datos, el de más monstruos de valor).
- * Cada decisión se explica con `decide()`. Los monstruos custom del Slow (tipos >= 300) están en la tabla del cliente (`data/monsters.json`)
+ * Cada decisión se explica con `decide()`. Los monstruos custom del Slow (tipos >= 300) están en la tabla `monsters` de la base (la del cliente)
  * pero no en `spawns.json`, que no los ubica: lo que se ve en pantalla manda (`noteSeen`) y se suma a las candidatas.
  * El estado (zona elegida, zonas evitadas, lo visto) vive en `globalThis`: sobrevive a la recarga en caliente del cerebro (hot.ts).
  */
@@ -84,7 +84,7 @@ const S: AreaState = ((globalThis as { __area?: AreaState }).__area ??= { cur: n
 export const lastPlace: { v: Place | null } = { v: null };
 
 const rand = Math.random;
-const areaName = (map: number, p: Pos) => `${mapName(map)} ${p.x >> 4},${p.y >> 4}`;
+const areaName = (map: number, p: Pos) => `${mapName(map)}, zona ${p.x >> 4},${p.y >> 4}`;
 const here = (): Pos => ({ x: world.x, y: world.y });
 
 /** Lo que se ve ahora: una celda con monstruos atacables es una candidata aunque el spawns.json no la tenga (monstruos custom). */

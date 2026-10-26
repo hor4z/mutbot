@@ -6,17 +6,13 @@
  * responde se reintenta cada vez más espaciado y, si se acumulan más de MAX_ROWS, se tiran las más viejas.
  * Sin MUBOT_DB_URL (lo pasa la estación desde .env.db) no hace nada.
  */
+import { dbInsert, dbOn, dbRows } from './db';
 import { bot, hooks, world } from './state';
 import { log } from './util';
 
 export type Table = 'ticks' | 'events' | 'players_seen';
 type Row = Record<string, unknown>;
 
-const DB_URL = process.env.MUBOT_DB_URL ?? '';
-/** Base del Slow; la `mubot` del mismo servidor es el archivo de Fast y no se toca. */
-const DB_NAME = process.env.MUBOT_DB_NAME ?? 'mubot_slow';
-const DB_USER = process.env.MUBOT_DB_USER ?? 'mubot';
-const DB_PASSWORD = process.env.MUBOT_DB_PASSWORD ?? '';
 const FLUSH_MS = 5_000;
 export const MAX_ROWS = 5_000;
 
@@ -36,17 +32,10 @@ export const VERSION = (() => {
   } catch { return 'desconocida'; }
 })();
 
-/** Consulta de solo lectura a la base (FORMAT JSONEachRow); [] si no hay base o falla. */
+/** Consulta de solo lectura a la base (db.ts); [] si no hay base o falla (el que consulta sigue con lo que tiene). */
 export async function queryDb<T = Record<string, unknown>>(sql: string): Promise<T[]> {
   if (!telemetryOn()) return [];
-  try {
-    const r = await fetch(`${DB_URL}/?database=${DB_NAME}`, {
-      method: 'POST', body: sql, signal: AbortSignal.timeout(5_000),
-      headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD },
-    });
-    if (!r.ok) return [];
-    return (await r.text()).trim().split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l) as T);
-  } catch { return []; }
+  try { return await dbRows<T>(sql, 5_000); } catch { return []; }
 }
 
 /** Una sesión = un proceso del bot. */
@@ -89,7 +78,7 @@ let retryAt = 0;
 let warned = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
-export const telemetryOn = () => DB_URL !== '';
+export const telemetryOn = dbOn;
 
 /** Fecha en el formato que ClickHouse acepta para DateTime64(3) en JSONEachRow. */
 export const chTime = (ms: number) => new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
@@ -112,14 +101,8 @@ export function trackEvent(kind: string, text = '', num1 = 0, num2 = 0, data: Ro
 async function flush() {
   if (Date.now() < retryAt || !buffer.size) return;
   for (const [t, rows] of buffer.take()) {
-    const body = rows.map((r) => JSON.stringify(r)).join('\n');
-    const url = `${DB_URL}/?database=${DB_NAME}&query=${encodeURIComponent(`INSERT INTO ${t} FORMAT JSONEachRow`)}&input_format_skip_unknown_fields=1`;
     try {
-      const r = await fetch(url, {
-        method: 'POST', body, signal: AbortSignal.timeout(4_000),
-        headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD },
-      });
-      if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
+      await dbInsert(t, rows, 4_000);
       if (warned) log('Datos: la base volvió, sigo mandando.');
       warned = false;
       fails = 0;

@@ -126,13 +126,13 @@ export function bagRoom(): number {
  * suyo: Hume se pasaba el tiempo juntando el zen de dos jugadores y no sumaba exp, 2026-10-12).
  */
 let bagWarnedAt = 0;
-const BAG_WARN_MS = 10 * 60_000;
+const BAG_WARN_MS = 60 * 60_000;
 export async function lootStep(fresh = false, fightNear = false): Promise<boolean> {
   // Aviso (panel y log) para que el usuario vacíe la bolsa: con poco lugar solo entran cajas.
   const room = bagRoom();
   if (room < LOOT_GEAR_MIN_FREE && world.inventory.size && Date.now() - bagWarnedAt > BAG_WARN_MS) {
     bagWarnedAt = Date.now();
-    decide(`Bolsa casi llena (${room} casillas libres): solo levanto cajas, Cristales y talismanes hasta que la vacíes.`);
+    decide(`${room <= 0 ? 'La bolsa está llena' : `A la bolsa le quedan ${room} casillas`}: solo levanto cajas, Cristales y talismanes hasta que la vacíes.`, { kind: 'loot' });
   }
   if (!drops.size) {
     lootState.looting = null;

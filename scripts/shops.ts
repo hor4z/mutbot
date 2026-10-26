@@ -7,6 +7,10 @@
 import { readFileSync } from 'node:fs';
 import { decodeItemDetail } from '../protocol097';
 import { itemInfo } from '../panel-logic';
+import { loadGameData } from '../gamedata';
+
+// Los datos del juego salen de la base (tablas sembradas con `bun run db:seed`).
+await loadGameData();
 
 const file = process.argv[2];
 if (!file) { console.error('uso: bun scripts/shops.ts <frames.ndjson>'); process.exit(2); }

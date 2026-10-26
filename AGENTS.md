@@ -29,7 +29,11 @@ bun run tsc          # tipos (bot, UI y worker): tiene que quedar limpio antes d
 bun run estacion     # estación + panel en http://127.0.0.1:8787 (conecta y mantiene vivo al personaje)
 bun run bot          # el bot suelto (lo normal es lanzarlo desde la estación)
 bun run db:up        # ClickHouse local (docker); la base real está en el servidor de .env.db
-bun run db:init      # crea la base `mubot_slow` (esquema y vistas de db/); no toca `mubot` (Fast)
+bun run db:migrate   # aplica las migrations pendientes de db/migrations/ (crea la base `mubot_slow` si falta; no toca `mubot`, la de Fast)
+bun run db:seed      # carga los datos del juego de db/seeds/ (solo si cambiaron; --force para recargar)
+bun run db:status    # qué migrations y seeds están aplicados
+bun run db:init      # migrate + seed
+bun run db:importar  # una vez: pasa a la base lo que vivía en ~/.mubot (personaje, directivas, token) y archiva esos archivos
 bun run ui:dev       # UI con HMR de React (proxy a la estación)
 bun run ui:build     # compila la UI a estacion.html (un solo archivo que sirve la estación)
 MU_SRC=~/self/mu/src bun run extract   # regenera packets/ (generado: no se edita a mano)
@@ -44,7 +48,7 @@ El bot son dos capas (`hot.ts`). El **núcleo** queda siempre vivo y conectado; 
 
 | Capa | Archivos | Qué hace |
 | --- | --- | --- |
-| Núcleo | `headless-bot.ts`, `config.ts`, `state.ts`, `connection.ts`, `world.ts`, `actions.ts`, `events.ts`, `chat.ts`, `liveness.ts`, `protocol097.ts`, `terrain.ts`, `telemetry.ts`, `journal.ts`, `panel.ts`, `panel-logic.ts`, `panel-protocol.ts`, `ws-server.ts`, `directivas.ts`, `loot-state.ts`, `hot.ts`, `net/`, `packets/` | sesión, protocolo, estado del mundo (`world`, `bot`), panel, base |
+| Núcleo | `headless-bot.ts`, `config.ts`, `state.ts`, `db.ts`, `gamedata.ts`, `connection.ts`, `world.ts`, `actions.ts`, `events.ts`, `chat.ts`, `liveness.ts`, `protocol097.ts`, `terrain.ts`, `telemetry.ts`, `journal.ts`, `panel.ts`, `panel-logic.ts`, `panel-protocol.ts`, `ws-server.ts`, `directivas.ts`, `loot-state.ts`, `hot.ts`, `net/`, `packets/` | sesión, protocolo, estado del mundo (`world`, `bot`), panel, base |
 | Cerebro | `brain.ts` (entrada), `farm-loop.ts`, `area.ts`, `learning.ts`, `combat.ts`, `power.ts`, `loot.ts`, `loop-ctx.ts`, `progress.ts`, `shop-scout.ts`, `path.ts`, `farming.ts`, `spawns.ts`, `warps.ts` | qué decide: dónde farmear, a quién pegar, qué skill, puntos |
 
 Reglas de la recarga:
@@ -53,7 +57,7 @@ Reglas de la recarga:
   `brain.ts` (`install`). El estado compartido (botín, mundo) vive en el núcleo para sobrevivir a la recarga.
 - Un archivo nuevo del cerebro hay que sumarlo a `BRAIN` en `hot.ts`. Si no compila o falla al correr, el bot se queda con el cerebro
   anterior y lo avisa. Un cambio en el núcleo **sí pide reiniciar** el bot (el log lo avisa).
-- Las perillas numéricas se cambian sin tocar código: `~/.mubot/directivas.json` o `POST /api/directivas` (`directivas.ts`).
+- Las perillas numéricas se cambian sin tocar código: `POST /api/directivas` o la tabla `directives` de la base (`directivas.ts`; el bot la relee cada 5 s).
 
 ## Cómo decide el bot (`farm-loop.ts`, un tick = una decisión)
 
@@ -72,9 +76,9 @@ Skills: `combat.ts` usa el primero de `ATTACK_SKILL_POOL` (`config.ts`) que el p
 
 ## Estación y panel
 
-`estacion.ts` (un personaje, `~/.mubot/personaje.json` con `{ user, pass, char }`): lanza el bot detached (`~/.mubot/logs/<char>.log`),
+`estacion.ts` (un personaje, tabla `character` de la base con `{ user, pass, char }`): lanza el bot detached (`~/.mubot/logs/<char>.log`),
 lo adopta si ya corre, lo mantiene vivo con espera creciente, y sirve el panel y la API. Solo 127.0.0.1; los POST exigen el Origin
-propio y JSON. La conexión va siempre por el worker (`workers/edge`; URL en `.env.alta`, token en `~/.mubot/alta/proxy-token`).
+propio y JSON. La conexión va siempre por el worker (`workers/edge`; URL y token en la tabla `settings`: `worker_url`, `proxy_token`). El estado "lo quiero conectado" es el ajuste `wanted`.
 
 | Ruta | Qué |
 | --- | --- |
@@ -87,16 +91,27 @@ propio y JSON. La conexión va siempre por el worker (`workers/edge`; URL en `.e
 La UI (`ui/src`, React + Tailwind 4 con el tema de sherpa en `index.css`) muestra el estado, el radar y el feed de decisiones. El bot
 habla con la estación por un WebSocket local (`--ws-port 8791`, `ws-server.ts`): estado cada 1 s y órdenes de lista cerrada.
 
-## Datos y aprendizaje
+## Datos, migrations y seeds
 
-ClickHouse, base **`mubot_slow`** (`db/schema.sql`, `db/views.sql`; la `mubot` del mismo servidor es el archivo de Fast y no se toca).
-`telemetry.ts` manda `ticks` (cada 5 s: posición, exp/min, skill, zona), `events` (`decide`, `kill` con su exp, `death`, `flee`,
+**Nada vive en archivos locales**: ni la configuración, ni el estado, ni los datos del juego. Todo está en ClickHouse, base **`mubot_slow`**
+(la `mubot` del mismo servidor es el archivo de Fast y no se toca). Lo único local son los logs (`~/.mubot/logs`), la caché binaria del
+terreno y las credenciales de la conexión a la base (`.env.db`: `MUBOT_DB_URL/USER/PASSWORD`, y `MUBOT_DB_NAME`, por defecto `mubot_slow`).
+
+- **Migrations** (`db/migrations/`, las aplica `bun run db:migrate`, registro en `schema_migrations`): `NNNN_nombre.sql` se aplican en orden y no se
+  editan una vez aplicadas (se agrega otra); `R__nombre.sql` son repetibles y se re-aplican cuando cambian (las vistas, `R__views.sql`).
+  `0001` telemetría, `0002` configuración (`directives`, `character`, `settings`), `0003` datos del juego.
+- **Seeds** (`db/seeds/`, los carga `bun run db:seed`, registro en `schema_seeds`): los datos del cliente web, que el bot lee al arrancar
+  (`gamedata.ts`): `monsters` (353, con los custom del Slow, de la constante `xMt` del bundle de `mu.mormon.garden`), `skills`, `items` y
+  `spawns` (el `spawns.json` del repo del cliente: es el estándar y no ubica los monstruos custom). Cada seed vacía su tabla y la rellena; solo
+  corre si el archivo cambió. Sin los datos el bot no arranca (espera a la base): `gamedata.ts` los carga con reintentos.
+- **Configuración**: `directives` (perillas en caliente), `character` (cuenta, clave y personaje; la clave va en texto plano, decisión del
+  usuario porque la base está en su red) y `settings` (`worker_url`, `proxy_token`, `wanted`). Son ReplacingMergeTree por `updated_at` y se
+  leen con `argMax`; `db.ts` tiene las funciones (`readDirectives`, `readCharacter`, `readSettings`…).
+
+Telemetría: `telemetry.ts` manda `ticks` (cada 5 s: posición, exp/min, skill, zona), `events` (`decide`, `kill` con su exp, `death`, `flee`,
 `monster_seen`, …) y `players_seen`, por lotes y sin frenar el juego. Vistas: `v_cell_rate` (exp/min por zona de 16×16), `v_deaths`,
 `v_kill_value` (exp por tipo de monstruo), `v_skill_rate`, `v_outcome` (exp/min antes y después de cada decisión), `v_monsters`.
-Variables: `MUBOT_DB_URL/USER/PASSWORD` (de `.env.db`), `MUBOT_DB_NAME` (por defecto `mubot_slow`). `scripts/report.ts` resume una hora.
-
-**Datos del cliente:** `data/monsters.json` es la tabla del cliente web (353 monstruos, con los custom del Slow: se saca del bundle de
-`mu.mormon.garden`, constante `xMt`); `data/spawns.json` es la del repo del cliente y es la estándar, no ubica los monstruos custom.
+`scripts/report.ts` resume una hora.
 
 ## Reglas de código
 

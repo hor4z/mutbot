@@ -17,7 +17,7 @@ import { warp } from './warps';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 
 /**
- * NPC de pueblo (tipos 200-299 del cliente, data/monsters.json) con los que se prueba hablar: todos menos los que no atienden (estatuas,
+ * NPC de pueblo (tipos 200-299 del cliente, tabla `monsters` de la base) con los que se prueba hablar: todos menos los que no atienden (estatuas,
  * altares, interruptores, guardias, el Golden Archer, el estadio) y Baz, el baúl (otra ventana, no una tienda).
  */
 const NO_TALK = new Set([...Array.from({ length: 10 }, (_, i) => 200 + i), 215, 216, 217, 218, 219, 220, 221, 222, 224, 233, 236, 239, 240, 241, 247, 249, 252, 260]);
@@ -87,7 +87,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
     const name = monsterName(npc.type);
     trackEvent('shop_list', name, got.items?.length ?? 0, npc.type, { npc: npc.type, map: world.map, x: npc.x, y: npc.y, window: got.window, items: got.items ?? [] });
     st.visited.push(`${name}: ${got.items ? `${got.items.length} ítems` : got.window ? 'ventana sin tienda' : 'sin respuesta'}`);
-    log(`Tiendas: ${name} (${npc.x},${npc.y}) → ${got.items ? got.items.map((i) => i.name).join(', ') : got.window ? `ventana ${got.window}` : 'sin respuesta'}`);
+    log(`Tiendas: ${name} (${npc.x},${npc.y}): ${got.items ? got.items.map((i) => i.name).join(', ') : got.window ? `ventana ${got.window}` : 'sin respuesta'}`);
     sendToGS(new DataView(buildCloseNpc().buffer));
     await sleep(700);
     return true;

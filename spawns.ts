@@ -1,18 +1,20 @@
 /**
- * Dónde nacen los monstruos (data/spawns.json: copia de `packages/game-data/reference/spawns.json` del cliente, por mapa: tipo, rectángulo
+ * Dónde nacen los monstruos (tabla `spawns` de la base, sembrada desde la `reference/spawns.json` del cliente, por mapa: tipo, rectángulo
  * y cantidad). Con el terreno sirve para elegir un destino concreto en vez de explorar a ciegas: la celda más densa de monstruos que el
  * personaje puede pelear, caminable y fuera de zona segura. Coincide con lo medido en el Slow (los Giants de Lorencia nacen en [8,11,60,80]).
  */
-import spawnsData from './data/spawns.json';
-import monstersData from './data/monsters.json';
+import { monsters, onGameData, spawns as spawnsData, type Spawn } from './gamedata';
 import { isSafeZone, isWalkable, TERRAIN_SIZE } from './terrain';
 import { dist, type Pos } from './util';
 
-export type Spawn = { type: number; rect: [number, number, number, number]; qty: number };
-const BY_MAP = spawnsData as unknown as Record<string, Spawn[]>;
-const LEVEL = new Map<number, number>((monstersData as { Numb: number; Level: number }[]).map((m) => [m.Numb, m.Level]));
+export type { Spawn };
+const LEVEL = new Map<number, number>();
+onGameData('spawns', () => {
+  LEVEL.clear();
+  for (const m of monsters) LEVEL.set(m.Numb, m.Level);
+});
 
-export const spawnsOf = (map: number): Spawn[] => BY_MAP[String(map)] ?? [];
+export const spawnsOf = (map: number): Spawn[] => spawnsData[String(map)] ?? [];
 /** Nivel del monstruo según la tabla del cliente (undefined: no está). */
 export const levelOf = (type: number) => LEVEL.get(type);
 /** Los tipos 200-299 son NPC de pueblo, no monstruos. */

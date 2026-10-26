@@ -1,4 +1,5 @@
 /** Piezas base del panel con el lenguaje de sherpa (src/widgets.rs): panel `soft` sin borde, etiqueta de sección, badge en pastilla, botón y barra. */
+import type { LucideIcon } from "lucide-react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export const cn = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
@@ -8,8 +9,13 @@ export function Panel({ className, children }: { className?: string; children: R
 }
 
 /** Etiqueta de sección: mono, mayúsculas, `faint` (sherpa: label). */
-export function Label({ children }: { children: ReactNode }) {
-  return <h2 className="font-mono text-[10.5px] leading-4 font-medium tracking-[0.08em] text-faint uppercase">{children}</h2>;
+export function Label({ icon: Icon, children }: { icon?: LucideIcon; children: ReactNode }) {
+  return (
+    <h2 className="flex items-center gap-1.5 font-mono text-[10.5px] leading-4 font-medium tracking-[0.08em] text-faint uppercase">
+      {Icon && <Icon size={12} aria-hidden />}
+      {children}
+    </h2>
+  );
 }
 
 export type Tone = "default" | "success" | "warning" | "danger" | "info";
@@ -53,12 +59,13 @@ export function Button({ variant = "default", size = "sm", className, ...p }: Bu
 }
 
 /** Barra con el valor encima (vida, maná). */
-export function Bar({ value, max, tone, label }: { value: number; max: number; tone: "danger" | "info"; label: string }) {
+export function Bar({ value, max, tone, label, icon: Icon }: { value: number; max: number; tone: "danger" | "info"; label: string; icon?: LucideIcon }) {
   const pct = max > 0 ? Math.max(0, Math.min(100, (100 * value) / max)) : 0;
   return (
     <div className="relative h-5 overflow-hidden rounded-sm bg-hover" title={`${label} ${value} / ${max}`}>
       <i className={cn("absolute inset-y-0 left-0 transition-[width] duration-300", tone === "danger" ? "bg-[color-mix(in_srgb,var(--danger)_70%,var(--paper))]" : "bg-[color-mix(in_srgb,var(--info)_70%,var(--paper))]")} style={{ width: `${pct}%` }} />
-      <span className="relative z-10 px-2 font-mono text-sm leading-5">
+      <span className="relative z-10 flex items-center gap-1.5 px-2 font-mono text-sm leading-5">
+        {Icon && <Icon size={12} aria-hidden />}
         {label} {value}
         <small className="text-muted"> / {max}</small>
       </span>
@@ -67,10 +74,13 @@ export function Bar({ value, max, tone, label }: { value: number; max: number; t
 }
 
 /** Par etiqueta / valor en mono. */
-export function Stat({ label, children }: { label: string; children: ReactNode }) {
+export function Stat({ label, icon: Icon, children }: { label: string; icon?: LucideIcon; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-faint">{label}</dt>
+      <dt className="flex items-center gap-1 text-xs text-faint">
+        {Icon && <Icon size={11} aria-hidden />}
+        {label}
+      </dt>
       <dd className="m-0 truncate font-mono text-sm">{children}</dd>
     </div>
   );

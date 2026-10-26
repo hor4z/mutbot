@@ -16,7 +16,7 @@ const since = `ts > now() - INTERVAL ${MIN} MINUTE`;
 console.log(`=== Reporte de los últimos ${MIN} min ===`);
 const prog = await q<{ char: string; l0: number; l1: number; n: number }>(
   `SELECT char, argMin(level, ts) l0, argMax(level, ts) l1, count() n FROM ticks WHERE ${since} GROUP BY char ORDER BY char`);
-for (const p of prog) console.log(`${p.char}: nivel ${p.l0} → ${p.l1} (${Math.round((p.n * 5) / 60)} min con datos)`);
+for (const p of prog) console.log(`${p.char}: nivel ${p.l0} a ${p.l1} (${Math.round((p.n * 5) / 60)} min con datos)`);
 console.log('\n-- exp/min medio por spot (min = minutos ahí) --');
 const spots = await q<{ spot: string; min: number; exp: number }>(
   `SELECT spot, round(count()*5/60,1) min, round(avg(exp_min_1m)) exp FROM ticks WHERE ${since} AND mode = 'farm' AND spot != '' GROUP BY spot HAVING min >= 1 ORDER BY min DESC`);
@@ -25,7 +25,7 @@ console.log('\n-- eventos --');
 const ev = await q<{ kind: string; n: number }>(
   `SELECT kind, count() n FROM events WHERE ${since} AND kind IN ('death','kill','flee','walk_stuck','travel') GROUP BY kind ORDER BY kind`);
 for (const e of ev) console.log(`${e.kind.padEnd(12)} ${e.n}`);
-console.log('\n-- decisiones (exp/min antes → después) --');
+console.log('\n-- decisiones (exp/min antes y después) --');
 const dec = await q<{ text: string; before: number; after: number }>(
   `SELECT text, before, after FROM v_outcome WHERE ${since} AND NOT interrupted AND (before > 0 OR after > 0) ORDER BY abs(delta) DESC LIMIT 8`);
-for (const d of dec) console.log(`${String(d.before).padStart(9)} → ${String(d.after).padEnd(9)} ${d.text.slice(0, 90)}`);
+for (const d of dec) console.log(`${String(d.before).padStart(9)} antes, ${String(d.after).padStart(9)} después  ${d.text.slice(0, 90)}`);

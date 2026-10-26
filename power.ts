@@ -1,6 +1,6 @@
 /**
  * ¿Puede este personaje con este monstruo? Estimación con los stats reales (fuerza, agilidad,
- * vitalidad/vida, energía, clase) contra los de `data/monsters.json` (vida, daño, defensa, demora
+ * vitalidad/vida, energía, clase) contra los de la tabla de monstruos del cliente (`monsters` en la base: vida, daño, defensa, demora
  * entre ataques). Así la estrategia sale del personaje y no del nivel: un DK recién creado (28 de
  * fuerza) solo puede con arañas; uno con muchos puntos puede con casi todo. Lógica pura (power-tests.ts).
  *
@@ -11,19 +11,21 @@
  * Golpe real = max(daño − defensa, 10 % del daño, 1). El monstruo pega cada `Regen` ms (en la tabla
  * del cliente es la demora de ataque: Bull Fighter 1600, igual que OpenMU) y acierta ~70 %.
  */
-import monstersData from './data/monsters.json';
+import { monsters, onGameData } from './gamedata';
 import type { StatValues } from './farming';
 
 type ClassFamily = 'knight' | 'wizard' | 'elf' | 'gladiator';
 export type Fighter = { family: ClassFamily; stats: StatValues; maxHp: number };
 type MonsterCombat = { hp: number; minDmg: number; maxDmg: number; def: number; attackDelayMs: number; level: number };
 
-type Row = { Numb: number; HP: number; MinDmg: number; MaxDmg: number; Def: number; Regen: number; Level: number };
-const COMBAT = new Map<number, MonsterCombat>(
-  (monstersData as Row[]).filter((m) => m.HP > 0).map((m) => [m.Numb, {
-    hp: m.HP, minDmg: m.MinDmg ?? 0, maxDmg: m.MaxDmg ?? 0, def: m.Def ?? 0, attackDelayMs: m.Regen > 0 ? m.Regen : 1600, level: m.Level,
-  }]),
-);
+const COMBAT = new Map<number, MonsterCombat>();
+// Se arma con la tabla de monstruos del cliente (base, gamedata.ts) cuando llega y si se recarga.
+onGameData('power', () => {
+  COMBAT.clear();
+  for (const m of monsters) {
+    if (m.HP > 0) COMBAT.set(m.Numb, { hp: m.HP, minDmg: m.MinDmg ?? 0, maxDmg: m.MaxDmg ?? 0, def: m.Def ?? 0, attackDelayMs: m.Regen > 0 ? m.Regen : 1600, level: m.Level });
+  }
+});
 
 /** Lo que se acepta: matarlo en <= `maxKillSec` perdiendo <= `maxHpLoss` de la vida. */
 // attackSec: un golpe cada 0,5 s (ATTACK_PACE_MS de config.ts; acá fijo para que sea puro).
