@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/*
+ * Tema de sherpa (~/projects/sherpa: src/tokens.rs y `Css` en src/lib.rs) para Tailwind 4: Geist Sans y Mono, escala de texto, radios y la
+ * paleta oscura (por defecto) y clara (prefers-color-scheme). Los colores son variables de :root que cambian con el modo; `@theme inline`
+ * hace que las utilidades (`bg-soft`, `text-faint`…) lean la variable en vez de congelar el valor.
+ */
+:root {
+  color-scheme: dark;
+  --canvas: #101112;
+  --paper: #16171a;
+  --raised: #1b1c20;
+  --soft: #1f2125;
+  --hover: #26282c;
+  --line: #25272b;
+  --strong: #33363b;
+  --ink: #edf2f5;
+  --muted: #aab3bd;
+  --faint: #6c757e;
+  --primary: #edf2f5;
+  --on-primary: #101112;
+  --brand: #18a8f0;
+  --accent: #ff7100;
+  --danger: #ff3030;
+  --warning: #ff7100;
+  --success: #7cbf6b;
+  --info: #18a8f0;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --canvas: #fafafa; --paper: #ffffff; --raised: #ffffff; --soft: #f5f5f5; --hover: #efefef; --line: #e5e5e5; --strong: #d4d4d4;
+    --ink: #0a0a0a; --muted: #737373; --faint: #a3a3a3; --primary: #171717; --on-primary: #fafafa;
+    --brand: #5b93a6; --accent: #dd5536; --danger: #dd3a2a; --warning: #d98a2b; --success: #8aa344; --info: #5b93a6;
+  }
+}
+
+@theme inline {
+  --font-sans: Geist, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --color-canvas: var(--canvas);
+  --color-paper: var(--paper);
+  --color-raised: var(--raised);
+  --color-soft: var(--soft);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-strong: var(--strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-brand: var(--brand);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-info: var(--info);
+  /* sherpa: escala de texto (tamaño / interlineado) y radios */
+  --text-2xs: 10px; --text-2xs--line-height: 14px;
+  --text-xs: 11px; --text-xs--line-height: 16px;
+  --text-sm: 12px; --text-sm--line-height: 16px;
+  --text-base: 13px; --text-base--line-height: 20px;
+  --text-lg: 14px; --text-lg--line-height: 20px;
+  --text-xl: 16px; --text-xl--line-height: 24px;
+  --text-2xl: 18px; --text-2xl--line-height: 28px;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px;
+  --ease-sherpa: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@layer base {
+  html { font-family: var(--font-sans); font-synthesis: none; }
+  body { @apply m-0 bg-canvas text-base text-ink; }
+  * { scrollbar-width: thin; scrollbar-color: var(--strong) transparent; }
+  button { @apply cursor-pointer disabled:cursor-not-allowed disabled:opacity-45; }
+  button:focus-visible, input:focus-visible, canvas:focus-visible { @apply outline-2 outline-offset-2 outline-accent; }
+  svg { @apply shrink-0 align-middle; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

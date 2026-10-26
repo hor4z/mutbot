@@ -8,7 +8,7 @@ const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
   raw instanceof Uint8Array ? raw : raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw);
 
 // ---------------------------------------------------------------------------
-// Party: se rechaza; con --party-mates se acepta solo de los personajes propios (MUBOT_MATES).
+// Party: se rechaza siempre.
 // PartyRequest (C1 05 40) trae el id del que invita en el byte 3 (BE). La respuesta es
 // PartyInviteResponse C1 06 41 <aceptado 0/1> <id BE>, como la manda el agente web (con un respiro
 // humano de 0.6-1.5 s antes de contestar, que pone el bot). Invitar: PartyInviteRequest C1 05 40 <id BE>.

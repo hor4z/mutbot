@@ -6,14 +6,15 @@
  * responde se reintenta cada vez más espaciado y, si se acumulan más de MAX_ROWS, se tiran las más viejas.
  * Sin MUBOT_DB_URL (lo pasa la estación desde .env.db) no hace nada.
  */
-import { SERVER_KEY } from './config';
-import { bot, world } from './state';
+import { bot, hooks, world } from './state';
 import { log } from './util';
 
 export type Table = 'ticks' | 'events' | 'players_seen';
 type Row = Record<string, unknown>;
 
 const DB_URL = process.env.MUBOT_DB_URL ?? '';
+/** Base del Slow; la `mubot` del mismo servidor es el archivo de Fast y no se toca. */
+const DB_NAME = process.env.MUBOT_DB_NAME ?? 'mubot_slow';
 const DB_USER = process.env.MUBOT_DB_USER ?? 'mubot';
 const DB_PASSWORD = process.env.MUBOT_DB_PASSWORD ?? '';
 const FLUSH_MS = 5_000;
@@ -35,16 +36,11 @@ export const VERSION = (() => {
   } catch { return 'desconocida'; }
 })();
 
-/** Política activa (perillas o experimento), la pone knowledge.ts. */
-let policy = '';
-export const setPolicy = (p: string) => { policy = p; };
-
 /** Consulta de solo lectura a la base (FORMAT JSONEachRow); [] si no hay base o falla. */
 export async function queryDb<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  // Las vistas son del Fast (db/views.sql): un bot de otro servidor no decide con conocimiento ajeno.
-  if (!telemetryOn() || SERVER_KEY !== 'fast') return [];
+  if (!telemetryOn()) return [];
   try {
-    const r = await fetch(`${DB_URL}/?database=mubot`, {
+    const r = await fetch(`${DB_URL}/?database=${DB_NAME}`, {
       method: 'POST', body: sql, signal: AbortSignal.timeout(5_000),
       headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD },
     });
@@ -101,14 +97,14 @@ export const chTime = (ms: number) => new Date(ms).toISOString().replace('T', ' 
 /** Anotar una fila (con ts, personaje y sesión). */
 export function track(t: Table, row: Row, now = Date.now()) {
   if (!telemetryOn()) return;
-  buffer.push(t, { ts: chTime(now), char: bot.charName, server: SERVER_KEY, ...(t === 'players_seen' ? {} : { session: SESSION, version: VERSION, policy }), ...row });
+  buffer.push(t, { ts: chTime(now), char: bot.charName, ...(t === 'players_seen' ? {} : { session: SESSION, version: VERSION }), ...row });
   timer ??= setInterval(() => void flush(), FLUSH_MS);
 }
 
 /** Un evento suelto (kind: death, kill, cast, decide, …) con la posición y el nivel de ahora. */
 export function trackEvent(kind: string, text = '', num1 = 0, num2 = 0, data: Row = {}) {
   track('events', {
-    kind, map: world.map, x: world.x, y: world.y, level: world.level, resets: world.resets ?? 0,
+    kind, spot: hooks.placeName(), map: world.map, x: world.x, y: world.y, level: world.level,
     num1, num2, text, data: JSON.stringify(data),
   });
 }
@@ -117,7 +113,7 @@ async function flush() {
   if (Date.now() < retryAt || !buffer.size) return;
   for (const [t, rows] of buffer.take()) {
     const body = rows.map((r) => JSON.stringify(r)).join('\n');
-    const url = `${DB_URL}/?database=mubot&query=${encodeURIComponent(`INSERT INTO ${t} FORMAT JSONEachRow`)}&input_format_skip_unknown_fields=1`;
+    const url = `${DB_URL}/?database=${DB_NAME}&query=${encodeURIComponent(`INSERT INTO ${t} FORMAT JSONEachRow`)}&input_format_skip_unknown_fields=1`;
     try {
       const r = await fetch(url, {
         method: 'POST', body, signal: AbortSignal.timeout(4_000),

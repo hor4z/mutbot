@@ -1,49 +1,52 @@
 /**
- * El loop de un bot. Un tick:
- *   1. si algo anda mal (ciego, trabado, vida baja, pausa, PK), arreglarlo;  2. cacería de dorados si hay invasión;
- *   3. resetear al nivel 400 y repartir puntos;  4. ir al lugar que le toca (place.ts) y quedarse;
- *   5. loot;  6. pegarle a un dorado a la vista o, si no hay, a lo más cercano dentro del lugar.
- * Cada paso puede cortar el tick con `continue`. Todo a ritmo mínimo seguro (config.ts): no se baja.
+ * El loop del bot Slow. Un tick = una decisión:
+ *   1. si algo anda mal (ciego, trabado, vida baja, pausa), arreglarlo;  2. repartir puntos;
+ *   3. ir a la zona que le toca (area.ts) y quedarse;  4. loot;  5. pegarle al monstruo de más valor de la zona.
+ * Cada paso puede cortar el tick con `continue`. Toda decisión con su motivo va a `decide()` (journal.ts): es lo que el panel muestra.
+ * Todo a ritmo mínimo seguro (config.ts): no se baja.
  */
-import { announceGold, drainGold, teammates } from './bus';
 import { track, trackEvent } from './telemetry';
 import { closeSockets } from './connection';
-import { ATTACK_PACE_MS, RESET_LEVEL, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
+import { ATTACK_PACE_MS, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from './config';
 import { sendHit, sendTargetedSkill } from './actions';
-import { SKILL_TABLE, castReach, checkSurvival, goldenSkill, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
-import { CORNER, inCorner, nextRoutePoint } from './corner';
-import { DRAGON_TYPES, GoldenRule } from './golden';
-import { DragonFights, fightData } from './dragon-fight';
-import { canFarmMonster, canFight } from './power';
-import { partyUp } from './help';
-import { huntPick, huntStep, huntWander, onGoldenRequest, stopHunt } from './hunt';
-import { decide, journal, panelLog } from './journal';
-import { drops, lootState, lootStep, watchDrops } from './loot';
+import { SKILL_TABLE, castReach, checkSurvival, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
+import { D } from './directivas';
+import { decide } from './journal';
+import { lootStep, watchDrops } from './loot';
+import { drops, lootState } from './loot-state';
 import { castOnTheWay, newLoopCtx, walkTowards, type LoopCtx } from './loop-ctx';
 import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { farFrom, fighterNow, followsLeader, isStrong, travelTo, type Place } from './place';
-import { strategy } from './strategy';
-import { D } from './directivas';
+import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, recoveryWarp, targetValue, travelTo, type Place } from './area';
+import { noteExp, noteKill } from './learning';
+import { investStatPointsInBackground } from './progress';
 import { scoutShopsStep } from './shop-scout';
-import { doReset, investStatPointsInBackground } from './progress';
-import { GOLDEN_TYPES, bot, expLog, isGolden, isMate, monsterName, world, type ScopedNpc } from './state';
-import { warp, warpAndWait } from './warps';
+import { bot, expLog, monsterName, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
+import { warp, warpAndWait } from './warps';
 import { chebyshev, directionTowards, humanPace, log, sleep } from './util';
 import { watchMoney } from './world';
 
 const SWELL_LIFE_MS = 55_000;
 // La muerte llega por dos lados (HP 0 y ObjectGotKilled): dentro de esta ventana es una sola.
-const LEARN_DEATH_DEBOUNCE_MS = 15_000;
+const DEATH_DEBOUNCE_MS = 15_000;
 // Ningún monstruo a la vista durante esto = el server dejó de mandar el scope: reconectar.
 const BLIND_RECONNECT_MS = 3 * 60_000;
 // 15 s caminando sin moverse = traba (pared, objetivo inalcanzable): suelta el objetivo; si repite, vuelve a entrar al mapa.
 const STUCK_BREAK_MS = 15_000;
 // Foto a la base cada 5 s.
 const TICK_MS = 5_000;
+/** Espera mínima entre warps al huir (el bot no se queda esperando 15 s con monstruos encima). */
+const FLEE_WARP_MS = 3_000;
+/** De camino a un lugar lejano, se pelea con lo que esté a este alcance. */
+const WAY_TILES = 8;
+/** Solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
+const CHASE_TILES = 12;
+/** Vida (fracción) por debajo de la cual huye al pueblo si hay monstruos encima, y a la que vuelve a salir. Sin pociones es lo único que lo salva. */
+const FLEE_BELOW = 0.5;
+const RECOVER_TO = 0.7;
 
 let lastTickAt = 0;
 let lastStuckBreak = 0;
@@ -51,44 +54,28 @@ let economyWatched = false;
 let lastDeathAt = -Infinity;
 
 // Totales de todas las sesiones (el loop corre una vez por conexión).
-export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; resets: number; deaths: number };
+export type LoopResult = { kills: number; totalExpGained: number; potionsDrunk: number; statPointsSpent: number; skillsUsed: number; deaths: number };
 
 function dataTick(ctx: LoopCtx) {
   const now = Date.now();
   lastTickAt = now;
-  const near = (q: { x: number; y: number }, d: number) => Math.hypot(q.x - world.x, q.y - world.y) <= d;
-  const mates = [...world.players.values()].filter((q) => q.name != null && isMate(q.name));
   track('ticks', {
-    map: world.map, x: world.x, y: world.y, level: world.level, resets: world.resets ?? 0,
+    map: world.map, x: world.x, y: world.y, level: world.level,
     exp_total: ctx.expTotal, exp_min_1m: expLog.perMin(now, 60_000),
     hp: Math.max(0, world.hp), mp: Math.max(0, world.mana),
-    mode: currentMode(), phase: ctx.phase,
-    mates_near: mates.filter((q) => near(q, 15)).length,
-    monsters_near: [...ctx.npcs.values()].filter((m) => near(m, 8)).length,
-    in_party: bot.inParty ? 1 : 0, doing: bot.doing,
-    mate_spot: mates.some((q) => near(q, 8)) ? 1 : mates.length ? 2 : 0,
+    mode: currentMode(), phase: ctx.phase, spot: lastPlace.v?.name ?? '', skill: pickAttackSkill()?.number ?? 0,
+    monsters_near: [...ctx.npcs.values()].filter((m) => Math.hypot(m.x - world.x, m.y - world.y) <= 8).length,
+    doing: bot.doing,
   }, now);
 }
 
-/** Espera mínima entre warps al huir (el bot no se queda esperando 15 s con monstruos encima). */
-const FLEE_WARP_MS = 3_000;
-/** De camino a un lugar lejano, se pelea con lo que esté a este alcance (Strategy.fightOnTheWay). */
-const WAY_TILES = 8;
-
-/** Con valor por tipo (Slow): solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
-const CHASE_TILES = 12;
-
-/** Lo más cercano a mí dentro del lugar (ancla + radio), sin los marcados inalcanzables. */
-function nearestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) => boolean): ScopedNpc | null {
+/** El de más valor por distancia (valor / (d + 8)) dentro del lugar, sin correr por todo el spot: primero lo que está cerca. Sin los marcados inalcanzables. */
+function bestIn(place: Place, npcs: Iterable<ScopedNpc>, skip: (id: number) => boolean): ScopedNpc | null {
   const list = [...npcs].filter((m) => !skip(m.id) && chebyshev(m.x, m.y, place.anchor.x, place.anchor.y) <= place.radius);
   const dist = (m: ScopedNpc) => chebyshev(m.x, m.y, world.x, world.y);
-  // Sin valor por tipo (Fast): el más cercano.
-  const pick = (from: ScopedNpc[], score: (m: ScopedNpc) => number) => from.reduce<ScopedNpc | null>((b, m) => (b == null || score(m) < score(b) ? m : b), null);
-  if (!strategy.targetValue) return pick(list, dist);
-  // Con valor por tipo (Slow): el de más valor por distancia (valor / (d + 8)), pero sin correr por todo el spot: primero lo que está cerca.
-  const value = (m: ScopedNpc) => -strategy.targetValue!(m.type) / (dist(m) + 8);
+  const value = (m: ScopedNpc) => -targetValue(m.type) / (dist(m) + 8);
   const near = list.filter((m) => dist(m) <= CHASE_TILES);
-  return pick(near.length ? near : list, value);
+  return (near.length ? near : list).reduce<ScopedNpc | null>((b, m) => (b == null || value(m) < value(b) ? m : b), null);
 }
 
 // Hasta `deadline` (0 = sin límite) o hasta que se corte la conexión.
@@ -97,39 +84,29 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const ctx = newLoopCtx();
   let fleeing = false;
 
-  // Monstruos atacables: los de world.npcs fuera de zona segura. Un personaje que no aguanta la esquina solo ataca lo que
-  // su poder permite; los dorados los decide la regla de dorados.
+  // Monstruos atacables: los de world.npcs fuera de zona segura que el personaje puede farmear (power.ts).
   const refreshAttackable = () => {
     ctx.npcs = new Map();
-    const f = fighterNow();
-    const strong = isStrong();
     for (const [id, n] of world.npcs) {
-      if (isSafeZone(world.map, n.x, n.y)) continue;
-      if (strong !== true && !isGolden(n) && !canFarmMonster(f, n.type, world.skills.has(41))) continue;
+      if (!isAttackable(n)) continue;
       ctx.npcs.set(id, n);
     }
   };
 
-  let totalExpGained = 0, kills = 0, potionsDrunk = 0, statPointsSpent = 0, resets = 0, deaths = 0;
-  let nextResetTry = 0, lastBarrierAt = 0, lastSwellAt = 0, ticks = 0;
+  let totalExpGained = 0, kills = 0, potionsDrunk = 0, statPointsSpent = 0, deaths = 0;
+  let lastBarrierAt = 0, lastSwellAt = 0;
   let lastAnyNpcAt = Date.now();
   let attackTarget: number | null = null;
   let attackSince = 0;
-  let routeIdx: number | null = null;
-  const golden = new GoldenRule();
-  const goldAnnounced = new Set<number>();
-  const fights = new DragonFights();
-  const endFight = (e: ReturnType<DragonFights['expire']>[number] | null) => {
-    if (e) trackEvent('dragon_fight', monsterName(e.type), e.type, e.mine ? 1 : 0, { ...fightData(e), map: world.map });
-  };
 
   // Muerte propia: llega por dos lados (HP a 0 y ObjectGotKilled con nuestro id); dentro de la ventana es una sola.
   const onDeath = (source: string) => {
-    if (Date.now() - lastDeathAt < LEARN_DEATH_DEBOUNCE_MS) return;
+    if (Date.now() - lastDeathAt < DEATH_DEBOUNCE_MS) return;
     lastDeathAt = Date.now();
     deaths++;
-    log(`Muerte #${deaths} (${source}) en ${bot.currentSpot?.name ?? 'spot desconocido'}.`);
-    bot.currentSpot = null; // el respawn es en el pueblo: el lugar vuelve a decidir a dónde ir
+    log(`Muerte #${deaths} (${source}).`);
+    noteDeath(); // la zona se evita y se vuelve a decidir a dónde ir
+    bot.currentSpot = null; // el respawn es en el pueblo
     bot.canAdopt = false;
   };
   let lastHp = world.hp;
@@ -141,29 +118,27 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   const onKilled = (raw: any) => {
     const p = new ObjectGotKilledPacket(raw);
     const id = p.KilledId & 0x7fff;
-    const dead = world.npcs.get(id);
-    // Dorado muerto a la vista y quién lo mató: "vistos contra matados".
-    if (dead && GOLDEN_TYPES.has(dead.type)) {
-      const kid = p.KillerId & 0x7fff;
-      const mine = kid === bot.playerId;
-      if (DRAGON_TYPES.has(dead.type)) endFight(fights.killed(id, Date.now(), mine ? bot.charName : world.players.get(kid)?.name ?? null, mine));
-      trackEvent('golden_kill', monsterName(dead.type), dead.type, mine ? 1 : 0, { gx: dead.x, gy: dead.y, killer: mine ? bot.charName : world.players.get(kid)?.name ?? null, hunting: !!bot.hunting });
-    }
+    const deadType = world.npcs.get(id)?.type;
     world.npcs.delete(id);
+    world.hits.delete(id);
     ctx.npcs.delete(id);
     if (id === bot.playerId) {
       const kid = p.KillerId & 0x7fff;
       const killer = world.players.get(kid);
       const by = killer ? `${killer.name ?? 'jugador #' + kid}` : world.npcs.has(kid) ? monsterName(world.npcs.get(kid)!.type) : `#${kid}`;
-      decide(`Me mató ${by}.`);
+      decide(`Me mató ${by} en ${lastPlace.v?.name ?? mapName(world.map)} (nivel ${world.level}, vida máx ${world.maxHp}).`, { kind: 'death', by });
       trackEvent('death', by, kid, killer ? 1 : 0, { killer: killer?.name ?? null, npc: killer ? null : world.npcs.get(kid)?.type ?? null });
       onDeath('ObjectGotKilled');
-    } else if ((p.KillerId & 0x7fff) === bot.playerId) kills++;
+    } else if ((p.KillerId & 0x7fff) === bot.playerId) {
+      kills++;
+      if (deadType != null) noteKill(deadType); // la exp que llegue después se le atribuye (learning.ts)
+    }
   };
   // ExperienceGained: un kill de más de 65535 llega partido en ~60 packets; ExpLog los agrega por segundo.
   const onExp = (raw: any) => {
     const added = new ExperienceGainedPacket(raw).AddedExperience;
     totalExpGained += added;
+    noteExp(added);
     ctx.expTotal += added;
     expLog.add(added, Date.now());
   };
@@ -187,21 +162,20 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   };
   setLoopView(() => ({ kills, deaths, casts: ctx.skillsUsed, exp: totalExpGained, target: ctx.target }));
   if (!sessionStart.level) sessionStart.level = world.level;
-  const pickTarget = (n: { id: number }) => { ctx.target = n.id; };
+  const pickTarget = (n: ScopedNpc) => { ctx.target = n.id; };
 
-  while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked) {
+  while ((deadline <= 0 || Date.now() < deadline) && !bot.kicked && !bot.reloadBrain) {
     refreshAttackable();
     const nowT = Date.now();
-    if (world.npcs.size > 0 || !bot.inGameAt || bot.resetting) lastAnyNpcAt = nowT;
+    if (world.npcs.size > 0 || !bot.inGameAt) lastAnyNpcAt = nowT;
 
     // --- 1. Que no esté roto ---------------------------------------------------------------------------------------
     // Ciego: el server a veces deja de mandar el scope, o la sesión queda "fantasma" (monstruos pero ninguna exp).
-    const farming = !bot.paused && !bot.resetting && !bot.hunting && bot.inGameAt > 0;
+    const farming = !bot.paused && bot.inGameAt > 0;
     const sinceIn = nowT - Math.max(bot.inGameAt, bot.lastArrivalAt);
     const noExp = farming && sinceIn > BLIND_RECONNECT_MS && expLog.perMin(nowT, BLIND_RECONNECT_MS) === 0 && world.map !== 0;
     if (noExp || nowT - Math.max(lastAnyNpcAt, bot.lastArrivalAt) > BLIND_RECONNECT_MS) {
-      decide(noExp ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto.` : `Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto.`);
-      journal('travel', 'reconecto: sin monstruos a la vista', { map: world.map, reason: 'blind' });
+      decide(noExp ? `${BLIND_RECONNECT_MS / 60_000} min sin nada de exp en ${mapName(world.map)}: reconecto.` : `Sin ningún monstruo a la vista hace ${BLIND_RECONNECT_MS / 60_000} min en ${mapName(world.map)}: reconecto.`, { kind: 'system', reason: 'blind' });
       bot.blind = true;
       bot.kicked = true;
       closeSockets();
@@ -213,17 +187,16 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (ctx.stuckSince && nowT - ctx.stuckSince > STUCK_BREAK_MS) {
       ctx.stuckStrikes = nowT - lastStuckBreak < 90_000 ? ctx.stuckStrikes + 1 : 1;
       lastStuckBreak = nowT;
-      decide(`Trabado ${Math.round((nowT - ctx.stuckSince) / 1000)} s en (${world.x},${world.y}) ${mapName(world.map)} (${bot.doing}): ${ctx.stuckStrikes >= 2 ? 'vuelvo a entrar al mapa' : 'suelto el objetivo'}.`);
+      decide(`Trabado ${Math.round((nowT - ctx.stuckSince) / 1000)} s en (${world.x},${world.y}) ${mapName(world.map)} (${bot.doing}): ${ctx.stuckStrikes >= 2 ? 'vuelvo a entrar al mapa' : 'suelto el objetivo'}.`, { kind: 'stuck' });
       trackEvent('walk_stuck', bot.doing, ctx.stuckStrikes, 0, { x: world.x, y: world.y, map: world.map });
       if (ctx.target != null) unreachable.add(ctx.target);
       ctx.target = null;
       ctx.walkStuck = 0;
       ctx.stuckSince = 0;
-      if (bot.hunting) { bot.hunting.explorer.reset(); bot.hunting.zonesVisited = new Set(); }
-      if (ctx.stuckStrikes >= 2 && bot.currentSpot) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
+      const back = recoveryWarp(); // el warp al mapa del área elegida (no el último que se usó)
+      if (ctx.stuckStrikes >= 2 && back) { await warpAndWait(back); ctx.stuckStrikes = 0; }
       continue;
     }
-    ticks++;
 
     // Buffs propios: mago Soul Barrier (16) cada ~50 s; caballero Swell Life (48) cada ~55 s.
     if (isMage() && world.skills.has(16) && nowT - lastBarrierAt > 50_000 && world.maxMana > 0 && world.mana / world.maxMana > 0.2 && nowT - ctx.lastCastAt > SKILL_PACE_MS) {
@@ -242,24 +215,24 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(200);
       continue;
     }
-    // Huir con poca vida (Slow, sin pociones): en Atlans Capitan quedó parado con 9 monstruos encima y bajó de 526 a 113 de vida en 16 s
+    // Huir con poca vida (sin pociones): en Atlans Capitan quedó parado con 9 monstruos encima y bajó de 526 a 113 de vida en 16 s
     // porque no podía pelear con ellos. Con monstruos cerca y la vida por debajo del límite, warp al pueblo y esperar a recuperarse.
-    if (strategy.fleeBelow != null && world.maxHp > 0) {
+    if (world.maxHp > 0) {
       const pct = world.hp / world.maxHp;
-      const attackers = [...world.npcs.values()].some((m) => chebyshev(m.x, m.y, world.x, world.y) <= 6 && !isSafeZone(world.map, m.x, m.y));
+      const attackers = [...world.npcs.values()].filter((m) => chebyshev(m.x, m.y, world.x, world.y) <= 6 && !isSafeZone(world.map, m.x, m.y)).length;
       // En el pueblo con poca vida no se sale a farmear: se descansa hasta el 70 % (al reiniciar el bot, por ejemplo).
-      const resting = isSafeZone(world.map, world.x, world.y) && pct < 0.7 && !attackers;
-      if (!fleeing && (resting || (pct < strategy.fleeBelow && attackers))) {
+      const resting = isSafeZone(world.map, world.x, world.y) && pct < RECOVER_TO && !attackers;
+      if (!fleeing && (resting || (pct < FLEE_BELOW && attackers))) {
         fleeing = true;
-        log(resting ? `Descanso en el pueblo: vida al ${Math.round(pct * 100)} %.` : `Huyo: vida al ${Math.round(pct * 100)} % con monstruos encima.`);
-        if (!resting) trackEvent('flee', mapName(world.map), Math.round(pct * 100), 0, { map: world.map, x: world.x, y: world.y });
+        decide(resting ? `Descanso en el pueblo: vida al ${Math.round(pct * 100)} %, salgo al ${Math.round(RECOVER_TO * 100)} %.` : `Huyo: vida al ${Math.round(pct * 100)} % (límite ${Math.round(FLEE_BELOW * 100)} %) con ${attackers} monstruo(s) encima en ${lastPlace.v?.name ?? mapName(world.map)}.`, { kind: 'flee', pct: Math.round(pct * 100), attackers });
+        if (!resting) trackEvent('flee', mapName(world.map), Math.round(pct * 100), attackers, { map: world.map, x: world.x, y: world.y, zona: lastPlace.v?.name ?? null });
       }
       if (fleeing) {
         ctx.target = null;
-        if (pct >= 0.7) { fleeing = false; log('Recuperado: vuelvo a lo mío.'); }
+        if (pct >= RECOVER_TO) { fleeing = false; decide(`Recuperado (${Math.round(pct * 100)} %): vuelvo a ${lastPlace.v?.name ?? 'mi zona'}.`, { kind: 'flee' }); }
         else {
           bot.doing = `recuperando vida (${Math.round(pct * 100)} %)`;
-          // Huir no espera los 15 s de siempre entre warps: con monstruos encima cada segundo cuenta (Capitan murió esperando).
+          // Huir no espera los 15 s de siempre entre warps: con monstruos encima cada segundo cuenta.
           if (!isSafeZone(world.map, world.x, world.y) && Date.now() - bot.lastWarpAt > FLEE_WARP_MS) await warpAndWait(warp(2));
           await sleep(1000);
           continue;
@@ -273,108 +246,55 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     }
     if (bot.paused) {
       ctx.phase = 'wait';
+      // Orden "pueblo": va a Lorencia y se queda en pausa (orden del panel).
+      if (bot.townNow) {
+        bot.townNow = false;
+        if (world.map !== 0) await warpAndWait(warp(2));
+      }
       await sleep(500);
       continue;
     }
-    // --- 2. Compañeros y cacería de dorados ------------------------------------------------------------------------
-    partyUp();
-    const strong = isStrong();
-    for (const r of drainGold()) if (strategy.hunts) onGoldenRequest(r, strong === false);
-    for (const n of ctx.npcs.values()) {
-      if (!DRAGON_TYPES.has(n.type)) continue;
-      const near = [...world.players.values()].filter((q) => q.name != null && chebyshev(q.x, q.y, n.x, n.y) <= 15);
-      const mates = near.filter((q) => isMate(q.name!)).length + 1; // yo también
-      fights.seen(n.id, n.type, n.x, n.y, nowT, mates, near.length - (mates - 1), bot.dragonMap && Math.abs(nowT - bot.dragonMap.at) < 20 * 60_000 ? bot.dragonMap.at : null);
-    }
-    for (const e of fights.expire(nowT)) endFight(e);
-    if (bot.hunting && !strategy.hunts) stopHunt(`en el ${strategy.server} no se caza`);
-    if (bot.hunting && strong === false && followsLeader()) stopHunt('sigo a mi líder');
-    // El débil con un líder que vale la pena no sale a cazar solo: lo sigue (place.ts) y caza como su sombra.
-    if (strategy.hunts && strong != null && !(strong === false && followsLeader()) && (await huntStep(ctx, strong === false))) continue;
 
     if (D.scoutShops && (await scoutShopsStep(ctx))) continue;
 
-    // --- 3. Reset y puntos -----------------------------------------------------------------------------------------
-    const goldHold = !!bot.hunting || golden.holding(nowT);
-    if (strategy.resets && !goldHold && world.level >= RESET_LEVEL && nowT >= nextResetTry) {
-      if (await doReset()) {
-        resets++;
-        ctx.target = null;
-        log(`Reset hecho (${world.resets ?? '?'}).`);
-      } else nextResetTry = Date.now() + 2 * 60_000;
+    // --- 2. Puntos -------------------------------------------------------------------------------------------------
+    investStatPointsInBackground((n) => { statPointsSpent += n; });
+
+    // --- 3. Ir al spot ---------------------------------------------------------------------------------------------
+    const place = choosePlace();
+    if (!place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
+    if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
+    // Camino al spot: si hay monstruos al paso (a 8 tiles), se pelea con ellos en vez de pasar entre medio.
+    if (farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+      const onTheWay = [...ctx.npcs.values()].filter((m) => !unreachable.has(m.id) && chebyshev(m.x, m.y, world.x, world.y) <= WAY_TILES);
+      const t = onTheWay.reduce<ScopedNpc | null>((b, m) => (b == null || chebyshev(m.x, m.y, world.x, world.y) < chebyshev(b.x, b.y, world.x, world.y) ? m : b), null);
+      if (t) pickTarget(t);
+    }
+    if (farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+      bot.doing = `yendo a ${place.name}`;
+      bot.goalPoint = [place.anchor.x, place.anchor.y];
+      ctx.phase = 'walk';
+      castOnTheWay(ctx);
+      await walkTowards(ctx, place.anchor.x, place.anchor.y);
       continue;
     }
-    if (strategy.spendsPoints) investStatPointsInBackground((n) => { statPointsSpent += n; });
 
-    // --- 4. Ir al lugar --------------------------------------------------------------------------------------------
-    const place = bot.hunting ? null : strategy.choosePlace();
-    if (!bot.hunting && !place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
-    if (place) {
-      if (await travelTo(place, { sameMapWarp: strategy.sameMapWarp })) { ctx.target = null; await sleep(500); continue; }
-      // La esquina tiene un camino desde la llegada (directo cortaba por los monstruos); el resto, en línea al ancla.
-      if (place.kind === 'corner' && !inCorner({ x: world.x, y: world.y })) {
-        ctx.target = null;
-        const next = nextRoutePoint({ x: world.x, y: world.y }, routeIdx);
-        routeIdx = next.idx;
-        bot.doing = `camino a ${place.name} (${next.x},${next.y})`;
-        ctx.phase = 'walk';
-        castOnTheWay(ctx);
-        await walkTowards(ctx, next.x, next.y);
-        continue;
-      }
-      // Camino al lugar: si hay monstruos al paso (a 8 tiles), se pelea con ellos en vez de pasar entre medio (Slow).
-      if (strategy.fightOnTheWay && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
-        const onTheWay = [...ctx.npcs.values()].filter((m) => !unreachable.has(m.id) && chebyshev(m.x, m.y, world.x, world.y) <= WAY_TILES);
-        const t = onTheWay.reduce<ScopedNpc | null>((b, m) => (b == null || chebyshev(m.x, m.y, world.x, world.y) < chebyshev(b.x, b.y, world.x, world.y) ? m : b), null);
-        if (t) pickTarget(t);
-      }
-      if (place.kind !== 'corner' && farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
-        bot.doing = `yendo a ${place.name}`;
-        bot.goalPoint = [place.anchor.x, place.anchor.y];
-        ctx.phase = 'walk';
-        castOnTheWay(ctx);
-        await walkTowards(ctx, place.anchor.x, place.anchor.y);
-        continue;
-      }
-    }
-
-    // --- 5. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
+    // --- 4. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
     const targetInMelee = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;
-    if (!targetInMelee && (await lootStep(strategy.lootAll, false))) {
+    if (!targetInMelee && (await lootStep(true, false))) {
       ctx.phase = 'walk';
       bot.doing = `levantando loot en ${mapName(world.map)}`;
       continue;
     }
 
-    // --- 6. Objetivo: un dorado manda; si no, lo más cercano del lugar ---------------------------------------------
+    // --- 5. Objetivo: el de más valor del spot ---------------------------------------------------------------------
     if (ctx.target != null && !ctx.npcs.has(ctx.target)) ctx.target = null;
-    const me = strong === true ? null : fighterNow();
-    let gold: ScopedNpc | null = null;
-    if (bot.hunting) {
-      const hp = await huntPick(ctx, unreachable, (t) => !me || canFight(me, t));
-      if (hp.walked) continue;
-      gold = hp.gold;
-      // Cazando no se pelea con comunes: cada golpe frena y lo único que importa es llegar al próximo dorado.
-      if (!gold && ctx.target != null && !isGolden(ctx.npcs.get(ctx.target)!)) ctx.target = null;
-    } else gold = golden.pick({ x: world.x, y: world.y }, ctx.npcs.values(), (t) => GOLDEN_TYPES.has(t) && (!me || canFight(me, t)), nowT, ctx.target);
-    if (gold && ctx.target !== gold.id) {
-      if (!goldAnnounced.has(gold.id)) {
-        goldAnnounced.add(gold.id);
-        decide(`Dorado: ${monsterName(gold.type)} a la vista en (${gold.x},${gold.y}): lo ataco.`);
-        // Avisar a los compañeros: si pueden, vienen (hunt.ts).
-        if (teammates().length && announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`, 15_000, DRAGON_TYPES.has(gold.type)))
-          decide(`Aviso al equipo del ${monsterName(gold.type)} en ${mapName(world.map)}.`);
-      }
-      pickTarget(gold);
-    } else if (gold && DRAGON_TYPES.has(gold.type) && teammates().length) {
-      // Mientras dura la pelea con un dragón se repite el aviso (con su posición actual): llegan los que lo perdieron o se conectaron después.
-      announceGold(world.map, gold.x, gold.y, `${monsterName(gold.type)} en ${mapName(world.map)}`, 30_000, true);
-    } else if (ctx.target == null && place) {
-      const t = nearestIn(place, ctx.npcs.values(), unreachable.has);
+    if (ctx.target == null) {
+      const t = bestIn(place, ctx.npcs.values(), unreachable.has);
       if (t) pickTarget(t);
     }
 
-    // --- 7. Pelear / acercarse / esperar ---------------------------------------------------------------------------
+    // --- 6. Pelear / acercarse / esperar ---------------------------------------------------------------------------
     if (ctx.target != null) {
       const target = ctx.target;
       const t = ctx.npcs.get(target)!;
@@ -388,8 +308,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
         if (attackTarget !== target) {
           attackTarget = target;
           attackSince = Date.now();
-        } else if (!isGolden(t) && Date.now() - attackSince > TARGET_NO_KILL_MS) {
-          // Los dorados tienen mucha vida: a esos no se los abandona por tiempo.
+        } else if (Date.now() - attackSince > TARGET_NO_KILL_MS) {
           log(`Objetivo ${target} (${monsterName(t.type)}) no muere en ${TARGET_NO_KILL_MS / 1000} s de golpes: lo abandono.`);
           unreachable.add(target);
           ctx.target = null;
@@ -401,17 +320,15 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
           await sleep(SKILL_PACE_MS - sinceCast);
           continue;
         }
-        if (useSkill(target, isGolden(t) ? goldenSkill() : undefined)) {
+        if (useSkill(target)) {
           ctx.lastCastAt = Date.now();
-          if (DRAGON_TYPES.has(t.type)) fights.hit(target, ctx.lastCastAt);
           ctx.skillsUsed++;
           await sleep(humanPace(SKILL_PACE_MS));
         } else if (tDist <= 1) {
           sendHit(target, directionTowards(world.x, world.y, t.x, t.y));
           await sleep(humanPace(ATTACK_PACE_MS));
         } else {
-          // Sin maná para el skill y a más de 1 tile: se acerca a pegar a mano (antes esperaba parado a que volviera el maná y
-          // el cartel seguía diciendo "peleando": Capitan rendía la mitad).
+          // Sin maná para el skill y a más de 1 tile: se acerca a pegar a mano (esperar parado a que vuelva el maná rendía la mitad).
           bot.doing = `sin maná: acercándome a pegarle a ${monsterName(t.type)}`;
           ctx.phase = 'walk';
           await walkTowards(ctx, t.x, t.y);
@@ -425,23 +342,17 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
-    // Sin objetivo. Cazando: al dorado recordado, a una zona o recorrer el mapa. Si no: esperar en el ancla del lugar.
-    if (bot.hunting) {
-      if (await huntWander(ctx)) continue;
-    } else if (place) {
-      bot.goalPoint = [place.anchor.x, place.anchor.y];
-      if (chebyshev(world.x, world.y, place.anchor.x, place.anchor.y) > 2) {
-        bot.doing = `volviendo a ${place.name}`;
-        ctx.phase = 'walk';
-        await walkTowards(ctx, place.anchor.x, place.anchor.y);
-      } else {
-        bot.doing = `esperando monstruos en ${place.name}`;
-        ctx.phase = 'wait';
-        await sleep(400);
-      }
-      continue;
+    // Sin objetivo: esperar en el ancla del spot.
+    bot.goalPoint = [place.anchor.x, place.anchor.y];
+    if (chebyshev(world.x, world.y, place.anchor.x, place.anchor.y) > 2) {
+      bot.doing = `volviendo a ${place.name}`;
+      ctx.phase = 'walk';
+      await walkTowards(ctx, place.anchor.x, place.anchor.y);
+    } else {
+      bot.doing = `esperando monstruos en ${place.name}`;
+      ctx.phase = 'wait';
+      await sleep(400);
     }
-    await sleep(300);
   }
 
   EventBus.off('ObjectGotKilled', onKilled);
@@ -450,7 +361,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   stopWatchingDrops();
   drops.clear();
   lootState.looting = null;
-  log(`\nFin del loop: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${ctx.skillsUsed} skill(s), ${resets} reset(s), ${deaths} muerte(s).`);
+  log(`\nFin del loop: ${kills} kill(s), +${totalExpGained} exp, ${potionsDrunk} pocion(es), ${statPointsSpent} stat(s), ${ctx.skillsUsed} skill(s), ${deaths} muerte(s).`);
   log(`Posición final (${world.x},${world.y}) map=${world.map}. Desconectado: ${bot.kicked}`);
-  return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed: ctx.skillsUsed, resets, deaths };
+  return { kills, totalExpGained, potionsDrunk, statPointsSpent, skillsUsed: ctx.skillsUsed, deaths };
 }

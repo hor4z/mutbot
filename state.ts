@@ -1,5 +1,5 @@
 /**
- * Estado compartido del bot. Un proceso = un personaje (la estación lanza uno por personaje), así
+ * Estado compartido del bot. Un proceso = un personaje (la estación lanza el del personaje), así
  * que son singletons de módulo. Lo que varios módulos escriben vive en objetos explícitos (`world`,
  * `bot`): los `let` de un módulo ES no se pueden asignar desde otro.
  *
@@ -9,8 +9,6 @@
 import { CHAR_NAME, type StatName } from './config';
 import { ExpLog } from './farming';
 import type { Warp } from './warps';
-import { goldenTypes, type HuntExplorer, type HuntMap } from './panel-logic';
-import type { Invasion } from './panel-protocol';
 import type { StatusServer } from './ws-server';
 import monstersData from './data/monsters.json';
 
@@ -39,17 +37,13 @@ type MonsterRow = {
 // del 0.97) Y (en este set O TypeNumber >= 300, los custom de este server, ej.
 // 690/692, que monsters.json no tiene).
 //
-// Los dorados de la invasión (Golden Dragon Move 88, Golden Titan 77, ...) se
-// pasan del tope de Move: sin sumarlos aparte el bot no los veía nunca.
 // Sin tope de Move (2026-10-11): con Move <= 50 el bot quedaba ciego en Arena 2/3/4 (Deathvim Knight 220,
 // Phantom Knight 270, Gaint Drakan 305) y en casi todo lo de nivel alto. Los guardias del pueblo ya los
 // excluye isMonsterType (rango 200-299).
-export const GOLDEN_TYPES = goldenTypes(monstersData as MonsterRow[]);
 export const MONSTER_TYPE_NUMBERS = new Set([
   ...(monstersData as MonsterRow[])
     .filter((m) => m.AttType !== 0 && m.Move > 0 && m.HP > 0)
     .map((m) => m.Numb),
-  ...GOLDEN_TYPES,
 ]);
 // Nombre por TypeNumber (para el panel y los logs de la cacería).
 const MONSTER_NAMES = new Map<number, string>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Name]));
@@ -63,18 +57,24 @@ const MONSTER_MAX_HP = new Map<number, number>(
   (monstersData as MonsterRow[]).filter((m) => m.HP > 0).map((m) => [m.Numb, m.HP]),
 );
 
+/** Vida máxima de un tipo de monstruo según data/monsters.json (null: custom sin dato). */
+export const monsterMaxHp = (type: number): number | null => MONSTER_MAX_HP.get(type) ?? null;
+
+/**
+ * Lo último que se sabe de la vida de un monstruo golpeado (id → estado). `pct` viene del server (ObjectHitExtended: la barra roja del
+ * cliente) y es null si todavía no llegó; `dealt` es el daño que suma lo que vimos (0x15), para estimarla si el server no la manda.
+ */
+export type HitInfo = { pct: number | null; dealt: number; at: number };
+
 export type ScopedNpc = { id: number; type: number; x: number; y: number };
 /** `raw`: los 5 bytes del ítem tal como llegaron (el packet de mover ítem los lleva). */
 export type ItemSlot = { slot: number; group: number; num: number; level?: number; excellent?: boolean; raw?: Uint8Array };
 export type SkillInfo = { index: number; number: number; level: number };
 
-export const isGolden = (n: ScopedNpc) => GOLDEN_TYPES.has(n.type);
-// El 44 es el Dragón Rojo de su invasión, pero el cliente lo llama "Golden Dragon" como al 79: en el log y el
-// panel se confundían (2026-10-23).
-const NAME_FIXES = new Map<number, string>([[44, 'Dragón Rojo']]);
-export const monsterName = (type: number) => NAME_FIXES.get(type) ?? MONSTER_NAMES.get(type) ?? `tipo ${type}`;
+export const monsterName = (type: number) => MONSTER_NAMES.get(type) ?? `tipo ${type}`;
 // Nivel por TypeNumber (farmeo inicial: solo monstruos acordes al personaje). Custom >= 300: sin dato.
 const MONSTER_LEVELS = new Map<number, number>((monstersData as MonsterRow[]).map((m) => [m.Numb, m.Level]));
+export const monsterLevel = (type: number): number | null => MONSTER_LEVELS.get(type) ?? null;
 // ---------------------------------------------------------------------------
 // Estado del mundo (lo que el bot cree de sí mismo) — se actualiza con los
 // packets S2C (world.ts). Es la única fuente de verdad del loop autónomo.
@@ -93,28 +93,29 @@ export const world = {
   skills: new Map<number, SkillInfo>(), // por número de skill
   inventory: new Map<number, ItemSlot>(), // por slot de inventario
   npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
+  hits: new Map<number, HitInfo>(), // vida conocida de los golpeados (ver HitInfo)
   // Otros jugadores en scope (para no competirles el objetivo, ver farming.ts).
   players: new Map<number, { x: number; y: number; name?: string }>(),
-  resets: null as number | null, // CharacterResets del server (packet propio)
-  grandResets: 0,
   // NPC de pueblo/servicio (TypeNumber 200-299) en scope: no son monstruos.
   townNpcs: new Map<number, ScopedNpc>(),
   // Clase cruda del CharacterList (ver parseCharacterList097); null = no se sabe.
   classId: null as number | null,
 };
 
-// Cacería de dorados (hunt.ts). auto: la arrancó el cazador (corta con pocos vivos); si no, una orden del panel.
-export type HuntState = { hunt: HuntMap; since: number; warpTries: number; nextWarpAt: number; explorer: HuntExplorer; seen: Set<number>; auto?: boolean;
-  // Dorados vistos en el mapa (propios o avisados por un compañero): id → dónde y cuándo. Tras morir o salir de scope se vuelve directo ahí.
-  spots?: Map<number, { x: number; y: number; type: number; at: number }>;
-  // Zonas de dragones ya recorridas ("x,y"; zones.ts).
-  zonesVisited?: Set<string>;
-  // Mapas ya cazados en esta invasión (el encadenado no vuelve a ellos).
-  done?: Set<number>;
-  // Cacería del Dragón Rojo: corta por tiempo (RED_HUNT_MS), no por el 0xFD de la invasión dorada.
-  red?: boolean;
-  // Último dorado a la vista en este mapa (para huntDryOut).
-  lastSeenAt?: number };
+/**
+ * Lo que el cerebro (farm-loop, area, combat, learning…, recargable en caliente: hot.ts) le muestra al núcleo (panel, telemetría). El cerebro los
+ * instala al cargarse (brain.ts `install`); mientras tanto valen los defaults. Así el núcleo nunca importa el cerebro.
+ */
+export const hooks = {
+  /** Nombre del lugar donde farmea (para ticks y eventos). */
+  placeName: (): string => '',
+  /** Exp que da un tipo de monstruo (para resaltar en el radar). */
+  value: (_type: number): number => 0,
+  /** Skill de ataque actual. */
+  skill: (): { number: number; name: string } | null => null,
+  /** Plan de reparto de puntos. */
+  plan: (): { agiTarget: number; shares: { str: number; agi: number; vit: number; ene: number }; batch: number } | null => null,
+};
 
 export const bot = {
   // Id propio en el game server (GameServerEntered), sin el bit alto.
@@ -137,35 +138,24 @@ export const bot = {
   lastWarpAt: 0,
   // Último MapChanged / entrada al mundo (el hambre no mira el primer minuto).
   lastArrivalAt: Date.now(),
-  // Pausa: el loop no camina, no pelea, no warpea ni resetea; las pociones siguen.
+  // Pausa: el loop no camina, no pelea ni warpea; las pociones siguen.
   paused: false,
-  // Cacería de dorados (hunt.ts). null = farmeo normal.
-  hunting: null as HuntState | null,
-  resetting: false,
+  // Orden del panel: ir a Lorencia y quedarse en pausa (lo consume el loop en pausa).
+  townNow: false,
   // El loop descarta su objetivo en el próximo tick (cambio de modo).
   retarget: false,
   // En party (PartyList recibido; RemovePartyMember lo saca).
   inParty: false,
+  // Cambió el cerebro (hot.ts): el loop termina limpio y la sesión lo vuelve a arrancar con el nuevo, sin reconectar.
+  reloadBrain: false,
   // La sesión terminó por ceguera (farm-loop): la reconexión espera más (el server suelta la vieja).
   blind: false,
   // Frase corta de lo que hace ahora (la pone el loop).
   doing: 'conectando',
   // Punto al que va ahora (campamento, salida, celda de la cacería).
   goalPoint: null as [number, number] | null,
-  // Última invasión (0xFD).
-  invasion: null as Invasion | null,
-  // Mapa del Golden Dragon que avisó el server ("[Devias] Golden invasion!") y cuándo.
-  dragonMap: null as { map: number; at: number } | null,
-  // Invasión del Dragón Rojo avisada por el server ("[Noria] Red Dragon invasion!").
-  redDragon: null as { map: number; at: number } | null,
 };
 
 // Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de exp/min salen de acá.
 export const expLog = new ExpLog(Date.now());
 
-// Personajes propios (compañeros): no son rivales (esquina, lados, defensa) y con ellos sí hay party.
-// La estación los pasa en MUBOT_MATES (todos sus personajes); sin eso, Horaz y Melu.
-export const MATES: ReadonlySet<string> = new Set(
-  (process.env.MUBOT_MATES ?? 'Horaz,Melu').split(',').map((n) => n.trim().toLowerCase()).filter((n) => n && n !== CHAR_NAME.toLowerCase()),
-);
-export const isMate = (name: string) => MATES.has(name.toLowerCase());

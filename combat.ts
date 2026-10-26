@@ -1,13 +1,12 @@
 /**
  * Combate: qué skill de ataque usar (tabla del cliente, área o directo, alcance de cast), tirarlo
- * contra un objetivo, y sobrevivir con pociones. Lo que decide A QUIÉN pegarle está en farm-loop.ts
- * (campamentos, cacería) y corner-step.ts (la esquina).
+ * contra un objetivo, y sobrevivir con pociones. Lo que decide A QUIÉN pegarle está en farm-loop.ts.
  */
 import { ConsumeItemRequest075Packet } from './packets';
 import { ATTACK_SKILL_POOL, HEAL_AT_PCT } from './config';
 import { sendToGS } from './connection';
 import { sendAreaSkill, sendTargetedSkill } from './actions';
-import { isMate, world, type ItemSlot, type SkillInfo } from './state';
+import { world, type ItemSlot, type SkillInfo } from './state';
 import { directionTowards, log } from './util';
 import skillsData from './data/skills.json';
 
@@ -101,7 +100,7 @@ export const SKILL_MIN_MANA = 0.15;
 export function mageNeedsPower(monsters: Iterable<{ x: number; y: number }> = world.npcs.values()): boolean {
   for (const q of world.players.values()) {
     const d = Math.hypot(q.x - world.x, q.y - world.y);
-    if (q.name != null && isMate(q.name) ? d <= 15 : d <= 8) return true;
+    if (d <= 8) return true;
   }
   return spotIsTight([...monsters], { x: world.x, y: world.y });
 }
@@ -121,32 +120,20 @@ export function spotIsTight(monsters: readonly { x: number; y: number }[], me: {
 /** `prefer`: skill a usar si se lo conoce. Por defecto, para el mago: Decay con competencia o compañero. */
 export function pickAttackSkill(prefer: number | undefined = isMage() && mageNeedsPower() ? 38 : undefined): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
+  // Solo se elige un skill que el maná alcance: si el preferido (o el primero de la lista) no alcanza, baja al siguiente y, sin ninguno, pega a mano.
+  const affordable = (num: number) => world.mana >= (SKILL_TABLE.get(num)?.mana ?? 0);
   const preferred = prefer != null ? world.skills.get(prefer) : undefined;
-  if (preferred) return preferred;
-  // El nivel viene en 0 para skills normales (los 5 de Horaz tienen level 0),
-  // así que no se filtra por nivel.
+  if (preferred && affordable(preferred.number)) return preferred;
+  // El nivel viene en 0 para skills normales, así que no se filtra por nivel.
   for (const num of isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
     const known = world.skills.get(num);
-    if (known) return known;
+    if (known && affordable(num)) return known;
   }
   return undefined;
 }
 
-/** ¿Le da el nivel para el skill? Después de un reset queda debajo del 160/170 de los del Blade Knight. */
+/** ¿Le da el nivel para el skill? (los del Blade Knight piden 160/170). */
 export const skillLevelOk = (num: number, level = world.level) => level >= (SKILL_TABLE.get(num)?.level ?? 0);
-
-// Contra un dorado (2026-10-23): Hume es Blade Knight y pegaba con Twisting Slash (daño de skill 0)
-// teniendo Death Stab (70, a un objetivo) y Rageful Blow (60); la caja del Golden Dragon es del que más
-// daño le hace. Orden: Death Stab, Rageful Blow, y si no le da el nivel o el maná, el de siempre.
-export const GOLDEN_SKILLS = [43, 42] as const;
-export function goldenSkill(level = world.level): SkillInfo | undefined {
-  if (world.mana <= 0) return undefined;
-  for (const num of GOLDEN_SKILLS) {
-    const s = world.skills.get(num);
-    if (s && skillLevelOk(num, level) && world.mana >= (SKILL_TABLE.get(num)?.mana ?? 0)) return s;
-  }
-  return pickAttackSkill();
-}
 
 export function useSkill(targetId: number, skill = pickAttackSkill()): boolean {
   const t = world.npcs.get(targetId);

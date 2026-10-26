@@ -11,20 +11,14 @@ import { pickLoot, type DropJudge } from './farming';
 import { decide, journal } from './journal';
 import { EventBus } from './net/eventBus';
 import { parseItemDropRemoved, parseItemsDropped, parseServerMessage } from './protocol097';
+import { drops, lootState, type ScopedDrop } from './loot-state';
 import { world } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, directionTowards, humanPace, log, sleep, toBytes } from './util';
 
-type ScopedDrop = { seenAt?: number; id: number; x: number; y: number; group: number; num: number; isMoney?: boolean; amount?: number; excellent?: boolean; level?: number };
 /** Juez opcional del equipo que cae (item-score.ts `makeDropJudge`). Vacío por defecto: nada cambia hasta que alguien lo conecte. */
 export const lootPolicy: { judge?: DropJudge } = {};
-export const drops = new Map<number, ScopedDrop>();
 
-// Drop que se está yendo a buscar, y cuántos se levantaron en total (panel e informe).
-export const lootState = {
-  looting: null as { id: number; since: number; pickAt?: number; drop?: { group: number; num: number; x: number; y: number } } | null,
-  count: 0,
-};
 
 // Bug real encontrado jugando (cuenta melu): 'ItemsDropped' (C2/0x20) y
 // 'MoneyDropped075' (mismo código, confirmado en ClientToServerPackets.xml de

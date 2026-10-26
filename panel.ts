@@ -1,29 +1,22 @@
 /**
- * Panel (panel-protocol.ts, ws-server.ts): modo, órdenes de lista cerrada y el estado que se manda
- * cada 1 s. Todo sale de lo que el bot ya trackea de los packets: funciona igual sin navegador.
- * También las señales de dorados a la estación.
+ * Panel (panel-protocol.ts, ws-server.ts): modo, órdenes de lista cerrada y el estado que se manda cada 1 s. Todo sale de lo que el
+ * bot ya trackea de los packets: funciona igual sin navegador. Las órdenes se aplican en el próximo tick del loop (< 1 s).
  */
-import { SKILL_TABLE, pickAttackSkill } from './combat';
-import { journal, panelLog, recentNotes } from './journal';
-import { drops, lootState } from './loot';
-import {
-  chooseHuntMap, mapName } from './panel-logic';
+import { decide, recentNotes } from './journal';
+import { drops, lootState } from './loot-state';
+import { mapName } from './panel-logic';
 import type { BotMode, PanelCommand, PanelState } from './panel-protocol';
-import { startHunt, stopHunt } from './hunt';
-import { GOLDEN_TYPES, bot, expLog, isMate, monsterName, world } from './state';
-import { chebyshev } from './util';
-import { dragonZones } from './zones';
+import { bot, expLog, hooks, monsterName, world } from './state';
 import type { CommandResult } from './ws-server';
 
 export function currentMode(): BotMode {
   if (!bot.inGameAt || bot.kicked) return 'connecting';
-  if (bot.resetting) return 'resetting';
   if (world.maxHp > 0 && world.hp <= 0) return 'dead';
   if (bot.paused) return 'paused';
-  return bot.hunting ? 'hunt' : 'farm';
+  return 'farm';
 }
 
-async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
+function runPanelCommand(c: PanelCommand): CommandResult {
   switch (c.cmd) {
     case 'pause':
       if (bot.paused) return { ok: true, msg: 'ya estaba en pausa' };
@@ -33,35 +26,22 @@ async function runPanelCommand(c: PanelCommand): Promise<CommandResult> {
     case 'resume':
       if (!bot.paused) return { ok: true, msg: 'no estaba en pausa' };
       bot.paused = false;
-      return { ok: true, msg: bot.hunting ? `sigo cazando en ${bot.hunting.hunt.name}` : 'sigo con el farmeo normal' };
-    case 'farm': {
-      const was = [bot.paused && 'pausa levantada'].filter(Boolean);
-      if (bot.hunting) stopHunt('orden del panel');
-      bot.paused = false;
-      return { ok: true, msg: `farmeo normal por la ruta${was.length ? ` (${was.join(', ')})` : ''}` };
-    }
-    case 'hunt': {
-      if (!bot.inGameAt) return { ok: false, msg: 'todavía no estoy en el mundo' };
-      if (bot.resetting) return { ok: false, msg: 'estoy reseteando, probá en un rato' };
-      const ch = chooseHuntMap({ invasion: bot.invasion, level: world.level, map: c.map });
-      if (!ch.ok) return { ok: false, msg: ch.msg };
-      if (bot.invasion?.status === 'active' && ch.alive === 0) return { ok: false, msg: `el último 0xFD dice 0 dorados vivos en ${ch.hunt.name}` };
-      bot.paused = false;
-      startHunt(ch.hunt);
-      return { ok: true, msg: `cazo dorados en ${ch.hunt.name}${ch.alive != null ? ` (${ch.alive} vivos según el 0xFD)` : ''}; corto a los 15 min o cuando no queden` };
-    }
+      return { ok: true, msg: 'sigo farmeando' };
+    case 'town':
+      bot.paused = true;
+      bot.townNow = true;
+      bot.retarget = true;
+      return { ok: true, msg: 'voy a Lorencia y me quedo en pausa' };
   }
 }
 
 export async function handlePanelCommand(c: PanelCommand): Promise<CommandResult> {
-  const r = await runPanelCommand(c);
-  panelLog(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`);
-  journal('command', `${c.cmd}: ${r.msg}`, { command: c, ok: r.ok });
+  const r = runPanelCommand(c);
+  decide(`Orden del panel ${JSON.stringify(c)}: ${r.ok ? '' : 'rechazada, '}${r.msg}.`, { kind: 'order', command: c, ok: r.ok });
   return r;
 }
 
-// Cambios de modo: se detectan en el tick de 1 s del panel (cubre todo: órdenes,
-// muerte, reset, reconexión) y van al log del panel y al de decisiones.
+// Cambios de modo: se detectan en el tick de 1 s del panel (cubre todo: órdenes, muerte, reconexión).
 let lastMode: BotMode | null = null;
 export function noteModeChange() {
   const m = currentMode();
@@ -69,11 +49,10 @@ export function noteModeChange() {
   const from = lastMode;
   lastMode = m;
   if (from == null) return;
-  panelLog(`Modo: ${from} → ${m}.`);
-  journal('mode', `${from} → ${m}`, { from, to: m });
+  decide(`Modo: ${from} → ${m}.`, { kind: 'system', from, to: m });
 }
 
-// Rastro para el minimapa: una posición cada 2 s, solo del mapa actual.
+// Rastro para el radar: una posición cada 2 s, solo del mapa actual.
 const TRAIL_MAX = 60;
 const trail: [number, number][] = [];
 let trailMap = -1;
@@ -100,8 +79,8 @@ export const sessionStart = { at: Date.now(), level: 0 };
 function buildPanelEntities(): NonNullable<PanelState['entities']> {
   const tgt = loopView?.().target ?? null;
   return {
-    monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), gold: GOLDEN_TYPES.has(n.type), target: n.id === tgt })),
-    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y, ...(p.name ? { name: p.name, mate: isMate(p.name) } : {}) })),
+    monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), target: n.id === tgt, value: hooks.value(n.type) })),
+    players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y, ...(p.name ? { name: p.name } : {}) })),
     drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
   };
 }
@@ -114,7 +93,6 @@ export function buildPanelState(now: number): PanelState {
     char: {
       name: bot.charName,
       level: world.level,
-      resets: world.resets ?? null,
       ...(world.classId != null ? { classId: world.classId } : {}),
       hp: [world.hp, world.maxHp],
       mp: [world.mana, world.maxMana],
@@ -124,20 +102,19 @@ export function buildPanelState(now: number): PanelState {
     },
     where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null },
     exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
-    invasion: bot.invasion,
     nearby: {
-      monsters: [...world.npcs.values()].filter((n) => chebyshev(n.x, n.y, world.x, world.y) <= 10).length,
+      monsters: [...world.npcs.values()].filter((n) => Math.hypot(n.x - world.x, n.y - world.y) <= 10).length,
       players: world.players.size,
     },
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: bot.goalPoint,
     entities: buildPanelEntities(),
-    zones: dragonZones(world.map),
+    plan: hooks.plan() ?? undefined,
     notes: recentNotes(),
     session: (() => {
       const v = loopView?.();
-      const skill = pickAttackSkill();
-      return { since: sessionStart.at, level0: sessionStart.level || world.level, kills: v?.kills ?? 0, deaths: v?.deaths ?? 0, casts: v?.casts ?? 0, exp: v?.exp ?? 0, loot: lootState.count, skill: skill ? (SKILL_TABLE.get(skill.number)?.name ?? `skill ${skill.number}`) : 'golpe' };
+      const skill = hooks.skill();
+      return { since: sessionStart.at, level0: sessionStart.level || world.level, kills: v?.kills ?? 0, deaths: v?.deaths ?? 0, casts: v?.casts ?? 0, exp: v?.exp ?? 0, loot: lootState.count, skill: skill ? skill.name : 'golpe' };
     })(),
   };
 }

@@ -1,48 +1,25 @@
-/** Datos y acciones de la estación en el navegador: sondeo de /api/state y pedidos a /api/do. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Alert, Routine, StationRequest } from "../../estacion-logic";
-import type { Invasion } from "../../panel-protocol";
+/** Datos y acciones de la estación en el navegador: sondeo de /api/state (1 s) y pedidos a /api/do y /api/directivas. */
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { PanelCommand, PanelState } from "../../panel-protocol";
 
-export type Character = {
-  key: string;
-  char: string;
-  user: string;
-  /** estado de la cuenta en la base: active / blocked */
-  account: string;
+export type Station = {
+  char: string | null;
+  /** off | starting | on | stopping | in-use | failed | external */
   status: string;
   msg: string;
   pid: number | null;
-  port: number;
+  /** el usuario lo quiere conectado (si cae, la estación lo reconecta) */
+  wanted: boolean;
   panel: boolean;
-  routine: Routine | null;
-  stuck: boolean;
-  /** a quién sigue como sombra (el orquestador de la estación lo decide) y si el usuario lo apagó */
-  shadowOf: string | null;
-  shadowOff: boolean;
-  /** servidor del personaje: se decide al crearlo y no cambia */
-  server: "fast" | "slow";
-  game: null | {
-    mode: string;
-    doing: string;
-    level: number;
-    resets: number | null;
-    map: string;
-    hp: [number, number];
-    expPerMin: number;
-    session?: { since: number; kills: number; deaths: number; exp: number } | null;
-  };
+  game: PanelState | null;
+  now: number;
 };
-export type StationData = { chars: Character[]; alerts: Alert[]; invasion: Invasion | null; now: number; /** cuentas creadas sin personaje todavía (paso 2 pendiente) */ freeAccounts: string[] };
 export type Result = { ok: boolean; msg: string };
 
-export const isOnline = (c: Character) => c.pid != null;
-export const isPaused = (c: Character) => c.game?.mode === "paused" || (c.routine?.kind === "pause" && c.status === "on");
+const EMPTY: Station = { char: null, status: "off", msg: "", pid: null, wanted: false, panel: false, game: null, now: 0 };
 
-const EMPTY: StationData = { chars: [], alerts: [], invasion: null, now: 0, freeAccounts: [] };
-
-/** Estado de la estación cada 2 s (solo lectura: GET /api/state). */
-export function useStationData() {
-  const [data, setData] = useState<StationData>(EMPTY);
+export function useStation() {
+  const [data, setData] = useState<Station>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const refresh = useRef<() => void>(() => {});
@@ -56,74 +33,73 @@ export function useStationData() {
       try {
         const r = await fetch("/api/state", { signal: controller.signal, cache: "no-store" });
         if (!r.ok) throw Error();
-        const s = await r.json();
+        const s = (await r.json()) as Station;
         if (!live) return;
-        setData({ chars: s.chars ?? [], alerts: s.alerts ?? [], invasion: s.invasion ?? null, now: s.now ?? Date.now(), freeAccounts: s.freeAccounts ?? [] });
-        setLoaded(true);
+        setData(s);
         setError("");
-      } catch {
-        if (live) setError("La estación no está disponible. Reintentando…");
+        setLoaded(true);
+      } catch (e) {
+        if (live && (e as Error).name !== "AbortError") setError("Sin conexión con la estación.");
       } finally {
         fetching = false;
       }
     }
     refresh.current = () => void poll();
     void poll();
-    const timer = setInterval(poll, 2000);
+    const t = setInterval(poll, 1000);
     return () => {
       live = false;
       controller.abort();
-      clearInterval(timer);
+      clearInterval(t);
     };
   }, []);
-  const refreshFn = useCallback(() => refresh.current(), []);
-  return { data, loaded, error, refresh: refreshFn };
+  return { data, loaded, error, refresh: useCallback(() => refresh.current(), []) };
 }
 
-/** POST /api/do. */
-async function post(body: StationRequest): Promise<Result> {
-  try {
-    const r = await fetch("/api/do", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({}));
-    return { ok: r.ok && j.ok !== false, msg: j.msg ?? (r.ok ? "Listo." : `La estación rechazó el pedido (${r.status}).`) };
-  } catch {
-    return { ok: false, msg: "La estación no contesta." };
-  }
-}
-
-/** POST a un endpoint de alta de la estación (la clave solo viaja a la propia estación, en loopback). */
-async function postAccount(path: string, body: object): Promise<Result> {
+async function post(path: string, body: unknown): Promise<Result> {
   try {
     const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({}));
-    return { ok: r.ok && j.ok !== false, msg: j.msg ?? (r.ok ? "Listo." : `La estación rechazó el pedido (${r.status}).`) };
+    return (await r.json()) as Result;
   } catch {
-    return { ok: false, msg: "La estación no contesta." };
+    return { ok: false, msg: "No pude hablar con la estación." };
   }
 }
-/** Paso 1: crear la cuenta en el juego (por el worker); queda guardada sin personaje. */
-export const postCuenta = (a: { user: string; pass: string; existing?: boolean }) => postAccount("/api/cuenta", a);
-/** Paso 2: el personaje y su clase en una cuenta sin personaje; el bot lo crea al conectarlo. */
-export const postPersonaje = (a: { user: string; char: string; cls: string; replace?: string; server?: "fast" | "slow"; existing?: boolean }) => postAccount("/api/personaje", a);
 
-export type Actions = Record<"connect" | "disconnect" | "retry" | "pause" | "resume", (c: Character) => Promise<Result>> & {
-  shadow: (c: Character, on: boolean) => Promise<Result>;
+export function useActions(refresh: () => void, onResult: (r: Result) => void) {
+  const run = useCallback(async (body: unknown) => {
+    const r = await post("/api/do", body);
+    onResult(r);
+    refresh();
+    return r;
+  }, [refresh, onResult]);
+  return {
+    connect: () => run({ action: "connect" }),
+    disconnect: () => run({ action: "disconnect" }),
+    retry: () => run({ action: "retry" }),
+    order: (command: PanelCommand) => run({ action: "order", command }),
+  };
+}
+
+export type Directivas = {
+  esquema: Record<string, { def: boolean | number; min?: number; max?: number; doc: string }>;
+  valores: Record<string, boolean | number>;
+  vivos: Record<string, boolean | number>;
 };
+export async function getDirectivas(): Promise<Directivas | null> {
+  try {
+    const r = await fetch("/api/directivas", { cache: "no-store" });
+    return r.ok ? ((await r.json()) as Directivas) : null;
+  } catch {
+    return null;
+  }
+}
+export const setDirectivas = (set: Record<string, boolean | number>, unset: string[] = []) => post("/api/directivas", { set, unset });
 
-export function useActions(refresh: () => void): Actions {
-  return useMemo(() => {
-    const run = async (body: StationRequest) => {
-      const r = await post(body);
-      refresh();
-      return r;
-    };
-    return {
-      connect: (c) => run({ action: "connect", char: c.key, routine: { kind: "farm" } }),
-      disconnect: (c) => run({ action: "disconnect", char: c.key }),
-      retry: (c) => run({ action: "retry", char: c.key }),
-      pause: (c) => run({ action: "routine", char: c.key, routine: { kind: "pause" } }),
-      resume: (c) => run({ action: "routine", char: c.key, routine: { kind: "farm" } }),
-      shadow: (c, on) => run({ action: "shadow", char: c.key, on }),
-    };
-  }, [refresh]);
+export async function getLog(): Promise<string> {
+  try {
+    const r = await fetch("/api/log", { cache: "no-store" });
+    return r.ok ? await r.text() : "";
+  } catch {
+    return "";
+  }
 }

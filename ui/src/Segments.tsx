@@ -1,24 +1,16 @@
 import { Tabs } from "@base-ui/react/tabs";
-import type { ReactNode } from "react";
 
-/** Selector de opciones en segmentos (3D/Táctico, Cámara/Cerca/Zona/Mapa). */
-export function Segments({
-  value,
-  onChange,
-  items,
-  label,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  items: { value: string; label: string; icon?: ReactNode }[];
-  label: string;
-}) {
+/** Selector de opciones en segmentos (alcance del mapa): estilo sherpa, fondo `soft` y el activo en `hover`. */
+export function Segments({ value, onChange, items, label }: { value: string; onChange: (v: string) => void; items: { value: string; label: string }[]; label: string }) {
   return (
     <Tabs.Root value={value} onValueChange={(v) => onChange(String(v))}>
-      <Tabs.List className="segments" aria-label={label}>
+      <Tabs.List className="inline-flex gap-0.5 rounded-md bg-soft p-0.5" aria-label={label}>
         {items.map((i) => (
-          <Tabs.Tab className="segment" key={i.value} value={i.value}>
-            {i.icon}
+          <Tabs.Tab
+            key={i.value}
+            value={i.value}
+            className="flex h-6 items-center justify-center rounded-sm border-0 bg-transparent px-2.5 text-sm font-medium text-muted transition-colors duration-75 hover:text-ink data-[active]:bg-hover data-[active]:text-ink"
+          >
             {i.label}
           </Tabs.Tab>
         ))}

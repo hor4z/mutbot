@@ -1,158 +1,113 @@
 # mubot
 
-Bot de MU sin navegador: hace que un personaje **progrese solo** (pelea, sube de
-nivel, reparte puntos, resetea, levanta cajas) hablando el protocolo real del
-cliente 0.97d. Se maneja desde la estación (`bun run estacion`).
+Bot de **MU Online 0.97d para el servidor Slow**: hace que un personaje (Capitan) **progrese solo** (pelea, sube de nivel, reparte
+puntos, levanta botín) hablando el protocolo real del cliente, sin navegador. Aprende dónde farmear y a quién pegarle a medida que
+juega. Se maneja desde la estación (`bun run estacion`, `http://127.0.0.1:8787`).
 
-Este documento es la referencia del proyecto. `CLAUDE.md` lo apunta acá.
+Este documento es la referencia del proyecto. `CLAUDE.md` lo apunta acá. Si algo difiere del código, **el código gana**: corregí el
+documento en el mismo cambio.
 
 ## Alcance y límites
 
 Esto corre **solo contra la infraestructura propia del usuario**. Guardas en el código:
 
-- `--allow-remote` es obligatorio para apuntar a hosts no locales. Sin eso, el
-  bot se niega a arrancar si el proxy o el connect server no son loopback/RFC1918.
-- Los ritmos son deliberadamente humanos y hay comentarios que lo explican.
-  **No los bajes para "optimizar".** Ver "Anti-cheat" abajo.
-- **Incidente real:** existía un modo de prueba que mandaba ráfagas de
-  movimiento/ataque a velocidad máxima para auditar el anti-cheat, y una vez
-  se corrió por error contra un host con jugadores reales. Ese modo **se
-  eliminó**: el bot ahora siempre arranca el loop autónomo a ritmo humano.
+- `--allow-remote` es obligatorio para apuntar a hosts no locales. Sin eso, el bot se niega a arrancar si el proxy o el connect
+  server no son loopback/RFC1918.
+- Los ritmos son deliberadamente humanos y hay comentarios que lo explican. **No los bajes para "optimizar".** Ver "Anti-cheat".
+- Nunca flood, nunca brute force, nunca dos sesiones de la misma cuenta. Nunca correr el bot con una cuenta que el usuario tenga
+  abierta en su navegador (el bot va con `--exit-if-in-use`: si la cuenta está en uso, sale con código 3).
+- Una cuenta desconectada desde el panel es el usuario jugando a mano: la estación no la reconecta sola.
 
-Nunca flood, nunca brute force, nunca sesiones simultáneas de la misma cuenta.
+**Solo Slow, un solo personaje.** Todo lo del servidor Fast (resets, cacería de dorados, esquina de Arena 2, sombras, orquestador,
+varias cuentas) se archivó: tag `fast-final`, rama `archive/fast` y los datos en `~/.mubot/archivo-fast/`. No traer ideas de ahí sin
+medirlas en el Slow: son estrategias de otro juego (exp rápida, resets).
 
 ## Comandos
 
 ```bash
-bun install
-# (los tests se eliminaron a pedido del usuario el 2026-10-23; están en el historial de git)
-bun run tsc         # typecheck (tiene que dar limpio)
-bun run estacion    # la estación: http://127.0.0.1:8787/panel (ver "Estación")
-bun run proxy       # proxy WebSocket -> TCP (127.0.0.1:3000; PORT/HOSTNAME para cambiarlo)
-bun run bot         # un bot suelto: credenciales por .env (MUBOT_USER/PASS/CHAR)
+bun run tsc          # tipos (bot, UI y worker): tiene que quedar limpio antes de dar algo por terminado
+bun run estacion     # estación + panel en http://127.0.0.1:8787 (conecta y mantiene vivo al personaje)
+bun run bot          # el bot suelto (lo normal es lanzarlo desde la estación)
+bun run db:up        # ClickHouse local (docker); la base real está en el servidor de .env.db
+bun run db:init      # crea la base `mubot_slow` (esquema y vistas de db/); no toca `mubot` (Fast)
+bun run ui:dev       # UI con HMR de React (proxy a la estación)
+bun run ui:build     # compila la UI a estacion.html (un solo archivo que sirve la estación)
+MU_SRC=~/self/mu/src bun run extract   # regenera packets/ (generado: no se edita a mano)
 ```
 
-Flags del bot: ver la cabecera de `headless-bot.ts` (conexión, `--auto-seconds 0` = sin límite con
-reconexión y backoff, `--reset-level`, `--build`, `--stat-batch`, `--heal-at`, `--skills`, `--spots`,
-`--ws-port`, `--decision-log`, `--exit-if-in-use`, `--list-chars`). **Un flag desconocido corta al arrancar con
-código 2**: antes el bot arrancaba con defaults y se colgaba esperando `LoginResponse`.
+Los tests se eliminaron a pedido del usuario (2026-10-23; están en el historial de git).
 
-`--exit-if-in-use`: si en el primer login la cuenta ya está conectada (la pestaña del navegador),
-sale con código 3 en vez de reintentar. Un login rechazado que no se arregla reintentando sale con código 4 (cuenta bloqueada) o 5 (clave, cuenta o versión mal), y el personaje que no está en la cuenta (o la cuenta sin personajes en ese servidor) con código 6; la estación lo muestra y no lo reconecta. Después de un corte sí reintenta (el server tarda en soltar
-la sesión vieja del propio bot). Lo pasa la estación.
+## Estructura: núcleo y cerebro
 
-## Estructura
+El bot son dos capas (`hot.ts`). El **núcleo** queda siempre vivo y conectado; el **cerebro** se recarga solo cuando cambia un archivo,
+**sin desconectar** (se ve en el log: `Cambió el cerebro: lo recargo sin desconectar`).
 
-La explicación completa (partes, flujo de un tick, cómo se coopera, cómo mejorar un bot) está en **`docs/arquitectura.md`**. Resumen:
+| Capa | Archivos | Qué hace |
+| --- | --- | --- |
+| Núcleo | `headless-bot.ts`, `config.ts`, `state.ts`, `connection.ts`, `world.ts`, `actions.ts`, `events.ts`, `chat.ts`, `liveness.ts`, `protocol097.ts`, `terrain.ts`, `telemetry.ts`, `journal.ts`, `panel.ts`, `panel-logic.ts`, `panel-protocol.ts`, `ws-server.ts`, `directivas.ts`, `loot-state.ts`, `hot.ts`, `net/`, `packets/` | sesión, protocolo, estado del mundo (`world`, `bot`), panel, base |
+| Cerebro | `brain.ts` (entrada), `farm-loop.ts`, `area.ts`, `learning.ts`, `combat.ts`, `power.ts`, `loot.ts`, `loop-ctx.ts`, `progress.ts`, `shop-scout.ts`, `path.ts`, `farming.ts`, `spawns.ts`, `warps.ts` | qué decide: dónde farmear, a quién pegar, qué skill, puntos |
 
-El bot es un loop corto (`farm-loop.ts`, ~500 líneas) sobre módulos de protocolo y de decisión pura. Cada bot es un proceso;
-la estación (`estacion.ts`) los lanza y los muestra. Cada bot farmea por su cuenta; se hablan directo por UDP (`bus.ts`) y la estación los mantiene vivos (las sombras se apagan con `MUBOT_SHADOWS=0`).
+Reglas de la recarga:
 
-| Archivo | Qué es |
-|---|---|
-| `headless-bot.ts` | Entrada del bot: flags (cabecera), panel, `main`/`session` con reconexión y backoff, señales. |
-| `farm-loop.ts` | El loop: ciego/trabas > buffs > sobrevivir > pausa/PK > warp pedido > ayuda > reset > ruta > loot > objetivo > pelear. |
-| `help.ts` | Party: invita el más fuerte (por stats); si pasan 40 s sin party invita también el más débil (los roles se invierten con los resets). Reintenta rápido (15 s x4) y acepta resolviendo el nombre al responder. |
-| `bus.ts` | Canal directo entre bots (UDP): posiciones, avisos de dorado y la orden del orquestador. |
-| `alta-sync.ts` | Altas por el worker: la estación trae cada minuto las cuentas cifradas de `workers/edge`, las descifra y las suma a la base; también cifra/envía las del panel y crea la cuenta en el juego por el worker. |
-| `state.ts` / `config.ts` | Estado compartido (`world`, `bot`, `learned`) y flags/ritmos humanos. |
-| `connection.ts` / `world.ts` / `actions.ts` | Sockets y cifrado, parsers a mano del 0.97d, packets de salida. |
-| `combat.ts` / `loot.ts` / `progress.ts` | Skills y pociones, drops, reparto de puntos y `/reset`. |
-| `route.ts` / `learning.ts` | Warps, ruta fija por tramo (`maybeChangeSpot`), lo aprendido en `~/.mubot/learning.json`. |
-| `directivas.ts` | **Directivas en caliente:** perillas de comportamiento que se cambian sin reiniciar los bots. Viven en `~/.mubot/directivas.json` (`{"global": {...}, "hume": {...}}`, lo del personaje pisa lo global); cada bot y la estación relee el archivo cuando cambia (~2 s) y el código lee `D.<clave>` en cada decisión. **Alcances** (de menor a mayor prioridad): `global`, `fast` o `slow` (los personajes de ese servidor) y el nombre del personaje. Cada directiva lleva `srv` (`ambos`, `fast` o `slow`): una del otro servidor se salta sin ruido en `global` y en el alcance del servidor, y se avisa si está en el de un personaje. Las del Slow (`slowStatBatch`, `slowAgiTarget`, `slowBullFromLevel`, `slowGiantsFromLevel`) afinan `slowStrategy` en caliente. Esquema (`ESQUEMA`, con tipo, rango y descripción): `hunt`, `dragonAll`, `stayDragonMap`, `crew`, `claimCommons`, `huntMinLevel`, `cornerCrowdMax`, `cornerBanMin`, `shadows`. Se cambian con `curl -X POST http://127.0.0.1:8787/api/directivas -H 'Origin: http://127.0.0.1:8787' -H 'Content-Type: application/json' -d '{"scope":"global","set":{"crew":false},"unset":["huntMinLevel"]}'` (`scope`: `global` o un personaje; `GET` lista el esquema y lo guardado) o editando el archivo. Un valor inválido se ignora y el bot lo avisa en su log ("Directiva ignorada…"); nunca lo rompe. Para sumar una perilla: agregarla a `ESQUEMA` y leer `D.<clave>` donde decide. Cambia parámetros; para cambiar la *lógica* sin reiniciar, ver `ganchos.ts`. |
-| `ganchos.ts` | **Lógica en caliente:** cada bot carga `~/.mubot/ganchos.ts` (o `MUBOT_GANCHOS`) y lo recarga cuando cambia (~2 s). Exporta funciones con el nombre de un gancho y reemplazan la decisión del repo: `elegirZona` (a qué zona de dragón ir), `dejarMapa` (motivo para dejar el mapa de la cacería) y `elegirDorado` (qué dorado pegar); lo que no exporta lo decide el repo. Devolver `undefined` = "no opino"; un error cae al repo en esa llamada y a los 3 seguidos apaga el gancho hasta la próxima recarga; un archivo con error de sintaxis deja el anterior. Plantilla con tipos: `ganchos.ejemplo.ts`. El archivo corre dentro del bot con sus permisos y `tsc` no lo revisa: es código propio, no traerlo de afuera sin leerlo. Para sumar un gancho: tipo en `Ganchos`, nombre en la lista de `recargar()` y envolver la decisión con `gancho(nombre, base)` donde se toma. |
-| `dragon-fight.ts` | Registro de cada pelea con un dragón (`dragon_fight` en la base): segundos desde el aviso hasta verlo, hasta el primer golpe y hasta el final, golpes, nuestros y ajenos cerca, y si cayó (por quién) o se perdió de vista. `farm-loop.ts` lo alimenta. |
-| `crew.ts` | Reparto del rastrillaje entre los que cazan juntos en un mapa: franjas contiguas por nombre (`bandsOf`, `crewRank`); `hunt.ts` y `HuntExplorer.setCrew/markSeen` lo usan. Un dragón es de todos (aviso `dragon` del bus, vienen aunque cacen en otro mapa); un dorado común lo deja el que lo tiene más cerca un compañero. |
-| `camp.ts` / `farming.ts` / `explore.ts` / `power.ts` / `golden.ts` | Campamentos y objetivo por exp/s, exploración del mapa vacío, qué puede matar el personaje, regla de dorados. |
-| `loop-ctx.ts` | Caminar con el terreno (`walkTowards`) y detectar trabas (`stuckSince`). |
-| `estacion.ts` / `estacion-logic.ts` / `ui/` | La estación y su interfaz (`panel.html`/`estacion.html` se generan con `bun run ui:build`). |
-| `scripts/watch.ts` | Monitor de la flota: posición, qué hace y alerta de "sin avanzar". |
-| `net/`, `packets/`, `data/` | Copias del cliente MU JS: no reescribir (ver abajo). |
+- El núcleo **nunca importa el cerebro**: lo que el panel y la telemetría necesitan lo instala el cerebro en `hooks` (`state.ts`) desde
+  `brain.ts` (`install`). El estado compartido (botín, mundo) vive en el núcleo para sobrevivir a la recarga.
+- Un archivo nuevo del cerebro hay que sumarlo a `BRAIN` en `hot.ts`. Si no compila o falla al correr, el bot se queda con el cerebro
+  anterior y lo avisa. Un cambio en el núcleo **sí pide reiniciar** el bot (el log lo avisa).
+- Las perillas numéricas se cambian sin tocar código: `~/.mubot/directivas.json` o `POST /api/directivas` (`directivas.ts`).
 
-Historia: cacería automática, exploradores, esquina de Arena 2, defensa contra jugadores, escuadras con misiones, crianza,
-agente del navegador y tests viven en el tag `pre-cerebro` y en el historial de git.
+## Cómo decide el bot (`farm-loop.ts`, un tick = una decisión)
 
-### Proyecto independiente
+1. Que no esté roto: ciego (3 min sin monstruos o sin exp: reconecta), trabado (15 s sin moverse), vida baja (huye al pueblo y descansa
+   hasta el 70 %), pausa.  2. Repartir puntos (`progress.ts`, plan en `area.ts`).  3. Ir a la zona que toca (`area.ts`).
+4. Levantar botín (`loot.ts`).  5. Pegarle al monstruo de más valor del área (`valueOf` / distancia).
 
-El bot no depende en runtime del cliente MU JS (github.com/asosnovskiy, con el que
-nació). `net/`, `packets/` y `data/` son copias de su `src/`:
+**Sin spots fijos.** `area.ts` elige y aprende la zona mientras juega: candidatas = celdas de spawns que el personaje aguanta
+(`power.ts`) más lo que ve en pantalla (los monstruos custom del server no están en `spawns.json`); si hay zonas medidas elige la que más
+exp/min dio, y a veces prueba una sin medir; una zona vacía 45 s se marca vacía un rato; donde murió se evita una hora; sin zonas en el
+mapa cambia de mapa por warp. `learning.ts` mide la exp real de cada kill por tipo de monstruo (`valueOf`). **Cada decisión se explica**
+con `decide()` (`journal.ts`): va al log, al panel y a la base.
 
-- `net/utils.ts` y `net/encryption/` son copias **literales**. Una versión anterior
-  tenía helpers "reescritos" con otra firma (`GetByteValue` con los argumentos
-  invertidos, `ArrayCopy` distinto): el `Count` de `SkillListUpdate` daba siempre 0
-  y el SimpleModulus se rompía. No se notaba porque el bot todavía importaba de
-  `../src/`. No reescribirlos. Excepciones: `net/socket.ts` no tira si un paquete llega sin subcode (3 bytes: mataba al bot al hablar con el Trainer) y `Counter.Increase()` de
-  `simpleModulus.ts` vuelve a 0 después de 255 (`& 0xff`). Sin eso, desde el
-  paquete C3 número 256 todos daban "can't decrypt packet" y el bot quedaba ciego
-  a la exp, la vida y el respawn (2026-10-11).
-- `net/socket.ts` resuelve los packets con la tabla completa de S2C del cliente
-  (`packets/routes.ts`) y el mismo `find` que su `createSocket`, así que los
-  nombres de evento son idénticos (varias trampas de abajo dependen de eso).
-- Para regenerar `packets/` hace falta el cliente clonado:
-  `MU_SRC=~/self/mu/src bun run extract` (por defecto busca `../mu/src`).
+Skills: `combat.ts` usa el primero de `ATTACK_SKILL_POOL` (`config.ts`) que el personaje conozca **y le alcance el maná**: Twisting Slash
+(41, área) primero, después Cyclone (22), etc. Sin maná, pega a mano.
 
-## Farmeo por exp/segundo (`farming.ts`, port del agente web)
+## Estación y panel
 
-El agente que juega dentro del cliente web (`browser-agent.js`) sube de nivel
-mucho más rápido que el bot headless. Su lógica de decisión está portada a
-`farming.ts` (pura, testeada en `farming-tests.ts`) y enganchada en
-`autonomousLoop` (`farm-loop.ts`):
+`estacion.ts` (un personaje, `~/.mubot/personaje.json` con `{ user, pass, char }`): lanza el bot detached (`~/.mubot/logs/<char>.log`),
+lo adopta si ya corre, lo mantiene vivo con espera creciente, y sirve el panel y la API. Solo 127.0.0.1; los POST exigen el Origin
+propio y JSON. La conexión va siempre por el worker (`workers/edge`; URL en `.env.alta`, token en `~/.mubot/alta/proxy-token`).
 
-- **Objetivo por EXP POR SEGUNDO, no por cercanía** (`targetRate`; el bot lo
-  usa a través de los campamentos de `camp.ts`, `pickTarget` queda para tests):
-  `valor = (exp(tipo) + densidad) / (seg_kill(tipo) + distancia × 0.4)
-  × 0.7^(jugadores a ≤ 5 tiles del objetivo)` (penalización 0.3 por jugador,
-  `competitionPenalty` del agente web). Densidad: cada otro monstruo a
-  ≤ 3 tiles suma la mitad de su valor (Twisting Slash es de área). Los que se
-  estiman en > 8 s se descartan si hay alguno más rápido. Solo se miran
-  monstruos a < 28 tiles. El objetivo se mantiene hasta que muere o sale del
-  scope (o queda inalcanzable).
-- **Aprende por tipo de monstruo** (`MonsterTypeStats`, EMA 0.7/0.3):
-  - **exp por kill**, de `ExperienceGained` (C3 `0x16`): `KilledObjectId` u16
-    BE @3, `AddedExperience` u16 BE @5, `DamageOfLastHit` @7. Como
-    `AddedExperience` es u16, **un kill grande llega partido en tramos de
-    65535** con el mismo id: los que llegan en < 1.5 s se **suman** y el EMA
-    se calcula sobre la suma (`ExpSplitTracker`). Al llegar el evento el
-    monstruo ya salió del scope: el tipo sale del registro id → {tipo,
-    posición, mapa} que se llena en `AddNpcsToScope` y `ObjectWalked075`.
-  - **segundos hasta matarlo**: desde que se elige el objetivo hasta
-    `ObjectGotKilled` con nosotros como killer (incluye caminar hasta él, igual
-    que el agente web). Fuera de (0, 60) s no se aprende.
-- **Sin datos de un tipo:** exp ≈ √vidaMax × mediana(exp/√vida de los tipos
-  medidos) (en MU la exp va con el nivel del monstruo, que crece mucho más
-  lento que su vida: con monstruos más débiles se sube más rápido); segundos ≈
-  vida / mediana(vida/segundos) × 1.4. **La vida máxima no llega en el
-  protocolo headless** (el cliente web la lee de su `attributeSystem`): sale de
-  `data/monsters.json` (`HP` por `Numb`, `MONSTER_MAX_HP`). Para los custom
-  ≥ 300 (sin fila) se usa la mediana de la exp medida y 3 s.
-- **Jugadores en scope** (`world.players`) para la penalización: se leen de
-  `AddCharactersToScope` (C2 `0x12`) con el layout 0.95d del XML de OpenMU
-  (count @4, `CharacterData` de 31 bytes; 27 en 0.75), solo id BE@0 y X/Y
-  @2/@3; el stride se deduce del largo y si no cierra se ignora el packet. Se
-  actualizan con `ObjectWalked075`/`ObjectMoved` y se borran con
-  `MapObjectOutOfScope` y al cambiar de mapa. **Sin verificar en vivo.**
-- **Autoevaluación** (`SelfReport`, sobre el `ExpLog` por segundo) cada 5 min en consola: nivel, resets, kills,
-  exp/min en 5 y 30 min (ventana real: con 2 min de registro divide por 2), % del tiempo peleando/caminando/esperando/otro, y
-  duración de cada ciclo de reset. También al terminar cada reset y al final.
-  El tiempo de cada iteración del loop se le atribuye a su fase (pelear =
-  hay objetivo, caminar/esperar = explorador, otro = pociones, stats, venta,
-  warp, reset).
-- `MUBOT_DEBUG_COMBAT=1` además loguea cada objetivo elegido con su exp/s
-  estimada y cuántos jugadores tiene cerca.
+| Ruta | Qué |
+| --- | --- |
+| `GET /`, `/panel` | el panel (`estacion.html`, generado por `bun run ui:build`) |
+| `GET /api/state` | estado de la estación y del bot (`PanelState`, `panel-protocol.ts`), cada 1 s |
+| `POST /api/do` | `{action:'connect'|'disconnect'|'retry'}` o `{action:'order', command}` con `pause`, `resume`, `town` |
+| `GET/POST /api/directivas` | perillas en caliente |
+| `GET /api/log`, `/terrain/<mapa>` | últimas líneas del log; terreno del radar |
 
-### Reset encadenado
+La UI (`ui/src`, React + Tailwind 4 con el tema de sherpa en `index.css`) muestra el estado, el radar y el feed de decisiones. El bot
+habla con la estación por un WebSocket local (`--ws-port 8791`, `ws-server.ts`): estado cada 1 s y órdenes de lista cerrada.
 
-A `--reset-level` (400): reparte los puntos con `/add` (`planStats` por
-defecto, ver "Port del agente web"), warp a Lorencia, `/reset`, vuelve a elegir el
-personaje, reparte los puntos nuevos y sigue. Los spots calientes y lo
-aprendido por tipo de monstruo se conservan; el rendimiento por mapa
-(`routeScores`) y el tier visto se vuelven a medir desde Lorencia. Con
-`--auto-seconds 0` lo repite indefinidamente.
+## Datos y aprendizaje
 
-**Sin verificar en vivo desde el headless:** todo este bloque (elección por
-exp/s, exp partida, jugadores en scope, ruta de spots con Arena 1-4, reset
-encadenado). La lógica viene del agente web, que sí juega con el usuario, y
-está testeada offline.
+ClickHouse, base **`mubot_slow`** (`db/schema.sql`, `db/views.sql`; la `mubot` del mismo servidor es el archivo de Fast y no se toca).
+`telemetry.ts` manda `ticks` (cada 5 s: posición, exp/min, skill, zona), `events` (`decide`, `kill` con su exp, `death`, `flee`,
+`monster_seen`, …) y `players_seen`, por lotes y sin frenar el juego. Vistas: `v_cell_rate` (exp/min por zona de 16×16), `v_deaths`,
+`v_kill_value` (exp por tipo de monstruo), `v_skill_rate`, `v_outcome` (exp/min antes y después de cada decisión), `v_monsters`.
+Variables: `MUBOT_DB_URL/USER/PASSWORD` (de `.env.db`), `MUBOT_DB_NAME` (por defecto `mubot_slow`). `scripts/report.ts` resume una hora.
+
+**Datos del cliente:** `data/monsters.json` es la tabla del cliente web (353 monstruos, con los custom del Slow: se saca del bundle de
+`mu.mormon.garden`, constante `xMt`); `data/spawns.json` es la del repo del cliente y es la estándar, no ubica los monstruos custom.
+
+## Reglas de código
+
+- `packets/` es generado. `net/utils.ts` y `net/encryption/` son copias literales del cliente: no reescribirlas (una versión "más limpia"
+  ya rompió el cifrado y el parseo de skills).
+- Prioridad al estilo del código que rodea: comentarios en español, el porqué antes que el qué.
+
+## Historia del protocolo
+
+Lo que sigue se capturó jugando y **sigue valiendo para el Slow** (mismo cliente 0.97d). Los ejemplos con resets, Arenas o dorados son
+del Fast archivado.
 
 ## Combate: historia de tres bugs
 
@@ -258,25 +213,12 @@ Otros packets que el cliente manda solo:
 Claves: las de SimpleModulus del cliente (`ze`/`_e`) son las mismas que
 `DefaultClientKey` de `net/encryption/`. El xor32 es `XOR32_KEY_097D`.
 
-### Reset y stats (capturado)
 
-**Confirmado en vivo (2026-10-10, ciclo 4):** `/reset` se acepta desde Arena 4 (no hace
-falta estar en Lorencia) y el server devuelve al personaje a Lorencia al volver a entrar.
-El reset completo (comando → selección → volver al mundo) tarda ~7 s.
+### Stats (capturado)
 
-Todo por **chat** (`C1 len 00 <nombre 10 bytes> <texto>`):
-- `/add <stat> <n>` reparte n puntos de una vez. Confirmados `str`, `ene` y `vit`
-  (3000 puntos post-reset repartidos con 3 comandos); `agi` confirmado el 2026-10-10.
-  **Tope por stat: 65535** ("Se ha alcanzado el máximo de 65535 Base Energy"). Con 15 resets Horaz
-  tiene fuerza y energía al tope: `planStats` manda lo que no entra a agilidad y después a vitalidad.
-  Antes repetía `/add str`/`/add ene` rechazados cada 3 s sin fin. El server contesta con un
-  `CharacterInformation` completo (F3/03) y `CharacterResets` (`C1 06 FE 00 ..`).
-- `/reset` exige **nivel 400**: probado en 300, el server contestó "El nivel necesario para el
-  reset es 400." (2026-10-10). El agente ya no prueba niveles menores (`resetProbe: []`).
-  La barra muestra `Resets: 15 · GR: 1`: hay **grand reset**, todavía sin investigar.
-- `/reset` (el usuario lo hizo en nivel 400, en Lorencia, después de repartir puntos).
-  El server descuenta zen y **devuelve al cliente a la selección de personaje**
-  (`CharacterList`); hay que volver a elegir el personaje para entrar.
+Todo por **chat** (`C1 len 00 <nombre 10 bytes> <texto>`): `/add <stat> <n>` reparte n puntos de una vez (`str`, `agi`, `vit`, `ene`
+confirmados). **Tope por stat: 65535**: `capStats` manda lo que no entra a los otros. El server contesta con un `CharacterInformation`
+completo (F3/03). Si el server no toma el reparto, `progress.ts` espera 15 min antes de reintentar.
 
 ## Protocolo: trampas encontradas
 
@@ -381,97 +323,3 @@ Ritmos actuales: caminata 380ms, ataque 500ms, skills 900ms, ventas 600ms.
 
 **No tocar `SpeedHackDetectPlugIn` ni la configuración del server para que el bot
 vaya más rápido.** El objetivo es saber si el server valida, no hacerlo pasar.
-
-## Limitaciones y pendientes
-
-Ver `docs/arquitectura.md`.
-de cómo se llegó acá: el código gana si difieren.
-
-## Archivos externos
-
-En `/tmp/opencode/OpenMU` (fuera de este repo) están las referencias de OpenMU
-0.99b que se usaron para validar el flujo de venta:
-`SellItemToNpcAction.cs`, `SellItemToNpcHandlerPlugIn.cs`, `TalkNpcAction.cs`,
-`BotShoppingHandler.cs`, `Version075/Gates.cs`.
-
-`BotShoppingHandler.cs` es **el bot nativo server-side de OpenMU** (MIT, sin
-licencia, `BotConfiguration.Enabled`). Hace shopping, skills y navegación contra
-el estado real del server, que es más confiable que cualquier reimplementación por
-packet. Si en algún momento la UI deja de ser el requisito dominante, ese es el
-camino corto. No se usa ahora porque no acepta control externo: las decisiones
-quedan fijas en el C#.
-## Worker de Cloudflare (`workers/edge`, monorepo con Bun workspaces)
-
-El repo es un monorepo chico: el bot vive en la raíz y `workers/edge` es un worker de Cloudflare. `bun run tsc` chequea los dos.
-- **Altas en dos pasos (panel, "+ Agregar cuenta"):** 1) `POST /api/cuenta` {user, pass}: el worker registra la cuenta en el juego
-  (`/api/register` del servidor; ahí ve la clave en claro por TLS, sin guardarla; tope de 5 por hora) y la estación la guarda en la base
-  **sin personaje y sin tarjeta**. 2) `POST /api/personaje` {user, char, cls}: se elige una cuenta sin personaje, el nombre y la clase
-  (dk/dw/elf/mg); aparece la tarjeta y el bot crea el personaje en el juego al conectarlo (`MUBOT_CREATE_CLASS`, paquete `F3/01`; el Magic
-  Gladiator pide un personaje de nivel alto en la cuenta). Una tarjeta fallida por "no tiene ese personaje" ofrece "Crear personaje…" (pone
-  la clase al personaje que ya figura). La tercera pestaña ("Ya existe") agrega cuenta y personaje que ya existen: `POST /api/alta` cifra
-  los datos (RSA-OAEP) y los deja en la cola (KV) del worker; la estación los trae, los descifra con su clave privada
-  (`~/.mubot/alta/private.jwk`) y hace `db.addChar`. Todos los POST exigen el Origin de la propia estación.
-- **Spots del Slow (`SLOW_SPOTS`):** Spiders (<12), Bull Fighters (12-44), Giants de Lorencia (45-99) y, desde `slowDeviasFromLevel` (100), Devias vía el warp Devias 2 (zona noroeste, Ice Monster y Hommerd: ~300.000 exp/min a nivel 130 contra ~200.000 en los Giants, sin muertes, vida mínima 76 %). Cada spot trae su warp y su ancla; el de Devias se calcula con `bestSpot`.
-- **Destinos concretos (`spawns.ts`, `data/spawns.json`):** copia de `packages/game-data/reference/spawns.json` del cliente (por mapa: tipo, rectángulo y cantidad de cada spawn). `bestSpot(mapa, desde, filtro)` devuelve la celda caminable (fuera de zona segura) más cercana con al menos 0,004 monstruos por tile (lo que tienen los Giants de Lorencia, que coincide con lo medido: nacen en [8,11,60,80]); `hotspots` da toda la rejilla. Sirve para ir a un lugar sin explorar a ciegas. En Devias 1 da (172,60): Assassins nivel 26 y Worms nivel 20. Ojo: el punto más denso de un mapa suele ser un evento lejano (15 Yeti en (220,212)). `Strategy.fightOnTheWay` (Slow): de camino a un lugar lejano pelea con lo que esté a 8 tiles en vez de pasar entre los monstruos.
-- **Probar un lugar (directiva `slowProbarWarp`, Slow):** índice del warp al que el personaje va a farmear (4 Devias 1, 5-7 Devias 2-4, 11 Atlans…); el ancla sale de los datos de spawns (`bestSpot` desde donde aterriza; radio 25) y, si el mapa no los tiene, de una búsqueda en espiral. Con 0 vuelve al spot normal por nivel. Se mide con los ticks de la base (`exp_min_1m` por minuto y mapa). Por ahora se escribe en `~/.mubot/directivas.json` (`{"capitan":{"slowProbarWarp":4}}`); la estación, que carga el esquema al arrancar, solo la acepta por la API tras reiniciarla. No olvidar volver a 0.
-- **Nidos (`spawns.ts`, `NEST_KEEP_OUT`):** un spawn fijo de 1 tile con 5 o más monstruos (10 Elite Yeti en (36,25) y en (194,165) de Devias) se trata como nido: ninguna celda a menos de 26 tiles es destino. Capitan murió (2026-10-25) en Devias 2, cuyo warp deja a 12 tiles del primer nido; por eso el spot de Devias usa Devias 1 (deja en (205,41), ancla (172,60)). Al huir no se espera la pausa de 15 s entre warps (3 s) y el umbral sube al 50 %. En el pueblo con menos del 70 % de vida el bot descansa antes de salir (también tras reiniciar).
-- **Huir con poca vida (`Strategy.fleeBelow`, Slow):** sin pociones, si la vida baja del 40 % con monstruos a 6 tiles, el bot hace warp a Lorencia (pueblo), anota el evento `flee` y espera a recuperar el 70 % antes de volver. Motivo (2026-10-25): en Atlans Capitan quedó parado con 9 monstruos encima (no puede pelear con los que su poder no permite) y bajó de 526 a 113 de vida en 16 s; la regeneración en el pueblo es de ~0,9 de vida por segundo. Atlans (Valkyrie, Bahamut, Lizard King: nivel 43-74, 2.400-19.000 de vida) no es para este personaje sin pociones ni defensa.
-- **Warp en el mismo mapa (`travelTo` con `sameMapWarp`, solo Slow):** si el lugar queda a más de ~70 tiles y el warp deja más cerca (dónde deja cada warp se aprende al usarlo; la primera vez se prueba una vez), el bot usa el warp en vez de caminar. Respeta la espera entre warps, y si falla (Zen, nivel) no insiste por 5 min. El Fast sigue caminando.
-- **Tiendas de Lorencia (recorrido del 2026-10-25, `shop_list` en ClickHouse):** Pasi Wizard (118,113) vende equipo de mago (Bone, Pad, Sphinx), bastones y pergaminos (Teleport, Fire Ball, Lightning, Ice, Poison, Meteorite, Power Wave); Hanzo (116,141) espadas, hachas y escudos (Falchion, Serpent Sword, Dragon Slayer Shield, 25 ítems); Liaman (123,135) Town Portal y Alcohol; el Trainer (122,110) abre otra ventana (tipo 3), sin tienda. No hay vendedor de pociones ni de sets de Dark Knight en Lorencia (las pociones están en Devias, Harold). Sin orbes de habilidad de DK a la venta.
-- **Orquestador por servidor (`orquestador.ts`):** lógica pura, una instancia por servidor (`Orquestadores.de(server)`): reparte líder y sombras solo entre los personajes de ese servidor, y guarda las sombras apagadas por el usuario y los humanos a los que se sigue. La estación (`orchestrate`) le pasa los conectados y manda por el canal de los bots las órdenes que devuelve. Para agregar un servidor no hay que tocar la lógica.
-- **Cuentas y personajes:** la cuenta es compartida entre los dos servidores y se agrega desde "+ Cuenta" (encabezado: crearla en el juego por el worker, o "ya existe" para solo guardarla); el personaje es de un servidor y se agrega desde la pestaña de ese servidor ("+ Personaje en el Fast/Slow": cuenta, nombre y clase, o "ya existe"). No hay tope de personajes por cuenta.
-- **Panel por pestañas de servidor (`ui/src/Simple.tsx`):** arriba "Fast N" y "Slow N" (N = conectados; ⚠ si hay trabados). Cada pestaña muestra solo los personajes de ese servidor, sus radares y sus mensajes (los generales, como la invasión, solo en el Fast); en el Slow, el total de exp/min. La pestaña elegida se recuerda en `localStorage`. "+ Agregar cuenta" abre con el servidor de la pestaña activa. Una cuenta sigue jugando con un solo personaje a la vez aunque sea de otro servidor.
-- **Servidor por personaje (Fast / Slow):** las cuentas valen en los dos servidores del juego; los personajes son de uno solo. Columna `characters.server` (`fast` por defecto). Se elige al crear el personaje desde la pestaña de su servidor (`POST /api/personaje {user, char, cls, server}`) y no se cambia desde la tarjeta (la acción `server` de `/api/do` sigue en la API, sin botón). Los datos salen de `SERVERS` en `estacion-logic.ts` (el cliente web los lista como "Servidor Fast" y "Servidor Slow (Beta)"): Fast = `wss://mu.mormon.garden/ws`, `mu.mormon.garden:44405`; Slow = `wss://slow.mu.garden/ws`, connect server `clasico:44405`. El worker llega a los dos: el host `clasico` sale por `SLOW_UPSTREAM_HOST` (`workers/edge/wrangler.toml`; `ALLOWED_HOSTS` incluye `clasico`); probado el 2026-10-25 abriendo el connect server de los dos por los 3 workers. Un personaje que no existe en el servidor elegido sale con el código 6 ("no tiene ese personaje en este servidor"); el bot lo crea al entrar si la tarjeta trae clase. El nombre del personaje sigue siendo único en la estación (la clave de la tarjeta): el mismo nombre en Fast y Slow no se contempla. Sin probar en vivo un bot contra el Slow desde la estación (el Slow dio `NoChargeInfo` con Zamu, ver arriba).
-- **Workers de respaldo del proxy:** `MUBOT_PROXY_URLS` en `.env.alta` (URLs separadas por coma) suma workers extra además de `MUBOT_ALTA_URL`. Son el mismo `workers/edge` desplegado con otro nombre y solo con el secreto `PROXY_TOKEN` (`bunx wrangler deploy --name mutbot-edge-2` y `bunx wrangler secret put PROXY_TOKEN --name mutbot-edge-2 < ~/.mubot/alta/proxy-token`); sin los otros secretos, el formulario y las altas quedan cerrados ahí. La estación comprueba cada 30 s cada worker con un GET sin upgrade a `/p/<token>/ws` (426 = vive y acepta el token; no abre nada contra el juego) y `proxyUrl()` entrega el primero que respondió, en el orden del principal y los respaldos. El cambio se nota al próximo conectar o reintentar. Si un bot que va por proxy sale sin haber entrado al juego (error de conexión, no un rechazo: códigos distintos de 0/2/3/4/5/6), esa estación salta ese worker 2 min y lo reconecta enseguida por el siguiente (`proxySwaps`, una vuelta por la lista). No está medido que otro worker dé otro cupo de conexiones: Cloudflare puede salir con la misma IP.
-- **Servidor en el bot y en los datos:** la estación pasa `MUBOT_SERVER=fast|slow` (`config.ts` exporta `SERVER_KEY`; sin la variable se deduce del connect server `clasico` = Slow). `telemetry.ts` marca cada fila con `server` (columna nueva en `ticks`, `events`, `players_seen` y `ranking`, por defecto `fast`: lo anterior es todo Fast). Las vistas de `db/views.sql` filtran `server = 'fast'`, y `queryDb` devuelve `[]` en un bot que no es Fast: no decide con conocimiento del otro servidor. `MUBOT_MATES`, los pares del canal UDP y el reenvío de la estación son solo entre personajes del mismo servidor. Una sola base ClickHouse, un solo esquema.
-- **Estrategia por servidor (`strategy.ts`):** costura entre `farm-loop.ts` y lo que cambia según `SERVER_KEY`: `hunts`, `resets`, `spendsPoints` y `choosePlace()`. La del Fast es el código de siempre sin cambios (`place.ts`, `progress.ts`, `hunt.ts`). La del Slow (v1.1, medida en la sesión del 2026-10-25): sin cacería ni `/reset`; sube por spots **de Lorencia** (`slowPlace`): Spiders hasta el nivel 12 (200,137), Bull Fighters hasta el 45 (165,55) y Giants desde el 45 (30,22), ~26.000 exp por kill. El ancla de los Giants es (30,35) con radio 30 (la celda más densa de avistamientos es (30-40, 40-50)). `targetValue` (con alcance de 12 tiles: mientras haya algo a ese alcance no persigue lo lejano) elige el monstruo de más valor por distancia (`exp / (d + 8)`, Giant 26.000 contra 3.000 el resto) en vez del más cercano: medido el 2026-10-25, el bot rendía 430.000 exp/min con Giants y 65.000 cuando se ponía con Bull Fighters. Los Giants del Slow viven en Lorencia, no en Devias (la v1 mandaba a Devias 4 y no había monstruos), levanta Zen, pociones, equipo y joyas (`lootAll`, `jewels`) y reparte los puntos con `slowStatPlan` cada 10 (no cada 200): primero Agi hasta 90 (velocidad de ataque = Agi/15: 90 → 6), y el resto 45 % Str, 30 % Agi, 15 % Vit, 10 % Ene. Medido el 2026-10-25: vida = 3 por Vit + 2 por nivel, daño = Str/6 a Str/4 más el arma; el bot no baja del 60 % de vida con Giants, así que Vit rinde poco. Para una decisión nueva que difiere: un campo en `Strategy`, las dos estrategias la definen y el bucle lee `strategy.<campo>`. La estrategia propia del Slow se arma con lo que se aprenda jugando y con sus datos (`server = 'slow'` en ClickHouse). **Sombras:** el orquestador de la estación agrupa por servidor (cada uno tiene su líder y sus sombras; un personaje del Slow no es sombra de uno del Fast). **Joyas:** `jewels` en `Strategy` (Fast `false`, Slow `true`). En el Fast las joyas no valen para comerciar y no se levantan (salvo personaje nuevo); en el Slow son lo más valioso (indicación del usuario, 2026-10-25): `isValuableDrop` las acepta siempre (`lootPolicy.jewels`, farming.ts) y `pickLoot` les da la misma prioridad que a las cajas. Sin probar en vivo un bot Slow de la estación.
-- **Recorrido de tiendas (`shop-scout.ts`):** directiva `scoutShops` (por personaje, en caliente: `curl -X POST http://127.0.0.1:8787/api/directivas -H 'Origin: http://127.0.0.1:8787' -H 'Content-Type: application/json' -d '{"scope":"capitan","set":{"scoutShops":true}}'`). El bot va al pueblo de Lorencia, habla con cada NPC de comercio (`TalkToNpcRequest`, `C3 30`), anota lo que vende (`StoreItemList`) como evento `shop_list` en ClickHouse (`server = 'slow'`) y cierra la ventana: solo mira, no compra ni vende. Corre una vez; para repetir hay que ponerla en false y de nuevo en true. Después vuelve a su spot por el flujo normal.
-- **Aprender del cliente web (`scripts/decode-frames.ts`):** para ver qué hace el cliente real en el Slow y pasarlo al bot, se registran los frames del WebSocket de la página (se parchea `WebSocket.prototype.send` desde `javascript_tool`, guarda `{d:'in'|'out', t, h}` y los manda en lotes a un receptor local) y `bun scripts/decode-frames.ts frames.ndjson [--list|--code <hex>]` los descifra con el mismo cifrado y tabla de rutas que `net/socket.ts`. Solo se descifran los entrantes; los salientes se cuentan. El cliente web no expone su estado (módulos minificados, sin source maps): se aprende por paquetes, no por la página. `bun scripts/analyze-session.ts frames.ndjson` saca de esos frames la exp por kill y por tipo de monstruo, exp/min y subidas de nivel. `bun --env-file=.env.db scripts/ingest-frames.ts <personaje> <crudo.ndjson> [puerto] [servidor]` es el receptor en vivo: la página le manda los frames por POST (`fetch` con `no-cors` a `127.0.0.1`) y los guarda en ClickHouse con `server = 'slow'` (eventos `kill`, `level_up`, `drop`, `item_added`, `shop_list`, `shop_buy`, `shop_sell`, `server_msg`, `chat`, `map_change` y un `tick` cada 5 s), más el crudo para reprocesar. `bun scripts/shops.ts frames.ndjson` lista lo que vende cada tienda que se abrió durante la sesión (StoreItemList; sin precios: los calcula el cliente). Primera lectura (2026-10-25, NPC de Devias): Apple, Small/Healing/Large Healing Potion, Small/Mana/Large Mana Potion, Antidote, Town Portal, Arrows y Bolt. El bot todavía NO compra ni vende (no hay código de tienda): la rutina de pueblo (comprar pociones y equipo, vender lo viejo) está por hacer. Registrando a mitad de sesión el contador de secuencia del descifrador no coincide (`ok` falso) pero el contenido es válido: se usa igual. Primera medición en el Slow (2026-10-25, Capitan nivel 48 → 64 en ~12 min): Giants ~26.000 exp por kill, ~140.000 exp/min de promedio y 200.000-300.000 en los mejores minutos, un nivel cada 20-30 s.
-- **Proxy WebSocket:** `wss://<worker>/p/<PROXY_TOKEN>/ws?host=&port=` reenvía solo a `ALLOWED_HOSTS`. Los bots no lo usan por defecto
-  (`MUBOT_PROXY` lo activa).
-- **Secretos:** `bun run alta:keys` genera claves y tokens en `~/.mubot/alta/` (0600, no los imprime); `MUBOT_ALTA_URL` va en `.env.alta`
-  (git lo ignora). Pasos de despliegue en `workers/edge/README.md`.
-- **Control de la conexión:** mientras un bot espera cupo, la tarjeta ofrece "Cancelar" (deja de intentar y sale de `wanted.json`) y "Reintentar ahora" (`POST /api/do {action:'retry'}`: corta el intento y lanza otro sin el backoff; se niega si el bot ya está en el juego).
-- **Conexión: siempre por los workers.** No hay conexión directa ni selector Directa/Proxy: todos los bots entran por el proxy de un worker (`MUBOT_ALTA_URL` y `MUBOT_PROXY_URLS` en `.env.alta`, token en `~/.mubot/alta/proxy-token`), con failover entre los workers (`pickProxy`). Sin worker configurado, `connect` se niega. Funciona para los dos servidores (el host `clasico` sale por `SLOW_UPSTREAM_HOST`). `net/socket.ts` imprime la URL del WebSocket, así que el token queda en los logs de los bots: limpiarlos o rotar el token.
-- **Límite del servidor:** deja 2 conexiones a la vez (`ServerIsFull` al tercero). El panel muestra el motivo en la tarjeta ("Servidor
-  lleno: reintento en N s") y no dibuja el mapa de un personaje que todavía no entró al juego.
-
-## Personajes nuevos, worker y Slow (2026-10-24)
-
-> **2026-10-25:** el algoritmo de lugar/loot/stats (`place.ts`, `farm-loop.ts`, `farming.ts`, `loot.ts`, `progress.ts`, `zones.ts`, `state.ts`, `help.ts`, `bus.ts`) volvió al de la tarde del 24 (PR #48): sin carreo, sin reparto de a 10, sin zen obligatorio ni orden `follow`. El carreo y lo demás de esa sesión (zen siempre, Roamer, seguir a un humano) hacían que Hume y Zamu perdieran exp (juntaban zen con ~2.100 M y bajaban a buscar a una sombra débil). La versión anterior está en el commit `950e59e`. Encima se agregó (`place.ts`): **esquina llena** — si estando en la esquina de Arena 2 el bot ve >= 4 jugadores cerca (los nuestros incluidos; `CORNER_CROWD_MAX`), busca otra Arena 8 min (Arena 4, después 3, si `canFarmMonster` lo permite) y se para en la "primera jaula a la derecha" de la llegada (`ARENA_CAGE`: +18, −2, radio 10; dato del usuario: nunca hacia el norte; sin probar en vivo). Una cuenta juega con un solo personaje a la vez (la estación lo avisa en la tarjeta y no reconecta al otro) y la estación reenvía los paquetes de posición entre los bots, porque los pares del bus se fijan al lanzar.
-
-Ver también [HANDOFF.md](HANDOFF.md) (estado y aprendizajes de esa sesión).
-- **Creación de personaje:** `MUBOT_CREATE_CLASS` (lo pasa la estación desde `characters.class`): si el personaje no está en la cuenta, el bot lo crea al entrar (`world.ts`, F3/01).
-- **Worker:** el proxy WebSocket devuelve el `fetch` del servidor sin reenviar mensajes (si no, agota los 10 ms de CPU del plan gratuito a los ~20 s). `net/socket.ts` imprime la URL del WebSocket (con el token).
-- **Slow (Beta):** proxy `wss://slow.mu.garden/ws`, connect server `clasico:44405`, game `clasico:55901`. El login de una cuenta del Fast devolvió `NoChargeInfo` (9); hipótesis sin confirmar: solo VIP.
-
-## Datos y aprendizaje (ClickHouse)
-
-> **Dónde vive:** `MUBOT_DB_URL` (en `.env.db`, no se commitea) apunta a otro equipo de la red (la IP está en `.env.db`), no a `127.0.0.1`. Si "no responde", probá esa URL antes de levantar nada en local (el 25/10 se creyó caído por consultar `127.0.0.1`). Para consultar: `curl -u "$MUBOT_DB_USER:$MUBOT_DB_PASSWORD" "$MUBOT_DB_URL/?database=mubot" --data-binary "SELECT ..."` con `.env.db` cargado.
-
-
-- `bun run db:up` levanta ClickHouse en Docker (`db/docker-compose.yml`): solo en `127.0.0.1:8123`, datos
-  en `~/.mubot/clickhouse`, credenciales en `.env.db` (no se commitea; `MUBOT_DB_USER`,
-  `MUBOT_DB_PASSWORD`, `MUBOT_DB_URL`). `bun run db:init` aplica `db/schema.sql` y `db/views.sql`.
-  Consola web: `http://127.0.0.1:8123/play`.
-- Espacio: TTL de 90 días para ticks, 60 para jugadores y 365 para eventos (con 2 personajes, pocos MB
-  por día). Logs internos de ClickHouse a 3 días o apagados, y logs rotados (`db/config.d/mubot.xml`,
-  compose). Si quedan menos de 5 GB libres, la estación borra ticks y jugadores de más de 7 días.
-- `telemetry.ts`: los bots mandan `ticks` (foto cada 5 s), `events` (decide/journal, death con
-  asesino, kill, cast, golden_seen, party, cycle) y `players_seen` (cada 10 s). Junta en memoria y manda
-  cada 5 s; si la base no responde, reintenta espaciado y sigue jugando. La estación pasa `MUBOT_DB_*`
-  de `.env.db`; sin eso no hace nada.
-- Qué se guarda (solo lo que sirve para aprender): la foto cada 5 s, muertes con asesino, skills,
-  dorados, party, ciclos, decisiones/viajes/resets, y jugadores vistos fuera de la zona segura. No se
-  guarda cada kill (la exp ya está en la foto) ni comandos o modos. `v_outcome` / `v_outcome_type`: el
-  resultado de cada decisión (exp/min 5 min antes contra 5 después), la base para aprender qué conviene.
-- Pelea por los spots: cada tick guarda kills en scope de los últimos 5 s (nuestras, del compañero, de
-  rivales y el rival que más mató) y dónde está el compañero (`mate_spot`); `v_spot_fight` muestra qué
-  parte del sector es nuestra, solos/juntos/separados. Versión (commit, con `+<hash del diff>` si el árbol tiene cambios sin commitear) y política (perillas) en cada fila.
-  La estación guarda el ranking cada hora (`ranking`, `v_rival_pace`: ritmo de resets de los rivales).
-- `bun run aprender` (la estación lo corre cada 30 min) muestra las vistas (`v_party`, `v_exp_spot`,
-  `v_skill`, `v_killers`, `v_rivals`, `v_cycles`, `v_golden`) y escribe `~/.mubot/knowledge.json`.
-- `knowledge.ts`: perillas que el bot ajusta solo con lo aprendido (lista cerrada). Hoy: party sí/no en
-  el dúo de la esquina (decideParty: 30 min medidos de cada lado, margen 5 %), con experimento ~10 % de
-  bloques de 30 min (`experimentSlot`). El DK disuelve la party con PartyPlayerKick índice 0 cuando los
-  datos dicen que no. Cada cambio sale en Decisiones. Borrar `knowledge.json` vuelve atrás.
