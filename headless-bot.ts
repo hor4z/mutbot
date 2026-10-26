@@ -14,7 +14,6 @@
  *
  * Farmeo:
  *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea y reconecta con backoff)
- *   --stat-batch 10      puntos mínimos para frenar a repartir
  *   --heal-at 60         usa poción con HP% <= esto
  *
  * Estado y órdenes:
@@ -28,8 +27,8 @@
  *   actions.ts      packets de salida (paso, golpe, skills, warp, chat, keepalives)
  *   combat.ts       elección de skill, alcance, pociones
  *   loot.ts         drops en scope y levantar lo valioso
- *   spots.ts        dónde estar (spot por nivel), reparto de puntos, valor de cada monstruo, viajes; warps.ts los warps
- *   learning.ts     lo que aprende de la base (rendimiento por spot) para elegir spot
+ *   area.ts         dónde farmear (zona aprendida), reparto de puntos, viajes; warps.ts los warps
+ *   learning.ts     lo que aprende (rendimiento por zona, exp por tipo de monstruo)
  *   progress.ts     reparto de puntos con /add
  *   journal.ts      decisiones con su motivo (log, panel y base)
  *   panel.ts        modo, órdenes y estado del panel
@@ -100,6 +99,7 @@ const emptyResult = (): LoopResult => ({ kills: 0, totalExpGained: 0, potionsDru
 async function runBrain(deadline: number): Promise<LoopResult> {
   const total = emptyResult();
   let brain = await takeBrain();
+  let fresh = false; // el cerebro actual es uno recargado (si falla al correr, se vuelve al anterior)
   while (true) {
     bot.reloadBrain = false;
     brain.install();
@@ -108,14 +108,17 @@ async function runBrain(deadline: number): Promise<LoopResult> {
       const r = await brain.autonomousLoop(deadline);
       for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
     } catch (e) {
-      const back = Date.now() - t0 < 15_000 ? revertBrain() : null;
+      // Solo se culpa al cerebro nuevo si falló enseguida y la conexión sigue viva: un corte de red o un kick se propaga para reconectar.
+      const back = fresh && !bot.kicked && Date.now() - t0 < 15_000 ? revertBrain() : null;
       if (!back) throw e;
       log(`El cerebro nuevo falló al correr (${(e as Error).message}); vuelvo al anterior.`);
       brain = back;
+      fresh = false;
       continue;
     }
     if (!bot.reloadBrain || bot.kicked) break;
     brain = await takeBrain();
+    fresh = true;
   }
   return total;
 }

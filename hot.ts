@@ -30,7 +30,9 @@ let next: { mod: Brain; id: string } | null = null;
 let previous: { mod: Brain; id: string } | null = null;
 let seq = 0;
 
-const brainFiles = () => [...BRAIN].map((n) => join(ROOT, `${n}.ts`));
+/** Los datos que el cerebro lleva dentro del bundle: si cambian, hay que recompilar. */
+const DATA = ['monsters', 'spawns', 'skills'].map((n) => join(ROOT, 'data', `${n}.json`));
+const brainFiles = () => [...[...BRAIN].map((n) => join(ROOT, `${n}.ts`)), ...DATA];
 const signature = () => brainFiles().map((f) => (existsSync(f) ? statSync(f).mtimeMs : 0)).join('|');
 
 /** Compila el cerebro a un archivo propio y lo carga. Tira si no compila o no carga. */
@@ -40,6 +42,7 @@ async function build(): Promise<{ mod: Brain; id: string }> {
     entrypoints: [join(ROOT, 'brain.ts')],
     target: 'bun',
     format: 'esm',
+    packages: 'external', // los paquetes (node_modules) no se copian al bundle: una sola instancia, la del proceso
     plugins: [{
       name: 'nucleo-externo',
       setup(b) {

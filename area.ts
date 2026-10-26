@@ -5,16 +5,17 @@
  *     una sin medir (exploración, la de más densidad cerca). Se re-decide cada REDECIDE_MS.
  *  3. Si el área está vacía EMPTY_MS estando ahí, se marca como vacía un rato y se busca otra. Si el personaje muere, esa zona se evita.
  *  4. Si el mapa no tiene zonas que sirvan, cambia de mapa por warp (el de mejor rendimiento medido o, sin datos, el de más monstruos de valor).
- * Cada decisión se explica con `decide()`. El Slow tiene monstruos custom que el spawns.json del cliente no ubica: lo que se ve en pantalla manda
- * (`noteSeen`) y se suma a las candidatas.
+ * Cada decisión se explica con `decide()`. Los monstruos custom del Slow (tipos >= 300) están en la tabla del cliente (`data/monsters.json`)
+ * pero no en `spawns.json`, que no los ubica: lo que se ve en pantalla manda (`noteSeen`) y se suma a las candidatas.
+ * El estado (zona elegida, zonas evitadas, lo visto) vive en `globalThis`: sobrevive a la recarga en caliente del cerebro (hot.ts).
  */
 import { D } from './directivas';
 import { decide } from './journal';
-import { classFamily, type StatValues } from './farming';
-import { cellKey, cellStat, deathsIn, MIN_TICKS, refreshLearned, valueOf } from './learning';
+import { classFamily, planByClass, type StatValues } from './farming';
+import { cellKey, cellStat, deathsIn, learnedReady, MIN_TICKS, refreshLearned, valueOf } from './learning';
 import { mapName } from './panel-logic';
 import { canFarmMonster, type Fighter } from './power';
-import { hotspots, isMonster, type Hotspot } from './spawns';
+import { hotspots, isMonster, spawnsOf, type Hotspot } from './spawns';
 import { MONSTER_TYPE_NUMBERS, bot, monsterName, world, type ScopedNpc } from './state';
 import { isSafeZone } from './terrain';
 import { dist, log, type Pos } from './util';
@@ -27,6 +28,9 @@ export type Place = { warp: Warp; anchor: Pos; radius: number; name: string };
 export const STAT_SHARES = { str: 0.45, agi: 0.3, vit: 0.15, ene: 0.1 } as const;
 /** Primero Agi hasta `D.agiTarget`; el resto 45 % Str, 30 % Agi, 15 % Vit, 10 % Ene (lo que sobra del redondeo, a Str). Estimado, a ajustar con datos. */
 export function statPlan(points: number, stats: StatValues): StatValues {
+  // Las otras clases (mago, elfo, gladiador) hacen daño con otros atributos: su reparto es el de farming.ts.
+  const family = classFamily(world.classId);
+  if (family && family !== 'knight') return planByClass(points, family);
   const agiFirst = Math.min(points, Math.max(0, D.agiTarget - stats.agi));
   const rest = points - agiFirst;
   const agi = agiFirst + Math.floor(rest * STAT_SHARES.agi);
@@ -61,16 +65,20 @@ const EXPLORE_P = 0.2;
 const RELOCATE_COOLDOWN_MS = 2 * 60_000;
 
 type Pick = { map: number; anchor: Pos; why: string; at: number };
-let cur: Pick | null = null;
-/** Mapa donde se farmea: sobrevive a morir (se reaparece en el pueblo y se vuelve acá). */
-let homeMap: number | null = null;
-let emptySince = 0;
-let lastRelocateAt = 0;
-let lastAnnounced = '';
-/** Zonas (celda de 16×16) que se evitan hasta cierto momento: vacías o donde murió. */
-const avoid = new Map<string, number>();
-/** Lo visto en pantalla (monstruos que se pueden atacar), por celda: suma a las candidatas donde el spawns.json no sabe. */
-const seen = new Map<string, { map: number; x: number; y: number; n: number; at: number }>();
+type AreaState = {
+  cur: Pick | null;
+  /** Mapa donde se farmea: sobrevive a morir (se reaparece en el pueblo y se vuelve acá). */
+  homeMap: number | null;
+  emptySince: number;
+  lastRelocateAt: number;
+  lastAnnounced: string;
+  /** Zonas (celda de 16×16) que se evitan hasta cierto momento: vacías o donde murió. */
+  avoid: Map<string, number>;
+  /** Lo visto en pantalla (monstruos que se pueden atacar), por celda: suma a las candidatas donde el spawns.json no sabe. */
+  seen: Map<string, { map: number; x: number; y: number; n: number; at: number }>;
+};
+// En globalThis para que la recarga en caliente del cerebro no mande al personaje a otra zona ni olvide dónde murió.
+const S: AreaState = ((globalThis as { __area?: AreaState }).__area ??= { cur: null, homeMap: null, emptySince: 0, lastRelocateAt: 0, lastAnnounced: '', avoid: new Map(), seen: new Map() });
 
 /** El panel y la base conocen el lugar actual por este nombre. */
 export const lastPlace: { v: Place | null } = { v: null };
@@ -85,18 +93,18 @@ export function noteSeen() {
   for (const n of world.npcs.values()) {
     if (!isAttackable(n)) continue;
     const k = cellKey(world.map, n.x, n.y);
-    const s = seen.get(k) ?? { map: world.map, x: n.x, y: n.y, n: 0, at: now };
+    const s = S.seen.get(k) ?? { map: world.map, x: n.x, y: n.y, n: 0, at: now };
     s.n = Math.max(s.n, 1);
     s.at = now;
-    seen.set(k, s);
+    S.seen.set(k, s);
   }
 }
 
 /** La muerte marca la zona para evitarla un buen rato (y se vuelve a decidir). */
 export function noteDeath() {
-  avoid.set(cellKey(world.map, world.x, world.y), Date.now() + DEATH_AVOID_MS);
+  S.avoid.set(cellKey(world.map, world.x, world.y), Date.now() + DEATH_AVOID_MS);
   decide(`Me mató en ${areaName(world.map, here())}: evito esa zona ${DEATH_AVOID_MS / 60_000} min.`, { kind: 'death', area: cellKey(world.map, world.x, world.y) });
-  cur = null;
+  S.cur = null;
 }
 
 type Cand = { x: number; y: number; density: number; measured: boolean; expMin: number; dist: number };
@@ -107,7 +115,7 @@ function candidatesIn(map: number, from: Pos): Cand[] {
   const byCell = new Map<string, Cand>();
   const add = (x: number, y: number, density: number) => {
     const k = cellKey(map, x, y);
-    if ((avoid.get(k) ?? 0) > now || deathsIn(map, x, y) >= 2) return;
+    if ((S.avoid.get(k) ?? 0) > now || deathsIn(map, x, y) >= 2) return;
     const st = cellStat(map, x, y);
     const prev = byCell.get(k);
     const c: Cand = { x, y, density: Math.max(density, prev?.density ?? 0), measured: !!st && st.ticks >= MIN_TICKS, expMin: st?.expMin ?? 0, dist: dist({ x, y }, from) };
@@ -115,7 +123,7 @@ function candidatesIn(map: number, from: Pos): Cand[] {
   };
   const hs: Hotspot[] = hotspots(map, (t) => isMonster(t) && MONSTER_TYPE_NUMBERS.has(t) && canFarm(t)).filter((h) => h.walkable >= 0.7);
   for (const h of hs) add(h.x, h.y, h.density);
-  for (const s of seen.values()) if (s.map === map && now - s.at < 30 * 60_000) add(s.x, s.y, 0.001);
+  for (const s of S.seen.values()) if (s.map === map && now - s.at < 30 * 60_000) add(s.x, s.y, 0.001);
   return [...byCell.values()];
 }
 
@@ -143,49 +151,80 @@ function warpFor(map: number, to: Pos): Warp | null {
 }
 /** Un "warp" sin índice: el mismo mapa (travelTo no lo usa, solo camina). */
 const inMap = (map: number): Warp => ({ index: -1, name: mapName(map), reqLevel: 0, map });
+/** El warp para volver al área elegida (lo usa el loop para salir de una traba): null si no hay área o no hay warp a su mapa. */
+export const recoveryWarp = (): Warp | null => (S.cur ? warpFor(S.cur.map, S.cur.anchor) : null);
 
+// --- Elegir el mapa ------------------------------------------------------------------------------------------------------------------
+/** Ganancia mínima (fracción) para dejar un mapa medido por otro medido, y probabilidad de probar uno sin medir cuando se re-decide. */
+const MIN_GAIN = 0.15;
+const MAP_EXPLORE_P = 0.15;
+
+type MapOption = { map: number; potential: number; measured: number };
 /**
- * El mapa al que ir cuando el actual no tiene zonas que sirvan: el de mejor rendimiento medido (sus celdas) o, sin datos, el de más
- * monstruos de valor que el personaje puede farmear. Un mapa donde murió hace poco se saltea.
+ * Un mapa como opción: `measured` = lo mejor que rindió una de sus celdas (exp/min, 0 si no hay medida) y `potential` = densidad de sus mejores
+ * celdas × lo que da el monstruo más valioso que el personaje aguanta ahí (`valueOf`); el potencial solo ordena mapas sin medir. null si no hay
+ * zonas que sirvan (o están todas evitadas).
  */
-function pickMap(): { warp: Warp; map: number; why: string } | null {
+function mapOption(map: number): MapOption | null {
   const now = Date.now();
-  const options: { warp: Warp; potential: number; measured: number }[] = [];
-  for (const w of WARPS) {
-    if (w.reqLevel > world.level || w.map === world.map) continue;
-    if (!w.arrival) continue;
-    const hs = hotspots(w.map, (t) => isMonster(t) && MONSTER_TYPE_NUMBERS.has(t) && canFarm(t)).filter((h) => h.walkable >= 0.7 && (avoid.get(cellKey(w.map, h.x, h.y)) ?? 0) <= now);
-    if (!hs.length) continue;
-    const top = hs.sort((a, b) => b.density - a.density).slice(0, 5);
-    const potential = top.reduce((t, h) => t + h.density, 0) / top.length;
-    const meas = hs.map((h) => cellStat(w.map, h.x, h.y)).filter((s): s is NonNullable<typeof s> => !!s && s.ticks >= MIN_TICKS);
-    options.push({ warp: w, potential, measured: meas.length ? Math.max(...meas.map((s) => s.expMin)) : 0 });
+  const ok = (t: number) => isMonster(t) && MONSTER_TYPE_NUMBERS.has(t) && canFarm(t);
+  const hs = hotspots(map, ok).filter((h) => h.walkable >= 0.7 && (S.avoid.get(cellKey(map, h.x, h.y)) ?? 0) <= now);
+  if (!hs.length) return null;
+  const bestValue = Math.max(1, ...spawnsOf(map).map((sp) => sp.type).filter(ok).map(valueOf));
+  const top = [...hs].sort((a, b) => b.density - a.density).slice(0, 5);
+  const density = top.reduce((t, h) => t + h.density, 0) / top.length;
+  const meas = hs.map((h) => cellStat(map, h.x, h.y)).filter((st): st is NonNullable<typeof st> => !!st && st.ticks >= MIN_TICKS);
+  return { map, potential: density * bestValue, measured: meas.length ? Math.max(...meas.map((st) => st.expMin)) : 0 };
+}
+
+/** Los demás mapas a los que se llega por warp con el nivel actual. */
+function otherMaps(exclude: number): MapOption[] {
+  const maps = [...new Set(WARPS.filter((w) => w.reqLevel <= world.level && w.arrival && w.map !== exclude).map((w) => w.map))];
+  return maps.map(mapOption).filter((o): o is MapOption => o != null);
+}
+
+/** Cuando se re-decide: ¿conviene otro mapa? Uno medido que rinde claramente más que el actual o, de vez en cuando, uno sin medir con más potencial. */
+function betterMap(home: number): { map: number; why: string } | null {
+  const mine = mapOption(home);
+  const homeRate = mine?.measured ?? 0;
+  if (homeRate <= 0) return null; // primero se mide el mapa donde está
+  const others = otherMaps(home);
+  const best = others.filter((o) => o.measured > 0).sort((a, b) => b.measured - a.measured)[0];
+  if (best && best.measured > homeRate * (1 + MIN_GAIN)) return { map: best.map, why: `${mapName(best.map)} rindió ${Math.round(best.measured / 1000)}k exp/min contra ${Math.round(homeRate / 1000)}k de ${mapName(home)}` };
+  if (rand() < MAP_EXPLORE_P) {
+    const unknown = others.filter((o) => o.measured === 0 && o.potential > (mine?.potential ?? 0)).sort((a, b) => b.potential - a.potential)[0];
+    if (unknown) return { map: unknown.map, why: `pruebo ${mapName(unknown.map)}: todavía no lo medí y tiene monstruos de más valor que aguanto` };
   }
-  if (!options.length) return null;
-  const best = options.filter((o) => o.measured > 0).sort((a, b) => b.measured - a.measured)[0];
-  const unknown = options.filter((o) => o.measured === 0).sort((a, b) => b.potential - a.potential)[0];
-  const pickUnknown = unknown && (!best || rand() < EXPLORE_P);
-  const o = pickUnknown ? unknown! : best!;
-  return { warp: o.warp, map: o.warp.map, why: pickUnknown ? `${mapName(o.warp.map)} todavía no está medido y tiene monstruos que aguanto` : `${mapName(o.warp.map)} es el mapa que más rindió (${Math.round(o.measured / 1000)}k exp/min)` };
+  return null;
+}
+
+/** Cuando el mapa actual no tiene zonas que sirvan: el de mejor rendimiento medido o, sin datos, el de más potencial. */
+function fallbackMap(home: number): { map: number; why: string } | null {
+  const others = otherMaps(home);
+  if (!others.length) return null;
+  const best = others.filter((o) => o.measured > 0).sort((a, b) => b.measured - a.measured)[0];
+  if (best) return { map: best.map, why: `${mapName(home)} no tiene zonas que aguante; ${mapName(best.map)} es el que más rindió (${Math.round(best.measured / 1000)}k exp/min)` };
+  const o = others.sort((a, b) => b.potential - a.potential)[0]!;
+  return { map: o.map, why: `${mapName(home)} no tiene zonas que aguante; ${mapName(o.map)} todavía no está medido y tiene monstruos que aguanto` };
 }
 
 function announce(p: Place, why: string, kind: 'spot' | 'travel' = 'spot') {
-  if (p.name === lastAnnounced) return;
-  lastAnnounced = p.name;
+  if (p.name === S.lastAnnounced) return;
+  S.lastAnnounced = p.name;
   decide(`Farmeo en ${p.name} (nivel ${world.level}): ${why}.`, { kind, area: p.name, map: p.warp.map });
 }
 
 /** ¿Hay algo atacable en el área, estando en ella? Cuenta el tiempo que no (EMPTY_MS: se marca como vacía). */
 function checkEmpty(pick: Pick) {
-  if (world.map !== pick.map || dist(here(), pick.anchor) > AREA_RADIUS) { emptySince = 0; return; }
+  if (world.map !== pick.map || dist(here(), pick.anchor) > AREA_RADIUS) { S.emptySince = 0; return; }
   const any = [...world.npcs.values()].some((n) => isAttackable(n) && dist(n, pick.anchor) <= AREA_RADIUS + 8);
-  if (any) { emptySince = 0; return; }
-  emptySince ||= Date.now();
-  if (Date.now() - emptySince > EMPTY_MS) {
-    avoid.set(cellKey(pick.map, pick.anchor.x, pick.anchor.y), Date.now() + EMPTY_AVOID_MS);
+  if (any) { S.emptySince = 0; return; }
+  S.emptySince ||= Date.now();
+  if (Date.now() - S.emptySince > EMPTY_MS) {
+    S.avoid.set(cellKey(pick.map, pick.anchor.x, pick.anchor.y), Date.now() + EMPTY_AVOID_MS);
     decide(`${areaName(pick.map, pick.anchor)} está vacía hace ${Math.round(EMPTY_MS / 1000)} s: la marco ${EMPTY_AVOID_MS / 60_000} min y busco otra.`, { kind: 'spot', empty: true });
-    cur = null;
-    emptySince = 0;
+    S.cur = null;
+    S.emptySince = 0;
   }
 }
 
@@ -196,38 +235,42 @@ export function choosePlace(): Place | null {
 function decidePlace(): Place | null {
   if (!statsReady()) return null;
   void refreshLearned();
+  // El primer lugar se decide con lo aprendido ya leído (si la base está apagada o tarda, se sigue sin esperar más de unos segundos).
+  if (!learnedReady()) return null;
   noteSeen();
   const now = Date.now();
-  if (cur) checkEmpty(cur);
-  if (cur && now - cur.at > REDECIDE_MS) cur = null; // un cambio de zona cada tanto, para seguir midiendo y probando
-  if (!cur) {
-    homeMap ??= world.map;
+  if (S.cur) checkEmpty(S.cur);
+  if (S.cur && now - S.cur.at > REDECIDE_MS) S.cur = null; // un cambio de zona cada tanto, para seguir midiendo y probando
+  if (!S.cur) {
+    S.homeMap ??= world.map;
     // Reaparece en el pueblo tras morir: se decide sobre el mapa donde farmeaba, no sobre el pueblo.
-    const map = homeMap;
-    const cands = candidatesIn(map, map === world.map ? here() : (WARPS.find((w) => w.map === map)?.arrival ?? here()));
-    const pick = pickCell(cands);
-    if (pick) {
-      cur = { map, anchor: { x: pick.c.x, y: pick.c.y }, why: pick.why, at: now };
-    } else if (now - lastRelocateAt > RELOCATE_COOLDOWN_MS) {
-      lastRelocateAt = now;
-      const m = pickMap();
-      if (m) {
-        homeMap = m.map;
-        const hs = candidatesIn(m.map, m.warp.arrival ?? here());
-        const first = pickCell(hs);
-        const anchor = first ? { x: first.c.x, y: first.c.y } : (m.warp.arrival ?? here());
-        cur = { map: m.map, anchor, why: `cambio de mapa: ${m.why}`, at: now };
-      } else {
-        log('Área: no hay zonas que pueda farmear en ningún mapa a mi alcance; espero.');
-      }
+    let map = S.homeMap;
+    let prefix = '';
+    const canMove = now - S.lastRelocateAt > RELOCATE_COOLDOWN_MS;
+    if (canMove) {
+      const b = betterMap(map);
+      if (b) { S.lastRelocateAt = now; S.homeMap = map = b.map; prefix = `cambio de mapa: ${b.why}; `; }
     }
+    const from = (m: number) => (m === world.map ? here() : (WARPS.find((w) => w.map === m)?.arrival ?? here()));
+    let pick = pickCell(candidatesIn(map, from(map)));
+    if (!pick && canMove) {
+      const f = fallbackMap(map);
+      if (f) {
+        S.lastRelocateAt = now;
+        S.homeMap = map = f.map;
+        prefix = `cambio de mapa: ${f.why}; `;
+        pick = pickCell(candidatesIn(map, from(map)));
+        if (!pick) S.cur = { map, anchor: WARPS.find((x) => x.map === map)?.arrival ?? here(), why: `${prefix}voy a la entrada a ver qué hay`, at: now };
+      } else log('Área: no hay zonas que pueda farmear en ningún mapa a mi alcance; espero.');
+    }
+    if (pick) S.cur = { map, anchor: { x: pick.c.x, y: pick.c.y }, why: `${prefix}${pick.why}`, at: now };
   }
-  if (!cur) return null;
+  if (!S.cur) return null;
   const place: Place = {
-    warp: cur.map === world.map ? inMap(cur.map) : (warpFor(cur.map, cur.anchor) ?? inMap(cur.map)),
-    anchor: cur.anchor, radius: AREA_RADIUS, name: areaName(cur.map, cur.anchor),
+    warp: S.cur.map === world.map ? inMap(S.cur.map) : (warpFor(S.cur.map, S.cur.anchor) ?? inMap(S.cur.map)),
+    anchor: S.cur.anchor, radius: AREA_RADIUS, name: areaName(S.cur.map, S.cur.anchor),
   };
-  announce(place, cur.why, cur.map === world.map ? 'spot' : 'travel');
+  announce(place, S.cur.why, S.cur.map === world.map ? 'spot' : 'travel');
   return place;
 }
 

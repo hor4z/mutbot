@@ -457,7 +457,6 @@ export function trackWorld() {
     if (changed) {
       world.npcs.clear();
       world.hits.clear();
-    world.hits.clear();
       world.townNpcs.clear();
       world.players.clear();
       drops.clear();

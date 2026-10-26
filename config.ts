@@ -25,7 +25,7 @@ for (let i = 0; i < argv.length; i++) {
 // Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
-  '--auto-seconds', '--stat-batch', '--heal-at', '--ws-port',
+  '--auto-seconds', '--heal-at', '--ws-port',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -83,14 +83,7 @@ export type StatName = 'str' | 'agi' | 'vit' | 'ene';
 export const STAT_ORDER: StatName[] = ['str', 'agi', 'vit', 'ene'];
 
 export const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
-// --build str:50,ene:33,vit:17 → reparto proporcional de los puntos libres.
-// Sin peso, cada stat pesa 1. Default: el reparto que usó el usuario en su
-// tercer reset con un Dark Knight que pelea con Twisting Slash (la energía
-// sube el daño de los skills del DK).
-// Sin --build se usa planStats (farming.ts), el reparto del agente web.
-// Con menos puntos que esto no vale la pena frenar a repartir (3 comandos de
-// chat = ~7.5 s sin pelear). El agente web reparte de a 200.
-export const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '10');
+// Los puntos que se juntan antes de repartir y la agilidad objetivo son directivas (directivas.ts: `statBatch`, `agiTarget`).
 
 // Skills de ataque configurables (números de skill, NO índices de lista).
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.

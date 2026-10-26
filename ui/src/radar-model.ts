@@ -25,7 +25,7 @@ export const KIND_LABEL: Record<Kind, string> = {
 };
 export const css = (hex: number) => "#" + hex.toString(16).padStart(6, "0");
 
-/** Exp por kill desde la que un monstruo se resalta (el bot lo prefiere: spots.ts, targetValue). */
+/** Exp por kill desde la que un monstruo se resalta (el bot lo prefiere: learning.ts, valueOf). */
 export const PRIZE_VALUE = 10_000;
 
 export type Ent = { key: string; kind: Kind; x: number; y: number; name: string; target?: boolean; extra?: string; };

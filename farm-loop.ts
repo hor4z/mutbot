@@ -1,7 +1,7 @@
 /**
  * El loop del bot Slow. Un tick = una decisión:
  *   1. si algo anda mal (ciego, trabado, vida baja, pausa), arreglarlo;  2. repartir puntos;
- *   3. ir al spot que le toca (spots.ts) y quedarse;  4. loot;  5. pegarle al monstruo de más valor del spot.
+ *   3. ir a la zona que le toca (area.ts) y quedarse;  4. loot;  5. pegarle al monstruo de más valor de la zona.
  * Cada paso puede cortar el tick con `continue`. Toda decisión con su motivo va a `decide()` (journal.ts): es lo que el panel muestra.
  * Todo a ritmo mínimo seguro (config.ts): no se baja.
  */
@@ -19,7 +19,7 @@ import { EventBus } from './net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from './packets';
 import { currentMode, sessionStart, setLoopView } from './panel';
 import { mapName } from './panel-logic';
-import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, targetValue, travelTo, type Place } from './area';
+import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, recoveryWarp, targetValue, travelTo, type Place } from './area';
 import { noteExp, noteKill } from './learning';
 import { investStatPointsInBackground } from './progress';
 import { scoutShopsStep } from './shop-scout';
@@ -193,7 +193,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       ctx.target = null;
       ctx.walkStuck = 0;
       ctx.stuckSince = 0;
-      if (ctx.stuckStrikes >= 2 && bot.currentSpot) { await warpAndWait(bot.currentSpot); ctx.stuckStrikes = 0; }
+      const back = recoveryWarp(); // el warp al mapa del área elegida (no el último que se usó)
+      if (ctx.stuckStrikes >= 2 && back) { await warpAndWait(back); ctx.stuckStrikes = 0; }
       continue;
     }
 
@@ -223,12 +224,12 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       const resting = isSafeZone(world.map, world.x, world.y) && pct < RECOVER_TO && !attackers;
       if (!fleeing && (resting || (pct < FLEE_BELOW && attackers))) {
         fleeing = true;
-        decide(resting ? `Descanso en el pueblo: vida al ${Math.round(pct * 100)} %, salgo al ${Math.round(RECOVER_TO * 100)} %.` : `Huyo: vida al ${Math.round(pct * 100)} % (límite ${Math.round(FLEE_BELOW * 100)} %) con ${attackers} monstruo(s) encima en ${bot.currentSpot?.name ?? mapName(world.map)}.`, { kind: 'flee', pct: Math.round(pct * 100), attackers });
-        if (!resting) trackEvent('flee', mapName(world.map), Math.round(pct * 100), attackers, { map: world.map, x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null });
+        decide(resting ? `Descanso en el pueblo: vida al ${Math.round(pct * 100)} %, salgo al ${Math.round(RECOVER_TO * 100)} %.` : `Huyo: vida al ${Math.round(pct * 100)} % (límite ${Math.round(FLEE_BELOW * 100)} %) con ${attackers} monstruo(s) encima en ${lastPlace.v?.name ?? mapName(world.map)}.`, { kind: 'flee', pct: Math.round(pct * 100), attackers });
+        if (!resting) trackEvent('flee', mapName(world.map), Math.round(pct * 100), attackers, { map: world.map, x: world.x, y: world.y, zona: lastPlace.v?.name ?? null });
       }
       if (fleeing) {
         ctx.target = null;
-        if (pct >= RECOVER_TO) { fleeing = false; decide(`Recuperado (${Math.round(pct * 100)} %): vuelvo a ${bot.currentSpot?.name ?? 'mi spot'}.`, { kind: 'flee' }); }
+        if (pct >= RECOVER_TO) { fleeing = false; decide(`Recuperado (${Math.round(pct * 100)} %): vuelvo a ${lastPlace.v?.name ?? 'mi zona'}.`, { kind: 'flee' }); }
         else {
           bot.doing = `recuperando vida (${Math.round(pct * 100)} %)`;
           // Huir no espera los 15 s de siempre entre warps: con monstruos encima cada segundo cuenta.
