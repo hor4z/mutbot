@@ -1,28 +1,27 @@
 /**
- * Diario: cada decisión de alto nivel (viaje, reset, reparto de puntos, cambio de modo) va al log y, las que sirven para
- * aprender (decisiones, viajes, resets), a la base.
+ * Diario de decisiones: cada decisión del bot (spot, viaje, huida, reparto de puntos, orden del panel, traba) va al log, al panel
+ * (con su motivo y su tipo, para filtrar) y a la base. Lo que el panel muestra como "qué está decidiendo y por qué" sale de acá.
  */
+import type { NoteKind } from './panel-protocol';
 import { trackEvent } from './telemetry';
 import { log } from './util';
 
-type JournalKind = 'pickup' | 'reset' | 'stat' | 'travel' | 'command' | 'mode' | 'decide';
-
-export function journal(kind: JournalKind, what: string, detail: Record<string, unknown> = {}) {
-  if (kind === 'decide' || kind === 'travel' || kind === 'reset' || kind === 'pickup') trackEvent(kind, what, 0, 0, detail);
-}
-
-/** Las últimas decisiones: van en el estado del panel y la estación las muestra como mensajes. */
-export type Note = { at: number; text: string };
-const NOTES_MAX = 20;
+export type Note = { at: number; kind: NoteKind; text: string };
+const NOTES_MAX = 80;
 const notes: Note[] = [];
 export const recentNotes = (): Note[] => notes;
 
-/** Una decisión con su motivo: al log, a los mensajes de la estación y al diario. */
-export function decide(what: string, detail: Record<string, unknown> = {}) {
+/** Un evento suelto del diario (viajes, mensajes del panel…): solo a la base. */
+export function journal(kind: 'pickup' | 'travel' | 'command' | 'mode', what: string, detail: Record<string, unknown> = {}) {
+  if (kind === 'travel' || kind === 'pickup') trackEvent(kind, what, 0, 0, detail);
+}
+
+/** Una decisión con su motivo: al log, al panel y a la base. `detail.kind` dice de qué tipo es (por defecto 'system'). */
+export function decide(what: string, detail: Record<string, unknown> & { kind?: NoteKind } = {}) {
   log(what);
-  notes.push({ at: Date.now(), text: what.slice(0, 160) });
+  notes.push({ at: Date.now(), kind: detail.kind ?? 'system', text: what.slice(0, 220) });
   if (notes.length > NOTES_MAX) notes.shift();
-  journal('decide', what, detail);
+  trackEvent('decide', what, 0, 0, detail);
 }
 
 /** Una línea al log. */

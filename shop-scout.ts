@@ -12,7 +12,7 @@ import { buildCloseNpc, buildTalkNpc, decodeItemDetail } from './protocol097';
 import { monsterName, world, bot } from './state';
 import { trackEvent } from './telemetry';
 import { chebyshev, log, sleep, toBytes } from './util';
-import { travelTo, type Place } from './place';
+import { travelTo, type Place } from './area';
 import { warp } from './warps';
 import { walkTowards, type LoopCtx } from './loop-ctx';
 
@@ -23,7 +23,7 @@ import { walkTowards, type LoopCtx } from './loop-ctx';
 const NO_TALK = new Set([...Array.from({ length: 10 }, (_, i) => 200 + i), 215, 216, 217, 218, 219, 220, 221, 222, 224, 233, 236, 239, 240, 241, 247, 249, 252, 260]);
 const isTalkable = (type: number) => type >= 200 && type <= 299 && !NO_TALK.has(type);
 /** Lorencia (mapa 0): el centro del pueblo y puntos para recorrerlo y que los NPC entren en pantalla. */
-const TOWN: Place = { kind: 'tier', warp: warp(2), anchor: { x: 125, y: 120 }, radius: 14, name: 'Lorencia (pueblo)' };
+const TOWN: Place = { warp: warp(2), anchor: { x: 125, y: 120 }, radius: 14, name: 'Lorencia (pueblo)' };
 const PATROL = [{ x: 125, y: 122 }, { x: 140, y: 112 }, { x: 118, y: 108 }, { x: 122, y: 134 }, { x: 108, y: 126 }, { x: 146, y: 126 }, { x: 134, y: 100 }, { x: 116, y: 142 }, { x: 150, y: 140 }, { x: 100, y: 110 }];
 const MAX_STEPS_PER_NPC = 80;
 
@@ -49,7 +49,7 @@ export async function scoutShopsStep(ctx: LoopCtx): Promise<boolean> {
   if (ran) return false;
   st ??= { done: new Set(), steps: new Map(), patrol: 0, patrolSteps: 0, visited: [] };
   ctx.target = null;
-  if (await travelTo(TOWN, { sameMapWarp: true })) return true;
+  if (await travelTo(TOWN)) return true;
 
   const npcs = [...world.townNpcs.values()].filter((n) => isTalkable(n.type) && !st!.done.has(n.id));
   const me = { x: world.x, y: world.y };

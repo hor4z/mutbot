@@ -25,7 +25,7 @@ for (let i = 0; i < argv.length; i++) {
 // Un flag mal escrito dejaba al bot con defaults colgado esperando LoginResponse: se rechaza al arrancar.
 const KNOWN_FLAGS = new Set([
   '--proxy', '--cs-host', '--cs-port', '--user', '--pass', '--char', '--allow-remote', '--exit-if-in-use',
-  '--auto-seconds', '--reset-level', '--stat-batch', '--heal-at', '--ws-port', 
+  '--auto-seconds', '--stat-batch', '--heal-at', '--ws-port',
 ]);
 const unknownFlags = [...args.keys()].filter((k) => !KNOWN_FLAGS.has(k));
 if (unknownFlags.length) {
@@ -36,19 +36,11 @@ if (unknownFlags.length) {
 export const PROXY = args.get('--proxy') ?? 'ws://127.0.0.1:3000';
 export const CS_HOST = args.get('--cs-host') ?? '127.0.0.1';
 export const CS_PORT = parseInt(args.get('--cs-port') ?? '44405');
-/** Servidor del juego (Fast o Slow): la estación lo manda en MUBOT_SERVER; sin eso se deduce del connect server (`clasico` = Slow). */
-export const SERVER_KEY: 'fast' | 'slow' = process.env.MUBOT_SERVER === 'slow' || (!process.env.MUBOT_SERVER && CS_HOST === 'clasico') ? 'slow' : 'fast';
 // Credenciales: mejor en .env (Bun lo carga solo, está en .gitignore) que en
 // la línea de comandos, donde quedan en el historial del shell.
 export const USERNAME = args.get('--user') ?? process.env.MUBOT_USER ?? 'test1';
 export const PASSWORD = args.get('--pass') ?? process.env.MUBOT_PASS ?? 'test1';
 export const CHAR_NAME = args.get('--char') ?? process.env.MUBOT_CHAR ?? 'test1Dk';
-// Personaje nuevo (lo escribe la estación en el .env): si CHAR_NAME no está en la cuenta, se crea
-// con esta clase (dk, dw, elf, mg). Sin esto, entra con el primero de la lista, como siempre.
-// Personaje pedido a propósito (--char o MUBOT_CHAR): si no está en la cuenta y no hay que crearlo,
-// el bot corta en vez de entrar con otro (un nombre mal escrito jugaba con el primero de la lista).
-export const CREATE_CLASS = process.env.MUBOT_CREATE_CLASS ?? '';
-export const CHAR_EXPLICIT = args.has('--char') || !!process.env.MUBOT_CHAR;
 const ALLOW_REMOTE = args.has('--allow-remote');
 
 const LOCAL = /^(127\.|localhost$|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
@@ -60,7 +52,7 @@ if (!ALLOW_REMOTE && !(LOCAL.test(proxyHost) && LOCAL.test(CS_HOST))) {
 
 // --exit-if-in-use (lo pasa la estación): ver main() en headless-bot.ts.
 export const EXIT_IF_IN_USE = args.has('--exit-if-in-use');
-// 0 = sin límite: farmea, resetea y reconecta con backoff.
+// 0 = sin límite: farmea y reconecta con backoff.
 export const AUTO_SECONDS = parseInt(args.get('--auto-seconds') ?? '600');
 // Panel (ws-server.ts); sin el flag no se levanta.
 export const WS_PORT_ARG = args.get('--ws-port');
@@ -98,16 +90,15 @@ export const HEAL_AT_PCT = parseInt(args.get('--heal-at') ?? '60');
 // Sin --build se usa planStats (farming.ts), el reparto del agente web.
 // Con menos puntos que esto no vale la pena frenar a repartir (3 comandos de
 // chat = ~7.5 s sin pelear). El agente web reparte de a 200.
-export const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '200');
-export const RESET_LEVEL = parseInt(args.get('--reset-level') ?? '400');
+export const STAT_BATCH_MIN = parseInt(args.get('--stat-batch') ?? '10');
 
 // Skills de ataque configurables (números de skill, NO índices de lista).
 // Los defaults son los de Dark Knight / Blade Knight del set clásico.
-// Twisting Slash (41) primero: es el skill fijo de Horaz. Rageful Blow (42)
+// Twisting Slash (41) primero (pega alrededor: área), después Cyclone (22), que se usa siempre que alcance el maná. Rageful Blow (42)
 // fuera: el usuario lo descartó (lento). El resto queda para otros personajes.
 // Después, los de Dark Wizard: Evil Spirit (9, área alrededor), Ice (7), Energy Ball (17),
 // Fire Ball (4), Lightning (3), Meteorite (2), Inferno (14 — mismo número que un DK, se usa el
 // que el personaje sepa). Sin esto Melu (DW) no conocía ninguno de la lista y nunca atacaba:
 // 0 exp en Devias mientras los Yetis le pegaban (2026-10-10).
-const DEFAULT_ATTACK_SKILLS = [41, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2, 24];
+const DEFAULT_ATTACK_SKILLS = [41, 22, 19, 49, 14, 15, 40, 43, 45, 46, 47, 50, 51, 55, 9, 7, 17, 4, 3, 2, 24];
 export const ATTACK_SKILL_POOL = DEFAULT_ATTACK_SKILLS;

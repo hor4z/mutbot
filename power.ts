@@ -2,7 +2,7 @@
  * ¿Puede este personaje con este monstruo? Estimación con los stats reales (fuerza, agilidad,
  * vitalidad/vida, energía, clase) contra los de `data/monsters.json` (vida, daño, defensa, demora
  * entre ataques). Así la estrategia sale del personaje y no del nivel: un DK recién creado (28 de
- * fuerza) solo puede con arañas; Horaz con 120 resets puede con todo. Lógica pura (power-tests.ts).
+ * fuerza) solo puede con arañas; uno con muchos puntos puede con casi todo. Lógica pura (power-tests.ts).
  *
  * Fórmulas del 0.97 (aproximadas, sin arma ni opciones: al principio el arma suma poco y la tabla
  * de ítems viene con las columnas corridas):

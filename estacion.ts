@@ -1,284 +1,57 @@
 /**
- * Estación: un panel para conectar y desconectar a los personajes sin navegador y ponerlos en una
- * rutina (farmear, spot fijo, explorar, pausa). Cada personaje es un bot `headless-bot.ts` aparte,
- * con su propio panel en 127.0.0.1:879x que la estación muestra adentro.
+ * Estación: conecta y desconecta al personaje Slow sin navegador, lo mantiene vivo y sirve el panel.
  *
  *   bun run estacion            → http://127.0.0.1:8787
  *
- * - Cuentas y personajes: en la base SQLite (`estacion-db.ts`, ~/.mubot/mubot.db). Los `.env` de la
- *   raíz se importan solos al arrancar. La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
- * - Los bots corren en su propia sesión (`detached`, sin `setsid`: no existe en macOS) y escriben en ~/.mubot/logs/<personaje>.log:
- *   cerrar o reiniciar la estación NO los desconecta. Al arrancar, la estación adopta los que ya
- *   corren (los busca en /proc por cuenta y lee su --ws-port).
- * - Nunca dos sesiones de la misma cuenta: si ya corre un bot con esa cuenta no lanza otro, y el bot
- *   va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
+ * - Un solo personaje: `~/.mubot/personaje.json` ({ user, pass, char }). La clave le llega al bot por MUBOT_PASS, nunca por argumentos.
+ * - El bot (`headless-bot.ts`) corre en su propia sesión (`detached`) y escribe en ~/.mubot/logs/<personaje>.log: cerrar o reiniciar la
+ *   estación NO lo desconecta. Al arrancar, la estación adopta el que ya corre (lo busca con `ps` y lee su --ws-port).
+ * - Nunca dos sesiones de la cuenta: el bot va con `--exit-if-in-use` (si la cuenta está abierta en el navegador, sale con código 3).
+ * - Desconectar desde el panel = el usuario va a jugar a mano: no se reconecta solo (`~/.mubot/estado.json`).
  * - Solo 127.0.0.1. Las órdenes (POST /api/do) exigen el Origin de la propia estación y JSON.
+ * - Conexión siempre por el worker (workers/edge): URL en MUBOT_ALTA_URL de .env.alta, token en ~/.mubot/alta/proxy-token.
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statfsSync, statSync } from 'node:fs';
-import { EstacionDb, type DbChar } from './estacion-db';
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { statPower } from './util';
-import { Orquestadores, type Miembro } from './orquestador';
-import { ALTA_DIR, altaProblem, registerAccount, startAltaSync, submitAlta } from './alta-sync';
 import { join } from 'node:path';
-import {
-  BOT_PORT_BASE, DEFAULT_SERVER, SERVERS, isServerKey, type ServerKey, RECENT_STOP_MS, botArgs, charFromEnv, exitStatus, isCharEnvFile, parseStationRequest, type StationRequest, processRunsAccount,
-  parseEnvFile, CHAR_CLASSES, accountProblem, isCharClass,
-  type Alert, newAlertMemory, diffAlerts, pushAlert,
-  routineCommands, routineLabel, type CharConfig, type CharStatus, type GameServer, type Routine,
-} from './estacion-logic';
-import { originAllowed } from './ws-server';
-import { randomBytes } from 'node:crypto';
-import { chmodSync, writeFileSync } from 'node:fs';
-import { classFamily } from './farming';
-import { isSafeZone, walkableFor } from './terrain';
-import { mapName } from './panel-logic';
 import { ARCHIVO, D, ESQUEMA, guardarArchivo, iniciarDirectivas, leerArchivo, validar } from './directivas';
+import {
+  BOT_PORT, NO_RETRY_CODES, RECENT_STOP_MS, botArgs, exitStatus, parseEnvFile, parseStationRequest,
+  type BotStatus, type Personaje,
+} from './estacion-logic';
 import type { PanelServerMessage, PanelState } from './panel-protocol';
+import { terrainOf } from './terrain';
+import { originAllowed } from './ws-server';
 
 const ROOT = import.meta.dir;
 const PORT = Number(process.env.ESTACION_PORT ?? 8787);
-// Entre desconectar y volver a conectar un personaje (ver connect).
-const RECONNECT_GAP_MS = 5_000;
-const LOG_DIR = join(homedir(), '.mubot', 'logs');
-// Al lanzar un bot, si su log pasa de esto se rota a <personaje>.log.1 (se pisa el anterior).
+const DIR = join(homedir(), '.mubot');
+const LOG_DIR = join(DIR, 'logs');
+const ALTA_DIR = join(DIR, 'alta');
 const LOG_ROTATE_BYTES = 50 * 1024 * 1024;
-const SERVER: GameServer = {
-  proxy: process.env.MUBOT_PROXY ?? DEFAULT_SERVER.proxy,
-  csHost: process.env.MUBOT_CS_HOST ?? DEFAULT_SERVER.csHost,
-  csPort: Number(process.env.MUBOT_CS_PORT ?? DEFAULT_SERVER.csPort),
-};
-
-type Slot = {
-  cfg: DbChar;
-  /** cómo está conectado el proceso que corre ahora (se fija al lanzarlo o al adoptarlo) */
-  conn: 'direct' | 'proxy';
-  /** Worker por el que entró el bot (si va por proxy) y cuántos cambios de worker seguidos lleva este intento. */
-  proxyBase?: string;
-  proxySwaps?: number;
-  port: number;
-  pid: number | null;
-  status: CharStatus;
-  msg: string;
-  routine: Routine | null;
-  /** rutina a aplicar cuando el bot esté en el mundo */
-  pending: Routine | null;
-  state: PanelState | null;
-  ws: WebSocket | null;
-  wsPort: number | null;
-  nextId: number;
-  waiting: Map<number, (r: { ok: boolean; msg: string }) => void>;
-  /** cuándo se lo desconectó desde la estación */
-  stoppedAt: number;
-  /** código con que salió el último proceso (null = señal) */
-  exitCode: number | null;
-  // conexión demorada (recién desconectado)
-  connectTimer: ReturnType<typeof setTimeout> | null;
-};
-const slots = new Map<string, Slot>();
-// Cuentas y personajes (SQLite, ~/.mubot/mubot.db): ver estacion-db.ts.
-const db = new EstacionDb(SERVER);
+const RECONNECT_GAP_MS = 5_000;
+const FROZEN_RESTART_MS = 10 * 60_000;
 const say = (...a: unknown[]) => console.log('[estación]', ...a);
 
-// Alertas de la flota (ring buffer, la más nueva primero) y su memoria para detectar cambios.
-const alerts: Alert[] = [];
-const alertMem = newAlertMemory();
-const INSIGHT_TTL_MS = 2 * 60 * 60_000;
-let invasionActive = false;
+// --- Personaje y proxy ------------------------------------------------------------------------------------------------
+function leerPersonaje(): Personaje | null {
+  try {
+    const p = JSON.parse(readFileSync(join(DIR, 'personaje.json'), 'utf8'));
+    return typeof p.user === 'string' && typeof p.pass === 'string' && typeof p.char === 'string' ? p : null;
+  } catch { return null; }
+}
+const personaje = leerPersonaje();
 
-// --- Personajes -----------------------------------------------------------------------------
-function discover() {
-  // Los `.env` de la raíz (Horaz, Melu) se importan a la base la primera vez; después manda la base.
-  const envs: { envFile: string; user: string; pass: string; char: string }[] = [];
-  for (const f of readdirSync(ROOT).filter(isCharEnvFile).sort()) {
-    try {
-      const c = charFromEnv(f, readFileSync(join(ROOT, f), 'utf8'));
-      const pass = c && parseEnvFile(readFileSync(join(ROOT, f), 'utf8')).MUBOT_PASS;
-      if (c && pass && c.envFile) envs.push({ envFile: c.envFile, user: c.user, pass, char: c.char });
-    } catch {}
-  }
-  const imported = db.importEnv(envs);
-  if (imported.length) say(`importé a la base: ${imported.join(', ')}`);
-  return db.chars();
+let altaUrl = '';
+try { altaUrl = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8')).MUBOT_ALTA_URL ?? ''; } catch { /* sin .env.alta: no hay worker */ }
+const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
+function proxyUrl(): string | null {
+  const token = proxyToken();
+  if (!token || !altaUrl) return null;
+  try { const u = new URL(altaUrl); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
 }
 
-function refreshSlots() {
-  const cfgs = discover();
-  // Quita las tarjetas de personajes que ya no están en la base (renombrados o borrados) si no tienen un bot corriendo.
-  const keep = new Set(cfgs.map((c) => c.key));
-  for (const [k, s] of slots) if (!keep.has(k) && s.pid == null) { detachWs(s); slots.delete(k); }
-  for (const cfg of cfgs) {
-    const s = slots.get(cfg.key);
-    if (s) {
-      s.cfg = cfg;
-      continue;
-    }
-    // Puerto estable: el primero libre desde BOT_PORT_BASE (un .env nuevo no le roba el puerto a otro).
-    const used = new Set([...slots.values()].map((x) => x.port));
-    let port = BOT_PORT_BASE;
-    while (used.has(port)) port++;
-    slots.set(cfg.key, {
-      cfg, conn: 'direct', port, pid: null, status: 'off', msg: 'desconectado', routine: null, pending: null,
-      state: null, ws: null, wsPort: null, nextId: 1, waiting: new Map(), stoppedAt: 0, exitCode: null, connectTimer: null,
-    });
-  }
-}
-
-// --- Bots que ya corren (los nuestros o lanzados a mano) ------------------------------------
-type Running = { pid: number; wsPort: number | null; cmdline: string[]; environ: string[] };
-function scanProcs(): Running[] {
-  const out: Running[] = [];
-  if (!existsSync('/proc')) {
-    // macOS: sin /proc. `ps` da el cmdline y, con `eww`, el entorno; alcanza para --user/--env-file/--ws-port.
-    const ps = Bun.spawnSync(['ps', '-axo', 'pid=,command=']).stdout.toString();
-    for (const line of ps.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+(.*)$/);
-      if (!m) continue;
-      const cmdline = m[2].split(/\s+/).filter(Boolean);
-      if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) continue;
-      const i = cmdline.indexOf('--ws-port');
-      // `ps eww` agrega el entorno al final de la línea: alcanza para reconocer la clave de escuadra y MUBOT_USER.
-      const env = Bun.spawnSync(['ps', 'eww', '-o', 'command=', '-p', m[1]]).stdout.toString();
-      const environ = (env.match(/MUBOT_[A-Z_]+=\S*/g) ?? []).filter((v) => !v.startsWith('MUBOT_PASS=')); // la clave no se guarda ni en memoria
-      out.push({ pid: Number(m[1]), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ });
-    }
-    return out;
-  }
-  for (const d of readdirSync('/proc')) {
-    if (!/^\d+$/.test(d)) continue;
-    try {
-      const cmdline = readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').filter(Boolean);
-      if (!cmdline.some((a) => a.endsWith('headless-bot.ts'))) continue;
-      const environ = readFileSync(`/proc/${d}/environ`, 'utf8').split('\0');
-      const i = cmdline.indexOf('--ws-port');
-      out.push({ pid: Number(d), wsPort: i >= 0 ? Number(cmdline[i + 1]) : null, cmdline, environ });
-    } catch {}
-  }
-  return out;
-}
-
-/** ¿La línea de comandos del bot apunta al connect server de esta estación? (sin --cs-host se asume que sí) */
-function sameServer(cmdline: string[]): boolean {
-  const i = cmdline.indexOf('--cs-host');
-  return i < 0 || cmdline[i + 1] === SERVER.csHost || cmdline[i + 1] === SERVERS.slow.csHost;
-}
-
-function syncRunning() {
-  const procs = scanProcs();
-  for (const s of slots.values()) {
-    // Solo bots de este servidor: uno suelto contra otro (ej. el Slow, `--cs-host clasico`) no es el personaje de la estación ni se mantiene vivo.
-    const p = procs.find((r) => processRunsAccount(r.cmdline, r.environ, s.cfg) && sameServer(r.cmdline));
-    if (p) {
-      if (s.pid !== p.pid) {
-        s.pid = p.pid;
-        s.conn = p.cmdline.some((a) => /\/p\/[^/]+\/ws/.test(a)) ? 'proxy' : 'direct';
-        if (s.status === 'off' || s.status === 'failed' || s.status === 'in-use') {
-          s.status = p.wsPort ? 'on' : 'external';
-          s.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
-        }
-      }
-      if (p.wsPort && p.wsPort !== s.wsPort) attachWs(s, p.wsPort);
-    } else if (s.pid != null && !ownExits.has(s.pid)) {
-      // Murió y no era hijo nuestro (o no nos enteramos del código de salida).
-      s.pid = null;
-      if (s.status !== 'in-use' && s.status !== 'failed') { s.status = 'off'; s.msg = 'desconectado'; }
-      detachWs(s);
-    }
-  }
-}
-
-// --- WebSocket con cada bot (sin Origin: el bot lo acepta como cliente local) ---------------
-function attachWs(s: Slot, port: number) {
-  detachWs(s);
-  s.wsPort = port;
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  s.ws = ws;
-  ws.onmessage = (ev) => {
-    let m: PanelServerMessage;
-    try { m = JSON.parse(String(ev.data)); } catch { return; }
-    if (m.type === 'panel-state') {
-      s.state = m.state;
-      if (s.status === 'starting' && m.state.mode !== 'connecting') {
-        s.status = 'on';
-        s.msg = 'en el juego';
-        // Entró: la cuenta anda (por si estaba marcada como bloqueada).
-        if (s.cfg.status !== 'active') { db.setAccountStatus(s.cfg.user, 'active'); refreshSlots(); }
-      }
-      if (s.pending && m.state.mode !== 'connecting' && m.state.char.level > 0) {
-        const r = s.pending;
-        s.pending = null;
-        void applyRoutine(s, r);
-      }
-    } else if (m.type === 'command-result') {
-      s.waiting.get(m.id)?.({ ok: m.ok, msg: m.msg });
-      s.waiting.delete(m.id);
-    }
-  };
-  ws.onclose = () => {
-    if (s.ws !== ws) return;
-    s.ws = null;
-    // El bot todavía no levantó el panel (o se reinició): reintento mientras el proceso viva.
-    setTimeout(() => { if (s.pid != null && s.wsPort === port && !s.ws) attachWs(s, port); }, 1500);
-  };
-}
-
-function detachWs(s: Slot) {
-  const ws = s.ws;
-  s.ws = null;
-  s.wsPort = null;
-  s.state = null;
-  try { ws?.close(); } catch {}
-}
-
-function sendCommand(s: Slot, command: unknown): Promise<{ ok: boolean; msg: string }> {
-  return new Promise((resolve) => {
-    if (!s.ws || s.ws.readyState !== WebSocket.OPEN) return resolve({ ok: false, msg: 'sin conexión con el bot' });
-    const id = s.nextId++;
-    const t = setTimeout(() => { s.waiting.delete(id); resolve({ ok: false, msg: 'el bot no contestó' }); }, 5000);
-    s.waiting.set(id, (r) => { clearTimeout(t); resolve(r); });
-    s.ws.send(JSON.stringify({ type: 'command', id, command }));
-  });
-}
-
-async function applyRoutine(s: Slot, r: Routine) {
-  for (const c of routineCommands(r)) {
-    const res = await sendCommand(s, c);
-    say(`${s.cfg.char} ← ${c.cmd}: ${res.ok ? '' : 'rechazada, '}${res.msg}`);
-    if (!res.ok) { s.msg = `rutina "${routineLabel(r)}": ${res.msg}`; return; }
-  }
-  s.routine = r;
-  s.msg = routineLabel(r);
-}
-
-// --- Conectar / desconectar ------------------------------------------------------------------
-const ownExits = new Set<number>();
-
-// Aprender de los datos cada 30 min (scripts/aprender.ts → ~/.mubot/knowledge.json), si hay base.
-const LEARN_EVERY_MS = 30 * 60_000;
-setInterval(() => {
-  if (!Object.keys(dbEnv()).length) return;
-  Bun.spawn([process.execPath, '--env-file=.env.db', 'scripts/aprender.ts'], { cwd: ROOT, stdout: 'ignore', stderr: 'ignore' });
-}, LEARN_EVERY_MS);
-
-// Disco: si quedan menos de DISK_MIN_GB libres donde está la base, se borran los ticks y jugadores de
-// más de 7 días (los eventos se conservan) y se avisa. Se mira cada 10 min.
-const DISK_MIN_GB = 5;
-setInterval(() => {
-  const env = dbEnv();
-  if (!env.MUBOT_DB_URL) return;
-  let freeGb = Infinity;
-  try { const st = statfsSync(join(homedir(), '.mubot')); freeGb = (st.bavail * st.bsize) / 1e9; } catch {}
-  if (freeGb >= DISK_MIN_GB) return;
-  say(`disco con ${freeGb.toFixed(1)} GB libres: borro datos viejos (ticks y jugadores de más de 7 días)`);
-  for (const t of ['ticks', 'players_seen'])
-    void fetch(`${env.MUBOT_DB_URL}/?database=mubot`, {
-      method: 'POST', body: `ALTER TABLE ${t} DELETE WHERE ts < now() - INTERVAL 7 DAY`,
-      headers: { 'X-ClickHouse-User': env.MUBOT_DB_USER ?? 'mubot', 'X-ClickHouse-Key': env.MUBOT_DB_PASSWORD ?? '' },
-    }).catch(() => {});
-}, 10 * 60_000);
-
-
-/** MUBOT_DB_* de .env.db (ClickHouse local, ver db/docker-compose.yml); vacío si no hay archivo. */
+/** Datos a ClickHouse (telemetry.ts): credenciales de .env.db, si existe. */
 function dbEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
@@ -286,209 +59,218 @@ function dbEnv(): Record<string, string> {
       const m = /^(MUBOT_DB_[A-Z_]+)=(.*)$/.exec(line.trim());
       if (m) out[m[1]] = m[2];
     }
-  } catch {}
+  } catch { /* sin base: el bot juega igual */ }
   return out;
 }
 
-// --- Conexión: siempre por los workers (workers/edge) ---------------------------------------
-// No hay conexión directa: todos los bots entran por el proxy de un worker (la URL sale de MUBOT_ALTA_URL y MUBOT_PROXY_URLS en
-// .env.alta, el token de ~/.mubot/alta/proxy-token). Si uno no responde, se usa el siguiente (pickProxy).
-// Servidor del juego por personaje: columna `characters.server` (las cuentas valen en Fast y Slow, los personajes son de uno).
-const chosenServer = (s: Slot): ServerKey => s.cfg.server;
-const proxyToken = () => { try { return readFileSync(join(ALTA_DIR, 'proxy-token'), 'utf8').trim(); } catch { return ''; } };
-/** Workers de respaldo (MUBOT_PROXY_URLS en .env.alta, separados por coma): mismo código que el principal, solo con PROXY_TOKEN. */
-let proxyBases: string[] = [];
-const proxyUp = new Map<string, boolean>();
-const wsBase = (base: string, token: string): string | null => {
-  try { const u = new URL(base); return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/p/${token}/ws`; } catch { return null; }
+// --- Estado del bot ---------------------------------------------------------------------------------------------------
+type Bot = {
+  pid: number | null;
+  status: BotStatus;
+  msg: string;
+  state: PanelState | null;
+  ws: WebSocket | null;
+  nextId: number;
+  waiting: Map<number, (r: { ok: boolean; msg: string }) => void>;
+  stoppedAt: number;
+  exitCode: number | null;
+  connectTimer: ReturnType<typeof setTimeout> | null;
 };
-/** El primer worker (el principal y después los de respaldo) que respondió bien en la última comprobación; si ninguno, el principal. */
-function pickProxy(): { url: string; base: string } | null {
-  const token = proxyToken();
-  if (!token) return null;
-  const bases = proxyBases.length ? proxyBases : altaUrl ? [altaUrl] : [];
-  const now = Date.now();
-  const base = bases.find((b) => proxyUp.get(b) !== false && (proxyBad.get(b) ?? 0) < now) ?? bases.find((b) => proxyUp.get(b) !== false) ?? bases[0];
-  const url = base ? wsBase(base, token) : null;
-  return url ? { url, base } : null;
-}
-const proxyUrl = () => pickProxy()?.url ?? null;
-/** Un worker por el que un bot no logró entrar se saltea un rato aunque la comprobación lo vea vivo (puede fallar la conexión al juego, no el worker). */
-const proxyBad = new Map<string, number>();
-const PROXY_BAD_MS = 2 * 60_000;
-/** Sin token no hay prueba; con token, un GET sin upgrade da 426 si el worker vive y acepta el token (401 si no) y no abre nada contra el juego. */
-async function probeProxies() {
-  const token = proxyToken();
-  if (!token) return;
-  await Promise.all(proxyBases.map(async (b) => {
-    const u = wsBase(b, token)?.replace(/^ws/, 'http');
-    let ok = false;
-    try { ok = !!u && (await fetch(u, { signal: AbortSignal.timeout(4000) })).status === 426; } catch { /* caído */ }
-    if (proxyUp.get(b) !== ok) say(ok ? `Proxy ${new URL(b).host}: responde.` : `Proxy ${new URL(b).host}: no responde${proxyBases.length > 1 ? '; uso el siguiente' : ''}.`);
-    proxyUp.set(b, ok);
-  }));
+const bot: Bot = { pid: null, status: 'off', msg: 'desconectado', state: null, ws: null, nextId: 1, waiting: new Map(), stoppedAt: 0, exitCode: null, connectTimer: null };
+
+// `wanted`: el usuario lo quiere conectado. Un desconectado a mano deja de ser deseado.
+const ESTADO = join(DIR, 'estado.json');
+let wanted = (() => { try { return JSON.parse(readFileSync(ESTADO, 'utf8')).wanted === true; } catch { return false; } })();
+const setWanted = (v: boolean) => { wanted = v; try { writeFileSync(ESTADO, JSON.stringify({ wanted })); } catch { /* sin disco: no es grave */ } };
+
+// --- Bot que ya corre (el nuestro o lanzado a mano) -------------------------------------------------------------------
+function scanProc(): { pid: number; wsPort: number | null } | null {
+  if (!personaje) return null;
+  const ps = Bun.spawnSync(['ps', '-axo', 'pid=,command=']).stdout.toString();
+  for (const line of ps.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!m) continue;
+    const cmd = m[2].split(/\s+/).filter(Boolean);
+    if (!cmd.some((a) => a.endsWith('headless-bot.ts'))) continue;
+    const u = cmd.indexOf('--user'), c = cmd.indexOf('--char');
+    if (cmd[u + 1] !== personaje.user || (c >= 0 && cmd[c + 1] !== personaje.char)) continue;
+    const i = cmd.indexOf('--ws-port');
+    return { pid: Number(m[1]), wsPort: i >= 0 ? Number(cmd[i + 1]) : null };
+  }
+  return null;
 }
 
-function connect(s: Slot, routine: Routine): { ok: boolean; msg: string } {
-  syncRunning();
-  const srv = chosenServer(s);
-  const base: GameServer = srv === 'slow' ? SERVERS.slow : SERVER;
-  const pick = pickProxy();
-  const pUrl = pick?.url ?? null;
-  if (!pUrl) return { ok: false, msg: `Falta configurar el worker: sin él ${s.cfg.char} no puede conectar (MUBOT_ALTA_URL en .env.alta y bun run alta:keys).` };
-  if (s.pid != null) return { ok: false, msg: `${s.cfg.char} ya está corriendo (pid ${s.pid})` };
-  // Una cuenta juega con un solo personaje a la vez.
-  const sibling = [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase());
-  if (sibling) return { ok: false, msg: `la cuenta ${s.cfg.user} ya está jugando con ${sibling.cfg.char}: desconectalo primero` };
-  const pass = db.passFor(s.cfg.char);
-  if (!pass) return { ok: false, msg: `no tengo la clave de ${s.cfg.char} en la base` };
-  // Puerto del panel: si otro bot que ya corre (adoptado tras reiniciar la estación) usa el mismo, se toma el primero libre.
-  const busy = new Set([...slots.values()].filter((x) => x !== s && x.pid != null).flatMap((x) => [x.port, x.wsPort ?? -1]));
-  if (busy.has(s.port)) {
-    const all = new Set([...slots.values()].flatMap((x) => [x.port, x.wsPort ?? -1]));
-    let port = BOT_PORT_BASE;
-    while (all.has(port)) port++;
-    s.port = port;
+function syncRunning() {
+  const p = scanProc();
+  if (p) {
+    if (bot.pid !== p.pid) {
+      bot.pid = p.pid;
+      if (bot.status === 'off' || bot.status === 'failed' || bot.status === 'in-use') {
+        bot.status = p.wsPort ? 'on' : 'external';
+        bot.msg = p.wsPort ? 'ya estaba corriendo: lo adopté' : 'corre sin --ws-port: no lo puedo ver ni manejar desde acá (solo desconectar)';
+      }
+    }
+    if (p.wsPort && !bot.ws) attachWs(p.wsPort);
+  } else if (bot.pid != null && !ownExits.has(bot.pid)) {
+    bot.pid = null;
+    if (bot.status !== 'in-use' && bot.status !== 'failed') { bot.status = 'off'; bot.msg = 'desconectado'; }
+    detachWs();
   }
-  // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba
-  // "fantasma" (sin muertes ni exp). Se espera RECONNECT_GAP_MS desde la desconexión y se conecta solo.
-  const waitMs = s.stoppedAt + RECONNECT_GAP_MS - Date.now();
+}
+
+// --- WebSocket con el bot (sin Origin: el bot lo acepta como cliente local) -------------------------------------------
+function attachWs(port: number) {
+  detachWs();
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  bot.ws = ws;
+  ws.onmessage = (ev) => {
+    let m: PanelServerMessage;
+    try { m = JSON.parse(String(ev.data)); } catch { return; }
+    if (m.type === 'panel-state') {
+      bot.state = m.state;
+      if (bot.status === 'starting' && m.state.mode !== 'connecting') { bot.status = 'on'; bot.msg = 'en el juego'; }
+    } else if (m.type === 'command-result') {
+      bot.waiting.get(m.id)?.({ ok: m.ok, msg: m.msg });
+      bot.waiting.delete(m.id);
+    }
+  };
+  ws.onclose = () => {
+    if (bot.ws !== ws) return;
+    bot.ws = null;
+    // El bot todavía no levantó el panel (o se reinició): reintento mientras el proceso viva.
+    setTimeout(() => { if (bot.pid != null && !bot.ws) attachWs(port); }, 1500);
+  };
+}
+function detachWs() {
+  const ws = bot.ws;
+  bot.ws = null;
+  bot.state = null;
+  try { ws?.close(); } catch { /* ya cerrado */ }
+}
+function sendCommand(command: unknown): Promise<{ ok: boolean; msg: string }> {
+  return new Promise((resolve) => {
+    if (!bot.ws || bot.ws.readyState !== WebSocket.OPEN) return resolve({ ok: false, msg: 'sin conexión con el bot' });
+    const id = bot.nextId++;
+    const t = setTimeout(() => { bot.waiting.delete(id); resolve({ ok: false, msg: 'el bot no contestó' }); }, 5000);
+    bot.waiting.set(id, (r) => { clearTimeout(t); resolve(r); });
+    bot.ws.send(JSON.stringify({ type: 'command', id, command }));
+  });
+}
+
+// --- Conectar / desconectar -------------------------------------------------------------------------------------------
+const ownExits = new Set<number>();
+
+function connect(): { ok: boolean; msg: string } {
+  syncRunning();
+  if (!personaje) return { ok: false, msg: 'Falta ~/.mubot/personaje.json ({ "user": …, "pass": …, "char": … }).' };
+  const pUrl = proxyUrl();
+  if (!pUrl) return { ok: false, msg: 'Falta configurar el worker: sin él el bot no puede conectar (MUBOT_ALTA_URL en .env.alta y bun run alta:keys).' };
+  if (bot.pid != null) return { ok: false, msg: `${personaje.char} ya está corriendo (pid ${bot.pid})` };
+  // Recién desconectado: el server todavía tiene la sesión vieja en el mundo y la nueva quedaba "fantasma". Se espera y se conecta solo.
+  const waitMs = bot.stoppedAt + RECONNECT_GAP_MS - Date.now();
   if (waitMs > 0) {
-    if (s.connectTimer) clearTimeout(s.connectTimer);
-    s.status = 'starting';
-    s.msg = `espero ${Math.ceil(waitMs / 1000)} s a que el server suelte la sesión anterior…`;
-    s.connectTimer = setTimeout(() => { s.connectTimer = null; if (s.pid == null) connect(s, routine); }, waitMs);
-    return { ok: true, msg: `conecto a ${s.cfg.char} en ${Math.ceil(waitMs / 1000)} s (el server suelta la sesión anterior)` };
+    if (bot.connectTimer) clearTimeout(bot.connectTimer);
+    bot.status = 'starting';
+    bot.msg = `espero ${Math.ceil(waitMs / 1000)} s a que el server suelte la sesión anterior…`;
+    bot.connectTimer = setTimeout(() => { bot.connectTimer = null; if (bot.pid == null) connect(); }, waitMs);
+    return { ok: true, msg: `conecto en ${Math.ceil(waitMs / 1000)} s (el server suelta la sesión anterior)` };
   }
   mkdirSync(LOG_DIR, { recursive: true });
-  const logPath = join(LOG_DIR, `${s.cfg.key}.log`);
+  const logPath = join(LOG_DIR, `${personaje.char.toLowerCase()}.log`);
   try { if (statSync(logPath).size > LOG_ROTATE_BYTES) renameSync(logPath, `${logPath}.1`); } catch { /* todavía no hay log */ }
   const fd = openSync(logPath, 'a');
-  // Sin MUBOT_* heredados: la estación pudo cargar el .env de otro personaje.
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v != null && !k.startsWith('MUBOT_')) env[k] = v;
-  // Compañeros: todos los personajes de la estación (no son rivales en la esquina ni para la defensa).
-  // Solo los personajes del mismo servidor son compañeros: un homónimo del otro servidor no es nuestro.
-  env.MUBOT_SERVER = srv;
-  const sameSrv = (x: Slot) => x.cfg.server === s.cfg.server;
-  env.MUBOT_MATES = [...slots.values()].filter(sameSrv).map((x) => x.cfg.char).join(',');
-  // Personaje que todavía no existe en la cuenta: el bot lo crea al entrar con esta clase (F3/01).
-  if (s.cfg.cls) env.MUBOT_CREATE_CLASS = s.cfg.cls;
-  // Canal directo entre bots (bus.ts, UDP): su puerto y los de todos los demás, más el de la estación (que solo escucha).
-  env.MUBOT_BUS_PORT = String(busPort(s));
-  env.MUBOT_BUS_PEERS = [...[...slots.values()].filter((x) => x !== s && sameSrv(x)).map(busPort), BUS_STATION_PORT].join(',');
-  // Credenciales de la base: la clave por entorno (no en la línea de comandos, que se ve en `ps`).
-  env.MUBOT_PASS = pass;
-  // Datos a ClickHouse local (telemetry.ts): credenciales de .env.db, si existe.
+  env.MUBOT_PASS = personaje.pass;
   Object.assign(env, dbEnv());
-  const proc = Bun.spawn([process.execPath, ...botArgs(s.cfg, s.port, pUrl ? { ...base, proxy: pUrl } : base, 'headless-bot.ts', Date.now() - s.stoppedAt > RECENT_STOP_MS)], {
+  const proc = Bun.spawn([process.execPath, ...botArgs(personaje, BOT_PORT, pUrl, 'headless-bot.ts', Date.now() - bot.stoppedAt > RECENT_STOP_MS)], {
     cwd: ROOT, env, detached: true, stdin: 'ignore', stdout: fd, stderr: fd,
   });
   closeSync(fd);
-  s.pid = proc.pid;
-  s.conn = pUrl ? 'proxy' : 'direct';
-  s.proxyBase = pick?.base;
+  bot.pid = proc.pid;
   ownExits.add(proc.pid);
-  s.status = 'starting';
-  s.msg = 'conectando…';
-  s.routine = null;
-  s.pending = routine;
-  db.setRoutine(s.cfg.char, routine);
-  say(`conecto a ${s.cfg.char} (pid ${proc.pid}, panel ${s.port}, rutina: ${routineLabel(routine)})`);
+  bot.status = 'starting';
+  bot.msg = 'conectando…';
+  say(`conecto a ${personaje.char} (pid ${proc.pid}, panel ${BOT_PORT})`);
   void proc.exited.then((code) => {
     ownExits.delete(proc.pid);
-    if (s.pid !== proc.pid) return;
+    if (bot.pid !== proc.pid) return;
     const st = exitStatus(code);
-    const neverEntered = s.status === 'starting';
-    s.exitCode = code;
-    s.pid = null;
-    s.status = st.status;
-    s.msg = st.msg;
-    s.pending = null;
-    detachWs(s);
-    if (code === 4) { db.setAccountStatus(s.cfg.user, 'blocked'); refreshSlots(); }
-    // Un fallo que no se arregla reintentando (flag mal, cuenta bloqueada, login rechazado, personaje inexistente) saca al personaje de los
-    // que se mantienen vivos: si no, cada reinicio de la estación lo volvía a intentar.
-    if (code === 2 || code === 4 || code === 5 || code === 6) { wanted.delete(s.cfg.key); saveWanted(); }
-    say(`${s.cfg.char} salió (código ${code}): ${st.msg}`);
-    // No pudo entrar por este worker (error de conexión, no un rechazo del juego): se prueba enseguida con el siguiente.
-    if (neverEntered && s.conn === 'proxy' && s.proxyBase && ![0, 2, 3, 4, 5, 6].includes(code ?? 0) && wanted.has(s.cfg.key)) {
-      proxyBad.set(s.proxyBase, Date.now() + PROXY_BAD_MS);
-      const next = pickProxy();
-      if ((s.proxySwaps ?? 0) < proxyBases.length - 1 && next && next.base !== s.proxyBase) {
-        s.proxySwaps = (s.proxySwaps ?? 0) + 1;
-        say(`${s.cfg.char}: no entró por ${new URL(s.proxyBase).host}; pruebo con ${new URL(next.base).host}`);
-        connect(s, routine);
-        return;
-      }
-    }
-    s.proxySwaps = 0;
+    bot.exitCode = code;
+    bot.pid = null;
+    bot.status = st.status;
+    bot.msg = st.msg;
+    detachWs();
+    // Un fallo que no se arregla reintentando saca al personaje de los que se mantienen vivos.
+    if ((NO_RETRY_CODES as readonly number[]).includes(code ?? -1)) setWanted(false);
+    say(`${personaje!.char} salió (código ${code}): ${st.msg}`);
   });
-  setTimeout(() => { if (s.pid === proc.pid && !s.ws) attachWs(s, s.port); }, 1500);
-  return { ok: true, msg: `conectando a ${s.cfg.char}…` };
+  setTimeout(() => { if (bot.pid === proc.pid && !bot.ws) attachWs(BOT_PORT); }, 1500);
+  return { ok: true, msg: `conectando a ${personaje.char}…` };
 }
 
-function disconnect(s: Slot): { ok: boolean; msg: string } {
+function disconnect(): { ok: boolean; msg: string } {
   syncRunning();
-  // Una conexión diferida pendiente (connect() espera a que el server suelte la sesión vieja) también se cancela.
-  if (s.connectTimer) { clearTimeout(s.connectTimer); s.connectTimer = null; s.pending = null; }
-  if (s.pid == null) return { ok: true, msg: `${s.cfg.char} no estaba conectado` };
-  try { process.kill(s.pid, 'SIGTERM'); } catch (e) { return { ok: false, msg: `no pude cortarlo: ${(e as Error).message}` }; }
-  s.stoppedAt = Date.now();
-  s.status = 'stopping';
-  s.msg = 'desconectando…';
-  s.pending = null;
-  return { ok: true, msg: `desconectando a ${s.cfg.char}` };
+  if (bot.connectTimer) { clearTimeout(bot.connectTimer); bot.connectTimer = null; }
+  if (bot.pid == null) return { ok: true, msg: 'no estaba conectado' };
+  try { process.kill(bot.pid, 'SIGTERM'); } catch (e) { return { ok: false, msg: `no pude cortarlo: ${(e as Error).message}` }; }
+  bot.stoppedAt = Date.now();
+  bot.status = 'stopping';
+  bot.msg = 'desconectando…';
+  return { ok: true, msg: 'desconectando' };
 }
 
-/** "Reintentar ahora": solo para un bot que todavía no entró al juego (espera cupo). Corta el intento y lanza otro sin el backoff. */
-async function retryNow(s: Slot): Promise<{ ok: boolean; msg: string }> {
+/** "Reintentar ahora": corta el intento en curso (el bot espera cupo) y lanza otro sin el backoff. */
+async function retryNow(): Promise<{ ok: boolean; msg: string }> {
   syncRunning();
-  if (s.pid != null && s.state && s.state.mode !== 'connecting') return { ok: false, msg: `${s.cfg.char} ya está en el juego: no hace falta reintentar` };
-  if (s.pid != null) {
-    disconnect(s);
-    for (let i = 0; i < 40 && s.pid != null; i++) await Bun.sleep(250);
-    if (s.pid != null) return { ok: false, msg: `no pude cortar el intento de ${s.cfg.char}` };
+  if (bot.pid != null && bot.state && bot.state.mode !== 'connecting') return { ok: false, msg: 'ya está en el juego: no hace falta reintentar' };
+  if (bot.pid != null) {
+    disconnect();
+    for (let i = 0; i < 40 && bot.pid != null; i++) await Bun.sleep(250);
+    if (bot.pid != null) return { ok: false, msg: 'no pude cortar el intento' };
   }
-  s.stoppedAt = 0; // nunca abrió sesión en el server: no hay sesión vieja que esperar
-  wanted.add(s.cfg.key);
-  saveWanted();
-  retry.delete(s.cfg.key);
-  return connect(s, s.routine ?? { kind: 'farm' });
+  bot.stoppedAt = 0; // nunca abrió sesión en el server: no hay sesión vieja que esperar
+  setWanted(true);
+  retry.n = 0;
+  return connect();
 }
 
-async function routine(s: Slot, r: Routine): Promise<{ ok: boolean; msg: string }> {
-  if (s.pid == null) return { ok: false, msg: `${s.cfg.char} no está conectado` };
-  if (s.status === 'external' || s.wsPort == null) return { ok: false, msg: `${s.cfg.char} corre sin panel: no le puedo mandar órdenes (solo desconectar)` };
-  if (!s.state || s.state.mode === 'connecting') {
-    s.pending = r;
-    return { ok: true, msg: `la aplico cuando ${s.cfg.char} entre al juego` };
+// --- Que siga vivo (de noche, sin nadie mirando) ----------------------------------------------------------------------
+// Si cae, se reconecta con espera creciente (30 s, 1 min, 2 min… hasta 10 min); si lleva 10 min sin sumar exp ni moverse, se reinicia.
+// Cuentas bloqueadas, "abierta en otro lado" y fallos de login no se reintentan.
+const retry = { at: 0, n: 0, okSince: 0 };
+let lastProgress: { sig: string; at: number } | null = null;
+function keepAlive() {
+  const now = Date.now();
+  if (bot.pid != null && bot.status === 'on' && !wanted) setWanted(true);
+  if (!wanted) return;
+  if (bot.pid == null) {
+    lastProgress = null;
+    retry.okSince = 0;
+    if (bot.status === 'in-use' || bot.connectTimer || (NO_RETRY_CODES as readonly number[]).includes(bot.exitCode ?? -1)) return;
+    if (now - retry.at < Math.min(10 * 60_000, 30_000 * 2 ** retry.n)) return;
+    retry.at = now;
+    retry.n++;
+    say(`no está conectado y lo quiero vivo: reconecto (intento ${retry.n})`);
+    connect();
+    return;
   }
-  await applyRoutine(s, r);
-  return { ok: s.routine === r, msg: s.msg };
+  if (bot.status !== 'on' || !bot.state) return;
+  if (!retry.okSince) retry.okSince = now;
+  if (now - retry.okSince > 10 * 60_000) retry.n = 0; // sano 10 min seguidos: se perdona el historial de caídas
+  if (bot.state.mode === 'paused' || bot.state.mode === 'connecting') { lastProgress = null; return; }
+  const sig = `${bot.state.session?.exp ?? 0}|${bot.state.where.map}|${bot.state.where.x}|${bot.state.where.y}`;
+  if (!lastProgress || lastProgress.sig !== sig) { lastProgress = { sig, at: now }; return; }
+  if (now - lastProgress.at > FROZEN_RESTART_MS) {
+    say(`lleva ${FROZEN_RESTART_MS / 60_000} min sin sumar exp ni moverse: lo reinicio`);
+    lastProgress = null;
+    disconnect();
+  }
 }
+setInterval(keepAlive, 10_000);
 
-// --- HTTP -----------------------------------------------------------------------------------
-function view() {
-  return [...slots.values()].map((s) => {
-    const st = s.state;
-    return {
-      key: s.cfg.key, char: s.cfg.char, user: s.cfg.user, account: s.cfg.status, lastRoutine: s.cfg.lastRoutine,
-      shadowOf: orquestadores.de(s.cfg.server).sombraDe(s.cfg.key), shadowOff: orquestadores.de(s.cfg.server).sombraApagada(s.cfg.key),
-      server: chosenServer(s),
-      stuck: alertMem.stuck.has(s.cfg.key), status: s.status, msg: s.msg, pid: s.pid, port: s.wsPort ?? s.port,
-      panel: s.ws?.readyState === WebSocket.OPEN, routine: s.routine, pending: s.pending,
-      game: st && {
-        mode: st.mode, doing: st.doing, level: st.char.level, resets: st.char.resets,
-        map: st.where.mapName, x: st.where.x, y: st.where.y, hp: st.char.hp, mp: st.char.mp, expPerMin: st.exp.perMin5 || st.exp.perMin1,
-        zen: st.char.zen, nearby: st.nearby, power: statPower(st.char.stats),
-        session: st.session ? { since: st.session.since, kills: st.session.kills, deaths: st.session.deaths, exp: st.session.exp } : null,
-      },
-    };
-  });
-}
-
-// Últimas líneas del log sin leerlo entero (los logs crecen sin rotación con bots corriendo días).
+// --- HTTP -------------------------------------------------------------------------------------------------------------
+// Últimas líneas del log sin leerlo entero (los logs crecen con el bot corriendo días).
 function tail(path: string, lines: number, maxBytes = 64 * 1024): string {
   let fd: number | null = null;
   try {
@@ -498,193 +280,27 @@ function tail(path: string, lines: number, maxBytes = 64 * 1024): string {
     const buf = Buffer.alloc(len);
     readSync(fd, buf, 0, len, size - len);
     return buf.toString('utf8').split('\n').slice(-lines - 1).join('\n');
-  } catch {
-    return '';
-  } finally {
-    if (fd != null) closeSync(fd);
-  }
+  } catch { return ''; } finally { if (fd != null) closeSync(fd); }
 }
-
-
-// Canal directo entre bots (bus.ts): cada bot tiene su puerto UDP (el de su panel + 300) y la estación escucha en el suyo para
-// mostrar los avisos de dorados en Mensajes. Los bots se hablan entre sí sin pasar por acá.
-const BUS_STATION_PORT = 9090;
-const busPort = (s: Slot) => s.port + 300;
-const goldShown = new Map<string, number>();
-
-// --- Que sigan vivos (de noche, sin nadie mirando) --------------------------------------------------------------
-// `wanted` = los personajes que el usuario conectó (y los que ya corrían al arrancar la estación). Si uno cae, se reconecta con
-// espera creciente (30 s, 1 min, 2 min... hasta 10 min); si lleva 10 min sin sumar exp ni moverse, se reinicia. Un desconectado a
-// mano deja de ser deseado. Cuentas bloqueadas, "abierta en otro lado" y fallos de login no se reintentan.
-const WANTED_FILE = join(homedir(), '.mubot', 'wanted.json');
-const wanted = new Set<string>((() => { try { return JSON.parse(readFileSync(WANTED_FILE, 'utf8')) as string[]; } catch { return []; } })());
-const saveWanted = () => { try { writeFileSync(WANTED_FILE, JSON.stringify([...wanted])); } catch { /* sin disco: no es grave */ } };
-const retry = new Map<string, { at: number; n: number; okSince: number }>();
-const lastProgress = new Map<string, { sig: string; at: number }>();
-const FROZEN_RESTART_MS = 10 * 60_000;
-function keepAlive() {
-  const now = Date.now();
-  for (const s of slots.values()) {
-    const k = s.cfg.key;
-    if (s.pid != null && s.status === 'on' && !wanted.has(k)) { wanted.add(k); saveWanted(); }
-    // Una cuenta juega con un solo personaje a la vez: el que no está conectado lo dice en su tarjeta y no se reintenta.
-    const sibling = s.pid == null ? [...slots.values()].find((x) => x !== s && x.pid != null && x.cfg.user.toLowerCase() === s.cfg.user.toLowerCase()) : undefined;
-    if (sibling) {
-      if (s.status === 'off') s.msg = `la cuenta la usa ${sibling.cfg.char}`;
-      if (wanted.delete(k)) saveWanted();
-      continue;
-    }
-    if (!wanted.has(k)) continue;
-    const r = retry.get(k) ?? { at: 0, n: 0, okSince: 0 };
-    if (s.pid == null) {
-      lastProgress.delete(k);
-      r.okSince = 0;
-      retry.set(k, r);
-      // No se reintenta lo que no se arregla reintentando: cuenta bloqueada, login rechazado, personaje inexistente, flag mal, sesión abierta afuera.
-      if (s.status === 'in-use' || s.cfg.status === 'blocked' || [2, 4, 5, 6].includes(s.exitCode ?? -1) || s.connectTimer) continue;
-      if (now - r.at < Math.min(10 * 60_000, 30_000 * 2 ** r.n)) continue;
-      r.at = now;
-      r.n++;
-      say(`${s.cfg.char} no está conectado y lo quiero vivo: reconecto (intento ${r.n})`);
-      addAlert({ at: now, kind: 'status', tone: 'warn', char: s.cfg.char, text: `${s.cfg.char} se había caído: lo reconecto (intento ${r.n})` });
-      connect(s, { kind: 'farm' });
-      continue;
-    }
-    if (s.status === 'on') s.proxySwaps = 0;
-    if (s.status !== 'on' || !s.state) continue;
-    // Sano 10 min seguidos: se perdona el historial de caídas.
-    if (!r.okSince) r.okSince = now;
-    if (now - r.okSince > 10 * 60_000) r.n = 0;
-    retry.set(k, r);
-    if (s.state.mode === 'paused' || s.state.mode === 'connecting') { lastProgress.delete(k); continue; }
-    const sig = `${s.state.session?.exp ?? 0}|${s.state.where.map}|${s.state.where.x}|${s.state.where.y}`;
-    const p = lastProgress.get(k);
-    if (!p || p.sig !== sig) { lastProgress.set(k, { sig, at: now }); continue; }
-    if (now - p.at > FROZEN_RESTART_MS) {
-      say(`${s.cfg.char} lleva ${FROZEN_RESTART_MS / 60_000} min sin sumar exp ni moverse: lo reinicio`);
-      addAlert({ at: now, kind: 'stuck', tone: 'bad', char: s.cfg.char, text: `${s.cfg.char} estaba congelado ${FROZEN_RESTART_MS / 60_000} min: lo reinicio` });
-      lastProgress.delete(k);
-      disconnect(s);
-    }
-  }
-}
-setInterval(keepAlive, 10_000);
-
-// Altas que llegan por el worker (workers/edge): MUBOT_ALTA_URL en .env.alta; claves en ~/.mubot/alta/ (scripts/alta-keys.ts).
-let altaUrl = '';
-try {
-  const envAlta = parseEnvFile(readFileSync(join(ROOT, '.env.alta'), 'utf8'));
-  altaUrl = envAlta.MUBOT_ALTA_URL ?? '';
-  proxyBases = altaUrl ? [altaUrl, ...(envAlta.MUBOT_PROXY_URLS ?? '').split(',').map((x) => x.trim()).filter((x) => x && x !== altaUrl)] : [];
-  if (proxyBases.length) { void probeProxies(); setInterval(() => { void probeProxies(); }, 30_000); }
-  if (altaUrl) startAltaSync({
-    url: altaUrl,
-    addChar: (u, p, c, k) => {
-      const why = db.addChar(u, p, c, null, k);
-      addAlert({ at: Date.now(), kind: 'status', tone: why ? 'warn' : 'good', char: c, text: why ? `No se pudo agregar a ${c}: ${why}` : k ? `${c} agregado (cuenta ${u}). Conectalo: el bot crea el personaje al entrar (${CHAR_CLASSES[k].label}).` : `${c} agregado a la estación (cuenta ${u}): ya está en la lista` });
-      return why;
-    },
-    onAdded: refreshSlots,
-    say,
-  });
-} catch { /* sin .env.alta: no hay altas remotas */ }
-
-// Orquestador (orquestador.ts): una instancia por servidor, así un personaje solo se relaciona con los de su servidor. Cada segundo la
-// estación reparte los roles (líder y sombras) y manda la orden por el canal directo; el bot la obedece mientras llegue y, si deja de
-// llegar, vuelve a decidir solo.
-/** MUBOT_SHADOWS=0 apaga las sombras: cada uno farmea lo suyo y se hace party si coinciden. */
-const SHADOWS_ENABLED = process.env.MUBOT_SHADOWS !== '0';
-const orquestadores = new Orquestadores(() => SHADOWS_ENABLED && D.shadows);
-function orchestrate() {
-  const on = [...slots.values()].filter((s) => s.state && s.pid != null && s.status === 'on' && s.state.mode !== 'connecting');
-  const miembros: Miembro[] = on.map((s) => ({ key: s.cfg.key, char: s.cfg.char, server: s.cfg.server, power: statPower(s.state!.char.stats) }));
-  const ordenes = orquestadores.asignar(miembros);
-  for (const s of on) {
-    const o = ordenes.get(s.cfg.key);
-    if (!o) continue;
-    const f = o.humano ? { f: { n: o.humano.name, m: o.humano.map, x: o.humano.x, y: o.humano.y } } : {};
-    busSock?.send(Buffer.from(JSON.stringify({ t: 'o', l: o.lider, s: o.sombras, ...f })), busPort(s), '127.0.0.1');
-  }
-}
-
-const addAlert = (a: Omit<Alert, 'id'>) => pushAlert(alerts, a);
-
-// Oyente del canal de los bots: un dorado avisado sale en Mensajes (una vez por minuto por dorado y personaje).
-let busSock: { send(data: Uint8Array, port: number, address: string): boolean } | null = null;
-void Bun.udpSocket({
-  hostname: '127.0.0.1',
-  port: BUS_STATION_PORT,
-  socket: {
-    data(_s, buf) {
-      try {
-        const m = JSON.parse(Buffer.from(buf).toString('utf8')) as { t?: string; c?: string; n?: string; m?: number };
-        // Un bot lanzado antes de que existiera otro personaje no lo tiene en sus pares (se fijan al lanzar): la estación, que
-        // los oye a todos, reenvía el estado a los demás para que se vean igual (los duplicados no molestan: se pisan por nombre).
-        if (m.t === 's' && typeof m.c === 'string') {
-          const from = [...slots.values()].find((x) => x.cfg.char.toLowerCase() === m.c!.toLowerCase());
-          for (const o of slots.values()) if (o !== from && (!from || o.cfg.server === from.cfg.server)) busSock?.send(buf, busPort(o), '127.0.0.1');
-          return;
-        }
-        if (m.t !== 'g' || typeof m.c !== 'string' || typeof m.n !== 'string') return;
-        const key = `${m.c}:${m.n}`;
-        const now = Date.now();
-        if (now - (goldShown.get(key) ?? 0) < 60_000) return;
-        goldShown.set(key, now);
-        addAlert({ at: now, kind: 'gold', tone: 'good', char: m.c, text: `${m.c} avisa: ${m.n}` });
-      } catch { /* paquete que no es nuestro */ }
-    },
-  },
-}).then((s) => { busSock = s as unknown as typeof busSock; }).catch((err) => say('no pude abrir el canal de los bots:', (err as Error).message));
-
-/** Mira a todos los personajes y anota lo que cambió (muertes, bloqueos, bolsa llena, trabados) y las invasiones. */
-// Hasta qué decisión de cada bot ya pasó a los mensajes.
-const notesSeen = new Map<string, number>();
-const noteTone = (t: string): 'good' | 'bad' | 'warn' | 'info' =>
-  /Me mató|Muerte|Trabado|no pude/i.test(t) ? 'bad' : /Dorado|Cazador|Cacería|Aviso|avisa|voy a ayudarlo|vio /i.test(t) ? 'good' : 'info';
-
-function trackAlerts() {
-  const now = Date.now();
-  // Las decisiones de cada bot (dorado a la vista, cacería, trabas, muertes...) como mensajes.
-  for (const s of slots.values()) {
-    const seen = notesSeen.get(s.cfg.key) ?? 0;
-    for (const n of s.state?.notes ?? []) {
-      if (n.at <= seen) continue;
-      notesSeen.set(s.cfg.key, n.at);
-      if (!seen) continue; // la primera vez que se ve un bot no se vuelca su historial viejo
-      addAlert({ at: n.at, kind: 'status', tone: noteTone(n.text), char: s.cfg.char, text: `${s.cfg.char}: ${n.text}` });
-    }
-  }
-  const snaps = [...slots.values()].map((s) => ({
-    key: s.cfg.key, char: s.cfg.char, status: s.status, account: s.cfg.status,
-    mode: s.state?.mode ?? null, doing: s.state?.doing ?? null, map: s.state?.where.mapName ?? null,
-    x: s.state?.where.x ?? null, y: s.state?.where.y ?? null, level: s.state?.char.level || null,
-    deaths: s.state?.session?.deaths ?? null,
-  }));
-  for (const a of diffAlerts(alertMem, snaps, now)) addAlert(a);
-  const inv = invasion();
-  const active = inv?.status === 'active';
-  if (active && !invasionActive) addAlert({ at: now, kind: 'invasion', tone: 'warn', char: null, text: `Invasión: ${inv.total} monstruos${inv.maps.length ? ` en ${inv.maps.map((m) => m.name).join(', ')}` : ''}` });
-  invasionActive = active;
-}
-
-function invasion() {
-  let best: NonNullable<PanelState['invasion']> | null = null;
-  for (const s of slots.values()) {
-    const i = s.state?.invasion;
-    if (i && (!best || i.at > best.at)) best = i;
-  }
-  return best;
-}
-
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
-refreshSlots();
-syncRunning();
-setInterval(() => { refreshSlots(); syncRunning(); trackAlerts(); }, 2000);
-setInterval(orchestrate, 1000);
+/** Un POST de la propia estación con JSON chico: devuelve el cuerpo o la respuesta de rechazo. */
+async function postBody(req: Request, max = 2048): Promise<{ raw: unknown } | { err: Response }> {
+  // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.
+  const origin = req.headers.get('origin');
+  if (!origin || !originAllowed(origin, PORT)) return { err: json({ ok: false, msg: 'origen no permitido' }, 403) };
+  if (!req.headers.get('content-type')?.startsWith('application/json')) return { err: json({ ok: false, msg: 'solo JSON' }, 415) };
+  const body = await req.text();
+  if (body.length > max) return { err: json({ ok: false, msg: 'pedido demasiado grande' }, 413) };
+  try { return { raw: JSON.parse(body) }; } catch { return { err: json({ ok: false, msg: 'no es JSON' }, 400) }; }
+}
 
-iniciarDirectivas('estacion', (m) => say(m));
+syncRunning();
+setInterval(syncRunning, 2000);
+iniciarDirectivas((m) => say(m));
+if (existsSync(join(DIR, 'personaje.json'))) try { chmodSync(join(DIR, 'personaje.json'), 0o600); } catch { /* otro dueño */ }
+
 Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
@@ -694,150 +310,57 @@ Bun.serve({
       if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/estacion') {
         return new Response(Bun.file(join(ROOT, 'estacion.html')), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
       }
-      if (url.pathname === '/api/directivas') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), estacion: D });
       if (url.pathname === '/api/state') return json({
-        chars: view(), alerts, invasion: invasion(), now: Date.now(), freeAccounts: db.freeAccounts(),
+        char: personaje?.char ?? null, status: bot.status, msg: bot.msg, pid: bot.pid, wanted, panel: bot.ws?.readyState === WebSocket.OPEN,
+        game: bot.state, now: Date.now(),
       });
-      const lm = url.pathname.match(/^\/api\/log\/([a-z0-9_]{1,10})$/);
-      if (lm && slots.has(lm[1])) return new Response(tail(join(LOG_DIR, `${lm[1]}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+      if (url.pathname === '/api/directivas') return json({ ok: true, archivo: ARCHIVO, esquema: ESQUEMA, valores: leerArchivo(), vivos: D });
+      if (url.pathname === '/api/log' && personaje) return new Response(tail(join(LOG_DIR, `${personaje.char.toLowerCase()}.log`), 200), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+      // Terreno del mapa (EncTerrainN.att descifrado, 256×256 bytes de atributos): paredes y zona segura.
+      const tm = url.pathname.match(/^\/terrain\/(\d{1,3})$/);
+      if (tm) {
+        const grid = terrainOf(Number(tm[1]));
+        return grid ? new Response(grid, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'max-age=3600' } }) : new Response('Sin terreno para ese mapa.', { status: 404 });
+      }
       return new Response('No encontrado.', { status: 404 });
     }
-    if (url.pathname === '/api/directivas') {
-      // Perillas que los bots leen en caliente (directivas.ts). Mismas reglas de origen y JSON que /api/do.
-      if (req.method === 'POST') {
-        const origin = req.headers.get('origin');
-        if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
-        if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
-        const body = await req.text();
-        if (body.length > 2048) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-        let raw: any;
-        try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
-        const scope = typeof raw?.scope === 'string' ? raw.scope.toLowerCase() : '';
-        if (!/^(global|[a-z0-9_]{1,10})$/.test(scope)) return json({ ok: false, msg: 'scope: "global" o el nombre de un personaje' }, 400);
-        const set = raw.set && typeof raw.set === 'object' && !Array.isArray(raw.set) ? (raw.set as Record<string, unknown>) : {};
-        const unset = Array.isArray(raw.unset) ? raw.unset.filter((k: unknown): k is string => typeof k === 'string') : [];
-        const archivo = leerArchivo();
-        const mine = (archivo[scope] ??= {});
-        for (const [k, v] of Object.entries(set)) {
-          const r = validar(k, v);
-          if (!r.ok) return json({ ok: false, msg: `${k}: ${r.why}` }, 400);
-          mine[k] = r.v;
-        }
-        for (const k of unset) delete mine[k];
-        if (!Object.keys(mine).length) delete archivo[scope];
-        guardarArchivo(archivo);
-        say(`directivas (${scope}): ${JSON.stringify(set)}${unset.length ? ` sin ${unset.join(', ')}` : ''}`);
-        return json({ ok: true, msg: 'guardado: los bots lo toman en ~2 s', valores: archivo });
+    if (req.method === 'POST' && url.pathname === '/api/directivas') {
+      // Perillas que el bot lee en caliente (directivas.ts). Mismas reglas de origen y JSON que /api/do.
+      const b = await postBody(req);
+      if ('err' in b) return b.err;
+      const raw = b.raw as { set?: unknown; unset?: unknown } | null;
+      const set = raw?.set && typeof raw.set === 'object' && !Array.isArray(raw.set) ? (raw.set as Record<string, unknown>) : {};
+      const unset = Array.isArray(raw?.unset) ? raw.unset.filter((k: unknown): k is string => typeof k === 'string') : [];
+      const archivo = leerArchivo();
+      for (const [k, v] of Object.entries(set)) {
+        const r = validar(k, v);
+        if (!r.ok) return json({ ok: false, msg: `${k}: ${r.why}` }, 400);
+        archivo[k] = r.v;
       }
+      for (const k of unset) delete archivo[k];
+      guardarArchivo(archivo);
+      say(`directivas: ${JSON.stringify(set)}${unset.length ? ` sin ${unset.join(', ')}` : ''}`);
+      return json({ ok: true, msg: 'guardado: el bot lo toma en ~2 s', valores: archivo });
     }
     if (req.method === 'POST' && url.pathname === '/api/do') {
-      // Una página cualquiera abierta en el navegador podría postear acá: solo la propia estación.
-      const origin = req.headers.get('origin');
-      if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
-      if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
-      const body = await req.text();
-      if (body.length > 2048) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: unknown;
-      try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
-      const r = parseStationRequest(raw);
+      const b = await postBody(req);
+      if ('err' in b) return b.err;
+      const r = parseStationRequest(b.raw);
       if (!r) return json({ ok: false, msg: 'pedido inválido' }, 400);
-      refreshSlots();
-      const s = slots.get(r.char);
-      if (!s) return json({ ok: false, msg: `no conozco a ${r.char}` }, 404);
-      if (r.action === 'shadow') {
-        orquestadores.de(s.cfg.server).apagarSombra(s.cfg.key, !r.on);
-        return json({ ok: true, msg: `${s.cfg.char}: ${r.on ? 'sigue al más fuerte' : 'farmea por su cuenta'}` });
-      }
-      if (r.action === 'server') {
-        if (!db.setServer(s.cfg.char, r.server)) return json({ ok: false, msg: 'no encuentro el personaje en la base' }, 409);
-        refreshSlots();
-        return json({ ok: true, msg: `${s.cfg.char}: servidor ${SERVERS[r.server].label} (se aplica al reconectar)` });
-      }
-      if (r.action === 'follow') {
-        if (r.target == null) { orquestadores.de(s.cfg.server).seguirHumano(s.cfg.key, null); return json({ ok: true, msg: `${s.cfg.char} deja de seguir a un humano` }); }
-        orquestadores.de(s.cfg.server).seguirHumano(s.cfg.key, { name: r.target, map: r.map, x: r.x, y: r.y });
-        return json({ ok: true, msg: `${s.cfg.char} va a buscar a ${r.target}, le pide party y lo sigue` });
-      }
-      if (r.action === 'retry') {
-        const res = await retryNow(s);
+      if (r.action === 'disconnect') setWanted(false);
+      if (r.action === 'order') {
+        syncRunning();
+        if (bot.pid == null) return json({ ok: false, msg: 'no está conectado' }, 409);
+        const res = await sendCommand(r.command);
+        say(`orden ${JSON.stringify(r.command)}: ${res.ok ? '' : 'rechazada, '}${res.msg}`);
         return json(res, res.ok ? 200 : 409);
       }
-      if (r.action === 'disconnect') { wanted.delete(s.cfg.key); saveWanted(); }
-      const res = r.action === 'connect' ? connect(s, r.routine) : r.action === 'disconnect' ? disconnect(s) : await routine(s, r.routine);
-      // Solo se lo quiere vivo si el pedido prosperó (si la cuenta la usa otro personaje, no queda anotado para reconectarlo en bucle).
-      if (r.action === 'connect' && res.ok) { wanted.add(s.cfg.key); retry.delete(s.cfg.key); saveWanted(); }
+      const res = r.action === 'connect' ? connect() : r.action === 'disconnect' ? disconnect() : await retryNow();
+      // Solo se lo quiere vivo si el pedido prosperó.
+      if (r.action === 'connect' && res.ok) { setWanted(true); retry.n = 0; }
       return json(res, res.ok ? 200 : 409);
-    }
-    if (req.method === 'POST' && url.pathname === '/api/alta') {
-      // Alta desde el panel: se cifra acá y pasa por el worker (la clave nunca llega al navegador del worker ni se guarda en claro).
-      const origin = req.headers.get('origin');
-      if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
-      if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
-      if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
-      const body = await req.text();
-      if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown };
-      try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
-      if (typeof raw.user !== 'string' || typeof raw.pass !== 'string' || typeof raw.char !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
-      if (raw.cls != null && raw.cls !== '' && !isCharClass(raw.cls)) return json({ ok: false, msg: 'clase inválida' }, 400);
-      const input = { user: raw.user, pass: raw.pass, char: raw.char, cls: isCharClass(raw.cls) ? raw.cls : null };
-      const bad = altaProblem(input);
-      if (bad) return json({ ok: false, msg: bad }, 409);
-      const res = await submitAlta(altaUrl, input);
-      return json(res, res.ok ? 200 : 409);
-    }
-    if (req.method === 'POST' && (url.pathname === '/api/cuenta' || url.pathname === '/api/personaje')) {
-      // Alta en dos pasos. Paso 1 (/api/cuenta): el worker crea la cuenta en el juego y la estación la guarda SIN personaje (no hay tarjeta
-      // todavía). Paso 2 (/api/personaje): se elige una cuenta sin personaje, el nombre y la clase; el bot lo crea al conectarlo.
-      const origin = req.headers.get('origin');
-      if (!origin || !originAllowed(origin, PORT)) return json({ ok: false, msg: 'origen no permitido' }, 403);
-      if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ ok: false, msg: 'solo JSON' }, 415);
-      const body = await req.text();
-      if (body.length > 1024) return json({ ok: false, msg: 'pedido demasiado grande' }, 413);
-      let raw: { user?: unknown; pass?: unknown; char?: unknown; cls?: unknown; replace?: unknown; server?: unknown; existing?: unknown };
-      try { raw = JSON.parse(body); } catch { return json({ ok: false, msg: 'no es JSON' }, 400); }
-      if (typeof raw.user !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
-      if (url.pathname === '/api/cuenta' && raw.existing === true) {
-        // Cuenta que ya existe en el juego (compartida entre servidores): solo se guarda en la estación, sin pasar por el worker.
-        if (typeof raw.pass !== 'string' || !raw.pass || raw.pass.length > 64) return json({ ok: false, msg: 'falta la clave' }, 400);
-        if (!/^[A-Za-z0-9_]{1,10}$/.test(raw.user)) return json({ ok: false, msg: 'usuario inválido' }, 400);
-        const why = db.addAccount(raw.user, raw.pass);
-        if (why) return json({ ok: false, msg: why }, 409);
-        say(`cuenta ${raw.user} agregada (ya existía en el juego)`);
-        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: null, text: `Cuenta ${raw.user} agregada. Ahora creale un personaje en el servidor que quieras.` });
-        return json({ ok: true, msg: `Cuenta ${raw.user} agregada. Creale un personaje en la pestaña del servidor.` });
-      }
-      if (url.pathname === '/api/cuenta') {
-        if (!altaUrl) return json({ ok: false, msg: 'falta MUBOT_ALTA_URL en .env.alta (ver workers/edge/README.md)' }, 409);
-        if (typeof raw.pass !== 'string') return json({ ok: false, msg: 'pedido inválido' }, 400);
-        const bad = accountProblem(raw.user, raw.pass);
-        if (bad) return json({ ok: false, msg: bad }, 409);
-        const made = await registerAccount(altaUrl, { user: raw.user, pass: raw.pass });
-        if (!made.ok) return json(made, 409);
-        const why = db.addAccount(raw.user, raw.pass);
-        if (why) return json({ ok: false, msg: `La cuenta se creó en el juego pero no la pude guardar: ${why}` }, 409);
-        say(`cuenta ${raw.user} creada en el juego (sin personaje todavía)`);
-        addAlert({ at: Date.now(), kind: 'status', tone: 'info', char: null, text: `Cuenta ${raw.user} creada. Falta el paso 2: crear su personaje.` });
-        return json({ ok: true, msg: `Cuenta ${raw.user} creada. Ahora creá su personaje (paso 2).` });
-      }
-      // `existing`: el personaje ya existe en el juego (no hay clase para crearlo); el bot solo lo elige al entrar.
-      const cls = raw.existing === true ? null : isCharClass(raw.cls) ? raw.cls : undefined;
-      if (typeof raw.char !== 'string' || cls === undefined) return json({ ok: false, msg: 'falta el nombre o la clase del personaje' }, 400);
-      const replace = typeof raw.replace === 'string' ? raw.replace : undefined;
-      const why = db.addCharToAccount(raw.user, raw.char, cls, replace, isServerKey(raw.server) ? raw.server : 'fast');
-      if (why) return json({ ok: false, msg: why }, 409);
-      // Renombrado: las preferencias que estaban con el nombre viejo pasan al nuevo.
-      if (replace && replace !== raw.char) {
-        const ok = replace.toLowerCase(), nk = raw.char.toLowerCase();
-        if (wanted.delete(ok)) { wanted.add(nk); saveWanted(); }
-      }
-      refreshSlots();
-      const label = cls ? CHAR_CLASSES[cls].label : 'ya existe en el juego';
-      say(`personaje ${raw.char} (${label}) en la cuenta ${raw.user}`);
-      addAlert({ at: Date.now(), kind: 'status', tone: 'good', char: raw.char, text: cls ? `${raw.char} agregado (${label}). Conectalo: el bot lo crea en el juego al entrar.` : `${raw.char} agregado (ya existe en el juego). Conectalo.` });
-      return json({ ok: true, msg: cls ? `${raw.char} agregado. Conectalo para que el bot lo cree (${label}).` : `${raw.char} agregado. Conectalo.` });
     }
     return new Response('No.', { status: 405 });
   },
 });
-say(`http://127.0.0.1:${PORT}  (personajes: ${[...slots.values()].map((s) => s.cfg.char).join(', ') || 'ninguno: falta un .env con MUBOT_USER/PASS/CHAR'})`);
+say(`http://127.0.0.1:${PORT}  (personaje: ${personaje?.char ?? 'ninguno: falta ~/.mubot/personaje.json'})`);

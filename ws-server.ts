@@ -2,15 +2,11 @@
  * Servidor del bot (headless-bot.ts) para su mapa y para la estación, detrás de `--ws-port`. Solo escucha en 127.0.0.1.
  *
  * Por WebSocket manda el estado del bot (`panel-state`, una vez por segundo) y acepta ÚNICAMENTE las órdenes de lista
- * cerrada de panel-protocol.ts (`isPanelCommand`: pause, resume, farm, hunt). Nada se evalúa: un mensaje que no sea una
+ * cerrada de panel-protocol.ts (`isPanelCommand`: pause, resume, town). Nada se evalúa: un mensaje que no sea una
  * orden válida se contesta con `command-result` ok:false y no llega al bot.
  *
- * Por HTTP (mismo puerto, solo lectura):
- *   GET / y /panel       → panel.html de la raíz del repo (el mapa)
- *   GET /terrain/<mapa>  → terreno del mapa (terrain.ts) para dibujarlo
+ * El panel (HTML) y el terreno los sirve la estación (estacion.ts); acá no hay HTTP más que el upgrade a WebSocket.
  */
-import { terrainOf } from './terrain';
-import { join } from 'node:path';
 import { PANEL_COMMANDS, isPanelCommand, type PanelCommand, type PanelServerMessage, type PanelState } from './panel-protocol';
 
 type WsData = Record<string, never>;
@@ -28,7 +24,6 @@ export type StatusServer = {
 const BOT_VERSION = '0.3.0';
 // Un mensaje del cliente es una orden chiquita: lo que pase de esto se ignora sin parsear.
 const MAX_CLIENT_MESSAGE_BYTES = 4096;
-const PANEL_FILE = join(import.meta.dir, 'panel.html');
 
 /** Valida un mensaje crudo del cliente: la orden, o el rechazo (`reject: null` = ni se contesta, mensaje gigante). */
 function parseClientMessage(raw: string | Buffer | ArrayBuffer | Uint8Array): { id: number; command: PanelCommand } | { reject: { id: number; msg: string } | null } {
@@ -87,25 +82,12 @@ export function startStatusServer(opts: { port: number }): StatusServer {
     hostname: '127.0.0.1',
     port: opts.port,
     async fetch(req, srv) {
-      const url = new URL(req.url);
       if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
         if (!originAllowed(req.headers.get('origin'), opts.port)) return new Response('Origen no permitido.', { status: 403 });
         if (srv.upgrade(req, { data: {} })) return;
         return new Response('No pude abrir el WebSocket.', { status: 400 });
       }
-      if (req.method !== 'GET') return new Response('Solo lectura.', { status: 405 });
-      if (url.pathname === '/' || url.pathname === '/panel' || url.pathname === '/panel.html') {
-        const file = Bun.file(PANEL_FILE);
-        if (await file.exists()) return new Response(file, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
-        return new Response('No hay panel.html en la raíz del repo.', { status: 404 });
-      }
-      // Terreno del mapa (EncTerrainN.att descifrado, 256×256 bytes de atributos): paredes y zona segura.
-      const tm = url.pathname.match(/^\/terrain\/(\d{1,3})$/);
-      if (tm) {
-        const grid = terrainOf(Number(tm[1]));
-        return grid ? new Response(grid, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'max-age=3600' } }) : new Response('Sin terreno para ese mapa.', { status: 404 });
-      }
-      return new Response('No encontrado.', { status: 404 });
+      return new Response('Solo WebSocket (el panel está en la estación).', { status: 404 });
     },
     websocket: {
       maxPayloadLength: 64 * 1024,

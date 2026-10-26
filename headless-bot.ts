@@ -1,67 +1,53 @@
 /**
- * Bot de MU sin navegador: hace progresar a un personaje solo (pelea, sube nivel, reparte puntos,
- * resetea en 400, levanta cajas) hablando el protocolo real del cliente 0.97d, a ritmo humano.
- * Lo normal es lanzarlo desde la estación (`bun run estacion`), que le pasa todo esto.
+ * Bot de MU Online 0.97d para el servidor Slow: hace progresar a un personaje solo (pelea, sube nivel, reparte puntos, levanta botín)
+ * hablando el protocolo real del cliente, a ritmo humano. Lo normal es lanzarlo desde la estación (`bun run estacion`), que le pasa todo esto.
  *
  * Solo contra infraestructura propia o con permiso (--allow-remote para hosts no locales).
  *
- *   bun run headless-bot.ts [opciones]      (credenciales en .env: MUBOT_USER/PASS/CHAR)
- *
  * Conexión:
- *   --proxy ws://127.0.0.1:3000          proxy WebSocket (WS -> TCP)
- *   --cs-host 127.0.0.1 --cs-port 44405  connect server
- *   --user u --pass p --char c           (mejor por .env)
+ *   --proxy wss://worker/p/<token>/ws    proxy WebSocket (WS -> TCP)
+ *   --cs-host clasico --cs-port 44405    connect server del Slow
+ *   --user u --char c                    cuenta y personaje (la clave va por MUBOT_PASS, nunca por argumentos)
  *   --allow-remote                       permite apuntar a hosts no locales
  *   --exit-if-in-use                     si la cuenta ya está conectada al entrar, sale con código 3
- *   (login rechazado: sale con 4 si la cuenta está bloqueada, 5 si la clave/cuenta/versión está mal)
+ *   (login rechazado: sale con 4 si la cuenta está bloqueada, 5 si la clave/cuenta/versión está mal; 6 si el personaje no existe)
  *
  * Farmeo:
- *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea, resetea y reconecta con backoff)
- *   --reset-level 400    nivel del /reset
- *   --build str:50,ene:33,vit:17  reparto fijo de puntos (default: planStats)
- *   --max-stat 300       tope por atributo con --build
- *   --stat-batch 200     puntos mínimos para frenar a repartir
+ *   --auto-seconds 600   cuánto corre (0 = sin límite: farmea y reconecta con backoff)
+ *   --stat-batch 10      puntos mínimos para frenar a repartir
  *   --heal-at 60         usa poción con HP% <= esto
- *   --skills 41,42       skills de ataque, en orden de preferencia
- *   --spots 2,6,24       limita la ruta a esos warps
- *   --explore-dir 1      primera dirección a explorar desde el pueblo en mapas sin salida conocida
- *   --no-auto-hunt       sin el cazador automático de invasiones doradas
- *   --party-mates        acepta party de un compañero (por defecto se rechaza toda party)
  *
- * Panel:
- *   --ws-port 8791       panel en http://127.0.0.1:<puerto>/panel (ws-server.ts)
- *   --decision-log r.jsonl  diario de acciones en JSONL
+ * Estado y órdenes:
+ *   --ws-port 8791       WebSocket local (ws-server.ts): estado cada 1 s y órdenes de lista cerrada; el panel lo sirve la estación
  *
- * Este archivo solo arranca (panel, keepalives, sesiones con reconexión, señales). El resto:
+ * Este archivo solo arranca (WebSocket, keepalives, sesiones con reconexión, señales). El resto:
  *   config.ts       flags, guard de "solo local", ritmos humanos
- *   state.ts        estado compartido: world (packets), bot (decisiones/panel), learned (aprendido)
+ *   state.ts        estado compartido: world (packets) y bot (decisiones/panel)
  *   connection.ts   sockets, cifrado de salida, waitFor, login
  *   world.ts        parsers 0.97d, tracker del mundo, elegir personaje
  *   actions.ts      packets de salida (paso, golpe, skills, warp, chat, keepalives)
  *   combat.ts       elección de skill, alcance, pociones
  *   loot.ts         drops en scope y levantar lo valioso
- *   place.ts        dónde estar (esquina, acompañar, spot por nivel); warps.ts los viajes
- *   progress.ts     reparto de puntos y /reset
- *   events.ts       0x91 (aperturas), 0xFD (invasión), CharacterResets
- *   journal.ts      diario de acciones y log al panel
- *   panel.ts        modo, órdenes y estado del panel, señales de dorados
+ *   spots.ts        dónde estar (spot por nivel), reparto de puntos, valor de cada monstruo, viajes; warps.ts los warps
+ *   learning.ts     lo que aprende de la base (rendimiento por spot) para elegir spot
+ *   progress.ts     reparto de puntos con /add
+ *   journal.ts      decisiones con su motivo (log, panel y base)
+ *   panel.ts        modo, órdenes y estado del panel
  *   farm-loop.ts    el loop autónomo (autonomousLoop)
- *   corner-step.ts  un tick en la esquina de Arena 2 (cornerStep)
  *   loop-ctx.ts     estado de una corrida del loop, caminar y cast en el camino
+ *   telemetry.ts    ticks y eventos a ClickHouse
  *   util.ts         log, sleep, bytes, direcciones
  */
 // Primero la configuración: valida los flags y el guard de "solo local" antes de abrir nada.
-import { startBus } from './bus';
 import { iniciarDirectivas } from './directivas';
-import { iniciarGanchos } from './ganchos';
-import { resetStatTracking } from './progress';
 import { watchChat } from './chat';
-import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, SERVER_KEY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
+import { AUTO_SECONDS, CHAR_NAME, CS_HOST, CS_PORT, EXIT_IF_IN_USE, PROXY, STAT_ORDER, USERNAME, WS_PORT_ARG } from './config';
 import { sendEcho, sendPing } from './actions';
 import { FATAL_LOGIN, LoginError, closeSockets, connectToConnectServer, connectToGameServer, getGameServerAddress } from './connection';
 import { trackPanelPackets } from './events';
-import { autonomousLoop, type LoopResult } from './farm-loop';
-import { drops, lootState } from './loot';
+import { revertBrain, takeBrain, watchBrain } from './hot';
+import type { LoopResult } from './farm-loop';
+import { drops, lootState } from './loot-state';
 import { LoginResponseLoginResultEnum } from './packets';
 import { buildPanelState, handlePanelCommand, noteModeChange, updateTrail } from './panel';
 import { Backoff } from './protocol097';
@@ -75,7 +61,7 @@ import { startStatusServer } from './ws-server';
 // Main: una sesión por conexión. Si se corta (kick, red, timeout), reconecta
 // con backoff y retoma el ciclo desde el estado REAL: login → elegir personaje
 // → leer nivel/mapa/puntos (CharacterInformation) → la ruta fija adopta el
-// mapa si ya está en el del tramo, o warpea; a nivel 400 resetea. Nunca hay
+// el spot que toca. Nunca hay
 // dos sesiones a la vez: se reconecta solo con la anterior ya cerrada.
 // ---------------------------------------------------------------------------
 
@@ -94,6 +80,7 @@ let worldTracked = false;
 
 function clearScope() {
   world.npcs.clear();
+  world.hits.clear();
   world.townNpcs.clear();
   world.players.clear();
   drops.clear();
@@ -102,14 +89,40 @@ function clearScope() {
   bot.inGameAt = 0;
   bot.doing = 'conectando';
   bot.goalPoint = null;
-  // Una cacería vieja no sobrevive a la reconexión (su 'since' y sus reintentos ya no valen).
-  if (bot.hunting && Date.now() - bot.hunting.since > 5 * 60_000) bot.hunting = null; // una cacería vieja ya no vale
+}
+
+const emptyResult = (): LoopResult => ({ kills: 0, totalExpGained: 0, potionsDrunk: 0, statPointsSpent: 0, skillsUsed: 0, deaths: 0 });
+
+/**
+ * Corre el loop del cerebro (hot.ts). Si cambia el cerebro, el loop termina limpio y se arranca el nuevo SIN reconectar; si el nuevo falla
+ * al correr (en los primeros segundos), se vuelve al anterior.
+ */
+async function runBrain(deadline: number): Promise<LoopResult> {
+  const total = emptyResult();
+  let brain = await takeBrain();
+  while (true) {
+    bot.reloadBrain = false;
+    brain.install();
+    const t0 = Date.now();
+    try {
+      const r = await brain.autonomousLoop(deadline);
+      for (const k of Object.keys(total) as Array<keyof LoopResult>) total[k] += r[k];
+    } catch (e) {
+      const back = Date.now() - t0 < 15_000 ? revertBrain() : null;
+      if (!back) throw e;
+      log(`El cerebro nuevo falló al correr (${(e as Error).message}); vuelvo al anterior.`);
+      brain = back;
+      continue;
+    }
+    if (!bot.reloadBrain || bot.kicked) break;
+    brain = await takeBrain();
+  }
+  return total;
 }
 
 async function session(deadline: number): Promise<LoopResult> {
   bot.kicked = false;
   clearScope();
-  resetStatTracking();
   await connectToConnectServer();
   const { ip, port } = await getGameServerAddress();
   await connectToGameServer(ip, port);
@@ -122,9 +135,7 @@ async function session(deadline: number): Promise<LoopResult> {
     trackPanelPackets();
     watchChat();
     watchLiveness();
-    void startBus();
-    iniciarDirectivas(bot.charName, (m) => log(m), 2000, SERVER_KEY);
-    iniciarGanchos((m) => log(m));
+    iniciarDirectivas((m) => log(m), 2000);
     worldTracked = true;
   }
   await loginAndSelectCharacter();
@@ -132,7 +143,7 @@ async function session(deadline: number): Promise<LoopResult> {
   // Damos un par de segundos a que lleguen skill list, inventario y NPCs
   // en scope antes de que el loop empiece a decidir.
   await sleep(2000);
-  return autonomousLoop(deadline);
+  return runBrain(deadline);
 }
 
 async function main() {
@@ -144,7 +155,7 @@ async function main() {
     const wsPort = parseInt(WS_PORT_ARG);
     bot.statusServer = startStatusServer({ port: wsPort });
     bot.statusServer.onCommand(handlePanelCommand);
-    log(`Panel en http://127.0.0.1:${wsPort}/panel (WebSocket ws://127.0.0.1:${wsPort}, solo esta máquina)`);
+    log(`Estado y órdenes por WebSocket ws://127.0.0.1:${wsPort} (solo esta máquina; el panel lo sirve la estación).`);
     setInterval(() => {
       const now = Date.now();
       updateTrail(now);
@@ -153,13 +164,15 @@ async function main() {
     }, 1000);
   }
 
+  watchBrain();
+
   // Keepalives como el cliente web (ver sendPing/sendEcho en actions.ts). sendToGS no
   // manda nada si el socket está cerrado.
   setInterval(() => !bot.kicked && sendPing(), 5000);
   setInterval(() => !bot.kicked && sendEcho(), 2000);
 
   const deadline = AUTO_SECONDS > 0 ? Date.now() + AUTO_SECONDS * 1000 : 0;
-  const total: LoopResult = { kills: 0, totalExpGained: 0, potionsDrunk: 0, statPointsSpent: 0, skillsUsed: 0, resets: 0, deaths: 0 };
+  const total = emptyResult();
   const backoff = new Backoff();
   let first = true;
   let sessions = 0;
@@ -212,7 +225,7 @@ async function main() {
   console.log(`\n=== Resumen ===`);
   console.log(`Duración: ${AUTO_SECONDS}s, ${sessions} sesión(es), sin GUI, ritmo humano.`);
   console.log(`Kills: ${total.kills}  Exp: ${total.totalExpGained}  Pociones: ${total.potionsDrunk}`);
-  console.log(`Puntos repartidos: ${total.statPointsSpent}  Skills usadas: ${total.skillsUsed}  Resets: ${total.resets}  Muertes: ${total.deaths}`);
+  console.log(`Puntos repartidos: ${total.statPointsSpent}  Skills usadas: ${total.skillsUsed}  Muertes: ${total.deaths}`);
   console.log(`Stats finales: ${STAT_ORDER.map((s) => `${s}=${world.stats[s]}`).join(' ')}`);
   console.log(`Skills conocidos: ${[...world.skills.values()].map((s) => `${s.number}(lv${s.level})`).join(', ') || 'ninguno'}`);
   closeSockets();

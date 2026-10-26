@@ -236,27 +236,6 @@ export const Tactical = forwardRef<TacticalApi, Props>(function Tactical(props, 
         for (let y = y0; y <= y1; y += step * 2) if (y >= 0 && y < 256) ctx.fillText(String(y), 4, sy(y) - 3);
       }
       const L = p.layers;
-      // Zonas de dorados y celdas letales.
-      if (L.zones)
-        for (const z of s.zones ?? []) {
-          const r = 6 * c.k, cx = sx(z.x + 0.5), cy = sy(z.y + 0.5);
-          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-          g.addColorStop(0, "rgba(255,211,97,0.28)");
-          g.addColorStop(1, "rgba(255,211,97,0.05)");
-          ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
-          ctx.strokeStyle = "rgba(255,211,97,0.55)"; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
-          if (!p.mini && c.k > 2) { ctx.fillStyle = "#ffd361"; ctx.font = "600 10px Geist, sans-serif"; ctx.fillText(`Dragones ×${z.n}`, cx - 28, cy + 3); }
-        }
-      if (L.hazards)
-        for (const z of s.hazards ?? []) {
-          const r = Math.max(3, (1.5 + Math.min(z.n, 6) * 0.6) * c.k), cx = sx(z.x + 0.5), cy = sy(z.y + 0.5);
-          ctx.fillStyle = "rgba(255,77,77,0.22)";
-          ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
-          ctx.strokeStyle = "rgba(255,77,77,0.8)"; ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.moveTo(cx - 4, cy - 4); ctx.lineTo(cx + 4, cy + 4); ctx.moveTo(cx + 4, cy - 4); ctx.lineTo(cx - 4, cy + 4); ctx.stroke();
-          ctx.lineWidth = 1;
-        }
       // Ruta.
       if (L.route && s.trail && s.trail.length > 1) {
         ctx.strokeStyle = "rgba(228,195,138,0.7)"; ctx.lineWidth = 1.6;
@@ -264,8 +243,16 @@ export const Tactical = forwardRef<TacticalApi, Props>(function Tactical(props, 
         s.trail.forEach(([x, y], i) => (i ? ctx.lineTo(sx(x + 0.5), sy(y + 0.5)) : ctx.moveTo(sx(x + 0.5), sy(y + 0.5))));
         ctx.stroke(); ctx.lineWidth = 1;
       }
+      // Línea al objetivo.
+      if (L.route) {
+        const t = s.entities?.monsters.find((m) => m.target);
+        if (t) {
+          ctx.strokeStyle = "rgba(255,107,125,0.55)"; ctx.lineWidth = 1.2; ctx.setLineDash([4, 4]);
+          ctx.beginPath(); ctx.moveTo(sx(s.where.x + 0.5), sy(s.where.y + 0.5)); ctx.lineTo(sx(t.x + 0.5), sy(t.y + 0.5)); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
+        }
+      }
       // Entidades, de atrás para adelante.
-      const order: Record<string, number> = { dropdim: 0, drop: 1, camp: 1, monster: 2, player: 3, squad: 3, mate: 3, gold: 4, dragon: 5, red: 5, self: 6 };
+      const order: Record<string, number> = { dropdim: 0, drop: 1, camp: 1, monster: 2, player: 3, prize: 4, self: 6 };
       const list = entities(s, L).sort((a, b) => order[a.kind]! - order[b.kind]!);
       drawn.current = [];
       for (const e of list) {
@@ -307,7 +294,7 @@ export const Tactical = forwardRef<TacticalApi, Props>(function Tactical(props, 
   return (
     <canvas
       ref={canvas}
-      className={`hud-tactical${props.mini ? " mini" : ""}`}
+      className={`block h-full w-full touch-none ${props.mini ? "pointer-events-none cursor-pointer" : "cursor-crosshair"}`}
       tabIndex={props.mini ? -1 : 0}
       role="img"
       aria-label="Mapa táctico 2D. Arrastrá para mover, rueda para zoom, clic para ver coordenadas. Flechas mueven, más y menos acercan, Home vuelve al personaje."
@@ -397,19 +384,15 @@ function marker(ctx: CanvasRenderingContext2D, e: Ent, x: number, y: number, k: 
       ctx.fillStyle = col; ctx.globalAlpha = 0.9;
       ctx.beginPath(); ctx.arc(x, y, base * 0.8, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
       break;
-    case "gold": case "dragon": case "red": {
-      const r = (e.kind === "gold" ? 5.5 : 8) * (mini ? 0.7 : 1);
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.6);
-      g.addColorStop(0, col + "88"); g.addColorStop(1, col + "00");
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 2.6, 0, 7); ctx.fill();
-      ctx.fillStyle = col; ctx.strokeStyle = "#0b0f12"; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      for (let i = 0; i < 8; i++) { const a = (i * Math.PI) / 4 - Math.PI / 2, rr = i % 2 ? r * 0.5 : r; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
-      ctx.closePath(); ctx.fill(); ctx.stroke();
-      if (!mini && k > 1.6) { ctx.fillStyle = col; ctx.font = "600 10px Geist, sans-serif"; ctx.textAlign = "center"; ctx.fillText(e.name, x, y - r - 5); ctx.textAlign = "left"; }
+    case "prize": {
+      // Mucha exp por kill (no es un dorado): círculo más grande con aro blanco, sin brillo ni estrella.
+      const r = base * 1.5;
+      ctx.fillStyle = col; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.stroke();
+      if (!mini && k > 1.6) { ctx.fillStyle = "#ffb199"; ctx.font = "600 10px Geist, sans-serif"; ctx.textAlign = "center"; ctx.fillText(e.name, x, y - r - 5); ctx.textAlign = "left"; }
       break;
     }
-    case "player": case "mate": case "squad": {
+    case "player": {
       ctx.fillStyle = col; ctx.strokeStyle = "#0b0f12"; ctx.lineWidth = 1.2;
       const r = base * 1.15;
       ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); ctx.stroke();

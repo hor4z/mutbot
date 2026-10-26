@@ -121,7 +121,7 @@ async function flush() {
     if (!rows.length) continue;
     pending.set(table, []);
     try {
-      const r = await fetch(`${DB_URL}/?database=mubot&query=${encodeURIComponent(`INSERT INTO ${table} FORMAT JSONEachRow`)}`, { method: 'POST', body: rows.map((x) => JSON.stringify(x)).join('\n'), headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD }, signal: AbortSignal.timeout(5000) });
+      const r = await fetch(`${DB_URL}/?database=${process.env.MUBOT_DB_NAME ?? 'mubot_slow'}&query=${encodeURIComponent(`INSERT INTO ${table} FORMAT JSONEachRow`)}`, { method: 'POST', body: rows.map((x) => JSON.stringify(x)).join('\n'), headers: { 'X-ClickHouse-User': DB_USER, 'X-ClickHouse-Key': DB_PASSWORD }, signal: AbortSignal.timeout(5000) });
       if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
       stats.rows += rows.length;
     } catch (e) { pending.set(table, [...rows, ...(pending.get(table) ?? [])]); console.error('no pude guardar:', (e as Error).message); }

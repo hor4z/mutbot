@@ -10,7 +10,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { ALTA_DIR } from '../alta-sync';
+import { homedir } from 'node:os';
+
+const ALTA_DIR = join(homedir(), '.mubot', 'alta');
 
 if (existsSync(join(ALTA_DIR, 'private.jwk'))) {
   console.error(`Ya hay claves en ${ALTA_DIR}. Para rotarlas, borrá esa carpeta y volvé a correr esto (y volvé a cargar los secretos en el worker).`);

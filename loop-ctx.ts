@@ -1,6 +1,5 @@
 /**
- * Estado de UNA corrida del loop autónomo (una por conexión) que comparten farm-loop.ts y
- * corner-step.ts, y las dos acciones que lo usan: caminar rodeando obstáculos y tirar un skill de
+ * Estado de UNA corrida del loop autónomo (una por conexión) que usa farm-loop.ts, y las dos acciones que lo usan: caminar rodeando obstáculos y tirar un skill de
  * área en el camino.
  */
 import { findPath, smoothPath } from './path';
@@ -31,7 +30,7 @@ export type LoopCtx = {
   stuckStrikes: number;
   lastX: number;
   lastY: number;
-  // Exp ganada en esta corrida (para medir los lados de la esquina) y monstruos que me pegaron (id → cuándo).
+  // Exp ganada en esta corrida y monstruos que me pegaron (id → cuándo).
   expTotal: number;
   aggro: Map<number, number>;
 };
@@ -69,9 +68,6 @@ export async function walkTowards(ctx: LoopCtx, x: number, y: number, smooth = f
 export function castOnTheWay(ctx: LoopCtx): boolean {
   const now = Date.now();
   if (now - ctx.lastCastAt < SKILL_PACE_MS) return false;
-  // Cazando no: el skill frena la caminata y lo que importa es llegar al dorado.
-  if (bot.hunting) return false;
-  // Cazando no: el skill frena la caminata y lo que importa es llegar al dorado (2026-10-23).
   const skill = pickAttackSkill();
   if (!skill || !AREA_SKILLS.has(skill.number)) return false;
   if (world.maxMana > 0 && world.mana / world.maxMana < SKILL_MIN_MANA) return false;

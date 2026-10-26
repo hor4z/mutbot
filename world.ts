@@ -18,17 +18,16 @@ import {
   ObjectWalked075Packet,
   SelectCharacterPacket,
 } from './packets';
-import { CHAR_EXPLICIT, CHAR_NAME, CREATE_CLASS, PASSWORD, USERNAME } from './config';
-import { CHAR_CLASSES, isCharClass, type CharClassKey } from './estacion-logic';
-import { journal } from './journal';
+import { CHAR_NAME, PASSWORD, USERNAME } from './config';
+import { decide } from './journal';
 import { LoginError, login, requestCharacterList, sendToGS, waitFor } from './connection';
-import { drops } from './loot';
+import { drops } from './loot-state';
 import { EventBus } from './net/eventBus';
-import { parsePositionFix } from './protocol097';
+import { parseHitDamage, parseHitExtended, parsePositionFix } from './protocol097';
 import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
 import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
-import { MONSTER_TYPE_NUMBERS, bot, world, type SkillInfo, isMate } from './state';
+import { MONSTER_TYPE_NUMBERS, bot, monsterLevel, monsterMaxHp, monsterName, world, type SkillInfo } from './state';
 import { log, toBytes } from './util';
 import { trackEvent } from './telemetry';
 
@@ -306,7 +305,19 @@ export function trackWorld() {
   // posición del bot (si no, cada paso salía de una posición equivocada y el server lo rechazaba);
   // con otro id, la de ese monstruo o jugador.
   let lastFixLog = 0;
+  let hitRawLogged = 0;
   EventBus.on('ObjectHit', (raw: any) => {
+    // ObjectHitExtended (16 bytes): la vida que le queda al blanco, en fracciones de 1/250 (la barra roja del cliente).
+    const h = parseHitExtended(toBytes(raw));
+    if (h) {
+      // Layout sin verificar contra bytes reales: los primeros paquetes quedan en el log para confirmarlo.
+      if (hitRawLogged++ < 6) log(`Hit extendido raw: ${Buffer.from(toBytes(raw)).toString('hex')} → id=${h.id} vida=${h.healthStatus}/250 daño=${h.damage}`);
+      if (world.npcs.has(h.id)) {
+        const prev = world.hits.get(h.id);
+        world.hits.set(h.id, { pct: Math.max(0, Math.min(100, Math.round((h.healthStatus / 250) * 100))), dealt: (prev?.dealt ?? 0) + h.damage, at: Date.now() });
+      }
+      return;
+    }
     const f = parsePositionFix(toBytes(raw));
     if (!f) return;
     if (f.id === (bot.playerId & 0x7fff)) {
@@ -328,7 +339,15 @@ export function trackWorld() {
   });
 
   EventBus.on('ObjectMoved', (raw: any) => {
-    if (!isObjectMovedPacket(toBytes(raw))) return; // 0.97d: con 10 bytes es el daño de un golpe
+    if (!isObjectMovedPacket(toBytes(raw))) {
+      // 0.97d: con 10 bytes es el daño de un golpe; sirve para estimar la vida si el server no manda la barra.
+      const d = parseHitDamage(toBytes(raw));
+      if (d && world.npcs.has(d.id)) {
+        const prev = world.hits.get(d.id);
+        world.hits.set(d.id, { pct: prev?.pct ?? null, dealt: (prev?.dealt ?? 0) + d.damage, at: Date.now() });
+      }
+      return;
+    }
     const p = new ObjectMovedPacket(raw);
     const id = p.ObjectId & 0x7fff;
     if (id === bot.playerId) return;
@@ -378,7 +397,10 @@ export function trackWorld() {
       npcs.set(id, { id, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
       // El tipo de cada id visto: cuando llega ExperienceGained el monstruo ya
       // salió del scope (ver farming.ts, ExpSplitTracker).
-      if (isNew) log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+      if (isNew) {
+        log(`Monstruo en scope: Id=${id} tipo=${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
+        noteMonsterSeen(n.TypeNumber, n.CurrentPositionX, n.CurrentPositionY);
+      }
     }
   };
   const onRemove = (raw: any) => {
@@ -411,6 +433,7 @@ export function trackWorld() {
     // Lo que había en scope era del mapa viejo: si no se limpia, el bot
     // persigue NPCs y drops que ya no existen (el server no manda el remove).
     world.npcs.clear();
+    world.hits.clear();
     world.townNpcs.clear();
     world.players.clear();
     drops.clear();
@@ -433,6 +456,8 @@ export function trackWorld() {
     log(`Reaparezco en map=${map} pos=(${x},${y}).`);
     if (changed) {
       world.npcs.clear();
+      world.hits.clear();
+    world.hits.clear();
       world.townNpcs.clear();
       world.players.clear();
       drops.clear();
@@ -440,22 +465,14 @@ export function trackWorld() {
     onMapArrival();
   });
 
-  // Invitaciones a party: se rechazan (con party la exp se reparte: en el navegador los ciclos de
-  // Horaz pasaron de ~9 a ~13,6 min; con spots complementarios cada uno se queda con lo suyo). Con
-  // --party-mates se acepta solo de un compañero (MUBOT_MATES, por nombre). Con un respiro humano.
+  // Invitaciones a party: se rechazan siempre (con party la exp se reparte). Con un respiro humano.
   EventBus.on('PartyRequest', (raw: any) => {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
-    let from = world.players.get(id)?.name;
-    // Personaje nuevo: acepta la party de cualquiera (más exp con alguien que mata más rápido; pedido del
-    // usuario: "si te dan party, aprovechar"). Los demás, solo de un compañero.
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
-      // El nombre puede llegar después del pedido (el que invita recién apareció en mi lista): se mira recién al responder.
-      from = world.players.get(id)?.name ?? from;
-      const mate = from != null && isMate(from);
-      sendToGS(new DataView((mate ? buildPartyAccept(id) : buildPartyDecline(id)).buffer));
-      log(mate ? `Party de ${from}: acepto (compañero).` : `Party rechazada (de ${from ?? '#' + id}).`);
+      sendToGS(new DataView(buildPartyDecline(id).buffer));
+      log(`Party rechazada (de ${world.players.get(id)?.name ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
   for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, (raw: any) => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
@@ -485,32 +502,22 @@ export async function loginAndSelectCharacter() {
   return selectCharacter(await listWaiter);
 }
 
-/** El personaje pedido no está en la cuenta (o el server no dejó crearlo). No se reintenta. */
-export class CharNotFoundError extends Error {}
-/** El server no dejó crear el personaje (nombre tomado, clase bloqueada, cuenta llena). */
-export class CreateCharacterError extends CharNotFoundError {}
-
+/** El personaje pedido no está en la cuenta. No se reintenta. */
 /**
- * Crea el personaje en la cuenta: `C1 0F F3 01 <nombre 10 bytes> <clase << 2>`, igual que el
- * cliente web (el adaptador del 0.97d no lo reescribe). Contesta F3/01 con el resultado en el
- * byte 4 (1 = creado); éxito y error comparten código, así que llegan los dos como
- * `CharacterCreationSuccessful` (el primero de la tabla). Máximo 5 personajes por cuenta.
+ * Registro de monstruos vistos: una fila `monster_seen` por tipo y mapa cada 10 min (nombre, nivel y vida del cliente, dónde, y si el tipo
+ * está en la tabla del cliente). Alimenta `v_monsters`: qué hay en cada mapa, incluidos los custom del server y los jefes.
  */
-async function createCharacter(name: string, cls: CharClassKey, count: number) {
-  if (count >= 5) throw new CreateCharacterError(`La cuenta ya tiene 5 personajes: no puedo crear a ${name}.`);
-  const p = new Uint8Array(15);
-  p.set([0xc1, 15, 0xf3, 0x01]);
-  for (let i = 0; i < name.length; i++) p[4 + i] = name.charCodeAt(i);
-  p[14] = CHAR_CLASSES[cls].id << 2;
-  log(`${name} no está en la cuenta: lo creo (${CHAR_CLASSES[cls].label}).`);
-  const reply = waitFor(['CharacterCreationSuccessful', 'CharacterCreationFailed']);
-  sendToGS(new DataView(p.buffer));
-  const bytes = toBytes(await reply);
-  if (bytes[4] !== 1) throw new CreateCharacterError(`El server no dejó crear a ${name} (respuesta ${bytes[4]}): nombre tomado o clase bloqueada (el Magic Gladiator pide un personaje de nivel alto en la cuenta).`);
-  log(`Personaje ${name} creado.`);
-  journal('decide', `Personaje nuevo: ${name} (${CHAR_CLASSES[cls].label})`);
-  return { SlotIndex: bytes[15] ?? count, Name: name, Level: 1, ClassId: CHAR_CLASSES[cls].id };
+const MONSTER_SEEN_MS = 10 * 60_000;
+const seenAt = new Map<string, number>();
+function noteMonsterSeen(type: number, x: number, y: number) {
+  const key = `${world.map}:${type}`;
+  const now = Date.now();
+  if (now - (seenAt.get(key) ?? 0) < MONSTER_SEEN_MS) return;
+  seenAt.set(key, now);
+  trackEvent('monster_seen', monsterName(type), type, monsterLevel(type) ?? 0, { x, y, map: world.map, maxHp: monsterMaxHp(type), known: monsterMaxHp(type) != null });
 }
+
+export class CharNotFoundError extends Error {}
 
 export async function selectCharacter(charListBytes: any) {
   const characters = parseCharacterList097(charListBytes);
@@ -518,14 +525,9 @@ export async function selectCharacter(charListBytes: any) {
     `Personajes: ${characters.map((c: any) => `${c.Name}(lv.${c.Level})`).join(', ')}`,
   );
 
-  let target = characters.find((c: any) => c.Name === CHAR_NAME);
-  if (!target && isCharClass(CREATE_CLASS)) target = await createCharacter(CHAR_NAME, CREATE_CLASS, characters.length);
-  if (!target && CHAR_EXPLICIT && characters.length) {
-    throw new CharNotFoundError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ')}).`);
-  }
-  target ??= characters[0];
-  // Lista vacía: no se arregla reintentando (hay que crear el personaje en el cliente del juego, en este mismo servidor).
-  if (!target) throw new CharNotFoundError('La cuenta no tiene personajes en este servidor.');
+  const target = characters.find((c: any) => c.Name === CHAR_NAME);
+  // No se arregla reintentando: el personaje tiene que existir en la cuenta, en el Slow.
+  if (!target) throw new CharNotFoundError(`${CHAR_NAME} no está en la cuenta (hay: ${characters.map((c: any) => c.Name).join(', ') || 'ninguno'}).`);
 
   const selP = SelectCharacterPacket.createPacket();
   selP.setName(target.Name);

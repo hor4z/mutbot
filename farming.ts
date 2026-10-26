@@ -139,7 +139,7 @@ export type DropInfo = { group: number; num: number; isMoney?: boolean; excellen
 // Con lugar en la bolsa (`gear`), los excelentes: el Alquimista los cristaliza en Cristales. Las joyas no
 // valen nada para comerciar (usuario: "las joyas no valen nada"): no se levantan.
 /**
- * `fresh` (personaje nuevo, sin resets): además el zen (en este server llega como ítem 14/15), las
+ * `fresh` (personaje nuevo): además el zen (en este server llega como ítem 14/15), las
  * pociones (manzana y pociones de vida, 14/0-3), las joyas y, si `gear`, el equipo (grupos 0-11: armas,
  * escudos, armaduras) para equiparse o venderlo. Sin zen no paga el warp a Devias (2.500) ni compra
  * nada: Hume llegó a nivel 27 con 0.
@@ -151,8 +151,8 @@ export const JEWELS = new Set([13, 14, 16, 22, 31]);
  * en la bolsa (`gear`). Sin juez (el default) el comportamiento no cambia.
  */
 export type DropJudge = (d: DropInfo & { level?: number }) => boolean | undefined;
-/** Joyas siempre (el Slow las valora; el Fast no, ver arriba): `strategy.ts` lo fija según el servidor. */
-export const lootPolicy = { jewels: false };
+/** Joyas siempre y con prioridad: en el Slow son lo más valioso. */
+export const lootPolicy = { jewels: true };
 /** En el Slow casi todo vale: grupo 12 (alas, orbes, Chaos), 13 (anillos, colgantes, mascotas), 14 (joyas, cajas, pociones) y cualquier excelente. */
 export const isSlowValuable = (d: DropInfo) => d.group === 12 || d.group === 13 || d.group === 14 || !!d.excellent;
 export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS.has(d.num)) || (d.group === 12 && d.num === 15);

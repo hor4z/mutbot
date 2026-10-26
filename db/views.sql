@@ -1,100 +1,66 @@
--- Base de conocimiento: respuestas fijas sobre los datos (scripts/aprender.ts las lee).
--- Todas las vistas son del servidor Fast (`server = 'fast'`): lo del Slow se guarda aparte y no las ensucia.
+-- Conocimiento del Slow: respuestas fijas sobre los datos (learning.ts las lee; también sirven para mirar a mano).
 -- exp/min = promedio de exp_min_1m de los ticks farmeando (5 s cada uno: 12 ticks = 1 min medido).
 
--- Exp/min por personaje, mapa, lado de la esquina, party y hora del día.
-CREATE OR REPLACE VIEW v_exp_spot AS
-SELECT char, map, side, in_party, toHour(ts) AS hour,
-       count() AS ticks, round(avg(exp_min_1m)) AS exp_min
-FROM ticks WHERE server = 'fast' AND mode = 'farm'
-GROUP BY char, map, side, in_party, hour;
+-- Cuánto rinde cada zona (celda de 16×16 tiles, últimos 14 días): exp/min de los ticks farmeando. Es lo que decide dónde farmear.
+CREATE OR REPLACE VIEW v_cell_rate AS
+SELECT map, intDiv(x, 16) AS cx, intDiv(y, 16) AS cy, count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
+       round(quantileExact(0.5)(exp_min_1m)) AS exp_min_p50, uniq(session) AS sessions, max(ts) AS last
+FROM ticks WHERE mode = 'farm' AND phase = 'fight' AND ts > now() - INTERVAL 14 DAY
+GROUP BY map, cx, cy;
 
--- Dúo en la esquina de Arena 2 (map 83) con un compañero cerca: con party contra sin party.
-CREATE OR REPLACE VIEW v_party AS
-SELECT char, in_party, count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
-       round(quantileExact(0.5)(exp_min_1m)) AS exp_min_p50
-FROM ticks WHERE server = 'fast' AND mode = 'farm' AND map = 83 AND side != '' AND mates_near > 0
-GROUP BY char, in_party;
+-- Muertes por zona (últimos 14 días) y quién mata.
+CREATE OR REPLACE VIEW v_deaths AS
+SELECT map, intDiv(x, 16) AS cx, intDiv(y, 16) AS cy, count() AS deaths, groupUniqArray(text) AS killers, max(ts) AS last
+FROM events WHERE kind = 'death' AND ts > now() - INTERVAL 14 DAY
+GROUP BY map, cx, cy;
 
--- Skill confirmado por el server según haya o no rivales cerca (Decay 38 contra Evil Spirit 9).
-CREATE OR REPLACE VIEW v_skill AS
-SELECT char, skill, rivals_near > 0 AS contested, count() AS ticks, round(avg(exp_min_1m)) AS exp_min
-FROM ticks WHERE server = 'fast' AND mode = 'farm' AND skill != 0
-GROUP BY char, skill, contested;
+-- Exp que dio cada tipo de monstruo por kill (evento `kill`: num1 = tipo, num2 = exp).
+CREATE OR REPLACE VIEW v_kill_value AS
+SELECT toUInt32(num1) AS type, any(text) AS name, count() AS n, round(avg(num2)) AS exp
+FROM events WHERE kind = 'kill' AND num2 > 0
+GROUP BY type;
 
--- Quién nos mata.
-CREATE OR REPLACE VIEW v_killers AS
-SELECT text AS killer, num2 = 1 AS player, count() AS deaths, groupUniqArray(char) AS victims,
-       max(ts) AS last
-FROM events WHERE server = 'fast' AND kind = 'death'
-GROUP BY killer, player;
+-- Cuánto tarda cada nivel (minutos entre la primera y la última foto en ese nivel).
+CREATE OR REPLACE VIEW v_level_time AS
+SELECT char, level, min(ts) AS first, max(ts) AS last, dateDiff('minute', min(ts), max(ts)) AS minutes
+FROM ticks WHERE mode = 'farm' GROUP BY char, level;
 
--- Rivales a la vista: dónde y a qué hora aparecen.
-CREATE OR REPLACE VIEW v_rivals AS
-SELECT name, map, toHour(ts) AS hour, count() AS seen, min(ts) AS first, max(ts) AS last
-FROM players_seen WHERE server = 'fast' AND mate = 0 AND name != ''
-GROUP BY name, map, hour;
-
--- Ciclos de reset (minutos) por personaje.
-CREATE OR REPLACE VIEW v_cycles AS
-SELECT char, count() AS cycles, round(avg(num1), 1) AS avg_min, min(num1) AS best_min, max(num1) AS worst_min,
-       round(1440 / avg(num1)) AS resets_day
-FROM events WHERE server = 'fast' AND kind = 'cycle' AND num1 > 0
-GROUP BY char;
-
--- Dorados vistos por mapa y hora.
-CREATE OR REPLACE VIEW v_golden AS
-SELECT map, text AS monster, toHour(ts) AS hour, count() AS seen
-FROM events WHERE server = 'fast' AND kind = 'golden_seen'
-GROUP BY map, monster, hour;
-
--- Resultado de cada decisión: exp/min de los 5 min antes contra los 5 min después (desde el minuto 1,
--- para no contar el viaje). Es lo que dice si una decisión conviene.
+-- Resultado de cada decisión: exp/min de los 5 min antes contra los 5 min después (desde el minuto 1, para no contar el viaje).
+-- Es lo que dice si una decisión (cambio de spot, reparto de puntos…) conviene. `data.kind` dice de qué tipo era.
 CREATE OR REPLACE VIEW v_outcome AS
-SELECT e.char AS char, e.ts AS ts, e.kind AS kind, e.text AS text,
+SELECT e.char AS char, e.ts AS ts, e.kind AS kind, JSONExtractString(e.data, 'kind') AS decision_kind, e.text AS text,
        round(avgIf(t.exp_min_1m, t.ts < e.ts)) AS before,
        round(avgIf(t.exp_min_1m, t.ts > e.ts + INTERVAL 1 MINUTE)) AS after,
        after - before AS delta,
-       -- cruza un reset: cambia el contador, pasa por 'resetting' o el nivel baja (la exp/min de 1 min
-       -- arrastra la de la esquina y compara peras con manzanas)
-       max(t.resets) != min(t.resets) OR countIf(t.mode = 'resetting') > 0 OR
-         maxIf(t.level, t.ts > e.ts) < minIf(t.level, t.ts < e.ts) AS crosses_reset
+       -- cruza una muerte o una pausa: la exp/min de 1 min arrastra lo anterior y compara peras con manzanas
+       countIf(t.mode != 'farm') > 0 AS interrupted
 FROM events AS e
 INNER JOIN ticks AS t ON t.session = e.session
-WHERE e.server = 'fast' AND e.kind IN ('decide', 'travel')
+WHERE e.kind IN ('decide', 'travel')
   AND t.ts >= e.ts - INTERVAL 5 MINUTE AND t.ts <= e.ts + INTERVAL 6 MINUTE
-GROUP BY char, ts, kind, text;
+GROUP BY char, ts, kind, decision_kind, text;
 
 -- Por tipo de decisión (números y coordenadas tapados): cuántas veces, cambio medio y % que mejoró.
 CREATE OR REPLACE VIEW v_outcome_type AS
-SELECT char, replaceRegexpAll(text, '[0-9]+', '#') AS decision, count() AS n,
+SELECT char, decision_kind, replaceRegexpAll(text, '[0-9]+', '#') AS decision, count() AS n,
        round(avg(delta)) AS avg_delta, round(100 * avg(delta > 0)) AS pct_better
--- (sin las que cruzan un reset: el nivel cae y compara la esquina con el arranque)
-FROM v_outcome WHERE (before > 0 OR after > 0) AND NOT crosses_reset
-GROUP BY char, decision;
+FROM v_outcome WHERE (before > 0 OR after > 0) AND NOT interrupted
+GROUP BY char, decision_kind, decision;
 
--- Pelea por el spot: por personaje, mapa, celda de 8x8 y dónde está el compañero (0 no se ve, 1 mismo
--- spot, 2 otro spot): exp/min y qué parte de las kills del sector son nuestras.
-CREATE OR REPLACE VIEW v_spot_fight AS
-SELECT char, map, intDiv(x, 8) * 8 AS cx, intDiv(y, 8) * 8 AS cy, mate_spot,
-       count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
-       sum(kills_me) AS mine, sum(kills_mate) AS mate, sum(kills_rival) AS rivals,
-       round(100 * sum(kills_me + kills_mate) / greatest(1, sum(kills_me + kills_mate + kills_rival))) AS pct_ours,
-       topKIf(3)(top_rival, top_rival != '') AS main_rivals
-FROM ticks WHERE server = 'fast' AND mode = 'farm'
-GROUP BY char, map, cx, cy, mate_spot;
+-- El reparto de puntos: exp/min antes y después de cada /add (los puntos se juntan de a `statBatch`).
+CREATE OR REPLACE VIEW v_stat_curve AS
+SELECT char, ts, text, before, after, delta FROM v_outcome WHERE decision_kind = 'stat' AND NOT interrupted;
 
--- Ritmo de resets de cada jugador del ranking (resets por hora entre la primera y la última foto del día).
-CREATE OR REPLACE VIEW v_rival_pace AS
-SELECT name, toDate(ts) AS day, max(resets) - min(resets) AS resets_gained,
-       round((max(resets) - min(resets)) / greatest(1, dateDiff('minute', min(ts), max(ts)) / 60), 2) AS per_hour,
-       argMax(pos, ts) AS pos
-FROM ranking WHERE server = 'fast' GROUP BY name, day;
+-- Monstruos vistos (registro `monster_seen`): qué hay en cada mapa, con la vida y el nivel de la tabla del cliente. `known = 0`: el tipo no
+-- está en la tabla del cliente (revisar si el server agregó algo). Los jefes y custom (tipos >= 300) se ven acá antes que en cualquier otro lado.
+CREATE OR REPLACE VIEW v_monsters AS
+SELECT toUInt32(num1) AS type, any(text) AS name, toUInt16(num2) AS level, map, JSONExtractUInt(data, 'maxHp') AS max_hp,
+       JSONExtractBool(data, 'known') AS known, count() AS sightings, min(ts) AS first, max(ts) AS last
+FROM events WHERE kind = 'monster_seen'
+GROUP BY type, level, map, max_hp, known;
 
--- Zonas de avistamiento de dragones (Golden Dragon 79, Dragón Rojo 44): celdas de 15 tiles con el
--- centro promedio de donde se vieron. Las usa la cacería (ir primero ahí) y el radar.
-CREATE OR REPLACE VIEW v_dragon_zones AS
-SELECT map, round(avg(JSONExtractInt(data, 'gx'))) AS x, round(avg(JSONExtractInt(data, 'gy'))) AS y,
-       count() AS n, uniq(char, num2) AS dragons, max(ts) AS last
-FROM events WHERE server = 'fast' AND kind = 'golden_seen' AND num1 IN (44, 79) AND JSONExtractInt(data, 'gx') > 0
-GROUP BY map, intDiv(JSONExtractInt(data, 'gx'), 15), intDiv(JSONExtractInt(data, 'gy'), 15);
+-- Cuánto rinde cada skill de ataque (últimos 14 días): exp/min y ticks. Compara, por ejemplo, Cyclone (22) contra Impale (47) o Twisting Slash (41).
+CREATE OR REPLACE VIEW v_skill_rate AS
+SELECT skill, intDiv(level, 10) * 10 AS band, count() AS ticks, round(avg(exp_min_1m)) AS exp_min, round(quantileExact(0.5)(exp_min_1m)) AS exp_min_p50
+FROM ticks WHERE mode = 'farm' AND phase = 'fight' AND ts > now() - INTERVAL 14 DAY
+GROUP BY skill, band;

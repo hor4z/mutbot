@@ -5,15 +5,16 @@ import { cheb } from "./hud-logic";
 import { counts, css, LAYER_META, loadLayers, saveLayers, type Info, type LayerKey, type Layers } from "./radar-model";
 import { Tactical, type TacticalApi } from "./Tactical";
 import { Segments } from "./Segments";
+import { Button, cn } from "./components";
 
 /**
- * El mapa táctico (2D) del bot: terreno, monstruos, dorados, jugadores, compañeros, loot, su rastro y el camino que
- * recorrió (niebla: lo ya visto, para ver si el rastrillaje de los dorados cubre el mapa). Solo ese modo: se quitó el 3D.
+ * El mapa táctico (2D) del bot: terreno, monstruos (los de valor resaltados), jugadores, loot, el spot donde farmea, su rastro,
+ * la línea a su objetivo y el camino que recorrió (niebla: lo ya visto).
  */
 // Alcance en tiles del ancho de la vista para cada preset.
 const RANGE_TILES: Record<string, number> = { cam: 36, "40": 80, "90": 160, "256": 256 };
 // Capas que se ofrecen (las celdas letales ya no las informa nadie).
-const SHOWN_LAYERS: LayerKey[] = ["monsters", "golds", "players", "squad", "loot", "route", "zones", "fog"];
+const SHOWN_LAYERS: LayerKey[] = ["monsters", "players", "loot", "route", "fog"];
 
 const nice = (n: number) => [1, 2, 5, 10, 20, 25, 50, 100].filter((s) => s <= n).pop() ?? 1;
 const bearing = (dx: number, dy: number) => {
@@ -110,33 +111,35 @@ export function Radar({ state }: { state: PanelState | null }) {
     top: Math.max(8, Math.min((stage.current?.clientHeight ?? 400) - h - 8, p.py + 12)),
   });
 
+  const tool = "grid size-8 place-items-center rounded-md border-0 bg-transparent text-ink/80 hover:bg-white/10 hover:text-white aria-pressed:bg-accent/25 aria-pressed:text-accent";
+  const card = "absolute z-[6] grid gap-0.5 rounded-lg border border-strong bg-raised/95 px-3 py-2 text-sm shadow-lg backdrop-blur-sm";
   return (
-    <section className="hud-map" aria-label="Mapa del personaje">
-      <div className="hud-map-head">
-        <div className="hud-map-title">
-          <h2>
-            <MapIcon size={16} aria-hidden /> {state?.char.name ? <strong className="hud-map-who">{state.char.name}</strong> : null}{state?.char.name ? " · " : ""}{state?.where.mapName ?? "Esperando al personaje"}
+    <section className="flex h-full flex-col" aria-label="Mapa del personaje">
+      <div className="flex flex-wrap items-center justify-between gap-2.5 px-3 py-2">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="flex items-center gap-1.5 text-lg font-semibold">
+            <MapIcon size={16} aria-hidden className="text-accent" /> {state?.char.name ? <strong>{state.char.name}</strong> : null}
+            {state?.char.name ? " · " : ""}
+            {state?.where.mapName ?? "Esperando al personaje"}
           </h2>
-          <span className="coordinates" aria-live="off">
+          <span className="font-mono text-sm text-muted" aria-live="off">
             {me ? `${me.x}, ${me.y}` : ""}
           </span>
         </div>
-        <div className="hud-map-controls">
-          <Segments
-            label="Alcance del mapa"
-            value={range}
-            onChange={applyRange}
-            items={[
-              { value: "cam", label: "Cámara" },
-              { value: "40", label: "Cerca" },
-              { value: "90", label: "Zona" },
-              { value: "256", label: "Mapa" },
-            ]}
-          />
-        </div>
+        <Segments
+          label="Alcance del mapa"
+          value={range}
+          onChange={applyRange}
+          items={[
+            { value: "cam", label: "Cámara" },
+            { value: "40", label: "Cerca" },
+            { value: "90", label: "Zona" },
+            { value: "256", label: "Mapa" },
+          ]}
+        />
       </div>
-      <div className={`hud-stage${fs ? " fs" : ""}`} ref={stage} data-view="2d">
-        <div className="hud-pane">
+      <div className="relative isolate min-h-0 flex-1 overflow-hidden bg-[#0c1013]" ref={stage} data-view="2d">
+        <div className="absolute inset-0 z-0 isolate">
           <Tactical
             ref={tac}
             state={state}
@@ -153,40 +156,38 @@ export function Radar({ state }: { state: PanelState | null }) {
         </div>
 
         {!state && (
-          <div className="hud-empty" role="status">
-            <span className="hud-spinner" aria-hidden />
+          <div className="absolute inset-0 z-[5] grid place-content-center justify-items-center gap-2 bg-[#0c1013]/80 text-center text-muted" role="status">
+            <span className="size-5 animate-spin rounded-full border-2 border-strong border-t-accent" aria-hidden />
             Esperando datos del mundo…
           </div>
         )}
 
-        <div className="hud-compass" role="img" aria-label="Escala del mapa">
-          <div className="hud-scale" aria-label={`Escala: ${scaleTiles} tiles`}>
-            <span style={{ width: Math.max(18, scalePx) }} />
-            <small>{scaleTiles} tiles</small>
-          </div>
+        <div className="pointer-events-none absolute top-2.5 left-2.5 z-[3] grid gap-0.5 text-2xs text-white/80 [text-shadow:0_1px_2px_#000]" role="img" aria-label={`Escala: ${scaleTiles} tiles`}>
+          <span className="block h-[5px] border-[1.5px] border-t-0 border-white/90" style={{ width: Math.max(18, scalePx) }} />
+          <small className="text-2xs text-white/80">{scaleTiles} tiles</small>
         </div>
 
-        <div className="hud-toolbar" role="toolbar" aria-label="Controles del mapa">
-          <button className="hud-tool" aria-pressed={follow} onClick={() => setFollow(!follow)} title="Seguir al personaje (F)" aria-label="Seguir al personaje">
+        <div className="absolute top-2.5 right-2.5 z-[4] grid gap-1 rounded-xl border border-strong bg-paper/80 p-1 backdrop-blur-sm" role="toolbar" aria-label="Controles del mapa">
+          <button className={tool} aria-pressed={follow} onClick={() => setFollow(!follow)} title="Seguir al personaje (F)" aria-label="Seguir al personaje">
             <LocateFixed size={15} />
           </button>
-          <button className="hud-tool" onClick={center} title="Centrar en el personaje (C)" aria-label="Centrar">
+          <button className={tool} onClick={center} title="Centrar en el personaje (C)" aria-label="Centrar">
             <Crosshair size={15} />
           </button>
-          <button className="hud-tool" onClick={() => zoom(0.8)} title="Acercar (+)" aria-label="Acercar">
+          <button className={tool} onClick={() => zoom(0.8)} title="Acercar (+)" aria-label="Acercar">
             <Plus size={15} />
           </button>
-          <button className="hud-tool" onClick={() => zoom(1.25)} title="Alejar (-)" aria-label="Alejar">
+          <button className={tool} onClick={() => zoom(1.25)} title="Alejar (-)" aria-label="Alejar">
             <Minus size={15} />
           </button>
-          <button className="hud-tool" onClick={toggleFs} title="Pantalla completa" aria-label={fs ? "Salir de pantalla completa" : "Pantalla completa"}>
+          <button className={tool} onClick={toggleFs} title="Pantalla completa" aria-label={fs ? "Salir de pantalla completa" : "Pantalla completa"}>
             {fs ? <Minimize size={15} /> : <Maximize size={15} />}
           </button>
         </div>
 
         {hover && !pick && (
-          <div className="hud-tip" style={clampPos(hover, 200, 90)} role="tooltip">
-            <strong>{hover.i.title}</strong>
+          <div className={`${card} pointer-events-none max-w-60`} style={clampPos(hover, 200, 90)} role="tooltip">
+            <strong className="pr-4 text-sm">{hover.i.title}</strong>
             {hover.i.lines.map((l, i) => (
               <small key={i}>{l}</small>
             ))}
@@ -194,13 +195,13 @@ export function Radar({ state }: { state: PanelState | null }) {
           </div>
         )}
         {pick && me && (
-          <div className="hud-pick" style={clampPos(pick, 230, 150)} role="dialog" aria-label="Detalle del punto">
-            <button className="hud-x" onClick={() => setPick(null)} aria-label="Cerrar">
+          <div className={`${card} max-w-60 gap-1 p-3`} style={clampPos(pick, 230, 150)} role="dialog" aria-label="Detalle del punto">
+            <button className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-sm border-0 bg-transparent text-muted hover:bg-hover hover:text-ink" onClick={() => setPick(null)} aria-label="Cerrar">
               <X size={13} />
             </button>
-            <strong>{pick.i.title}</strong>
-            <div className="hud-pick-coords">
-              <span className="coordinates">
+            <strong className="pr-4 text-sm">{pick.i.title}</strong>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-xl text-accent">
                 {pick.i.x}, {pick.i.y}
               </span>
               <small>
@@ -210,9 +211,8 @@ export function Radar({ state }: { state: PanelState | null }) {
             {pick.i.lines.map((l, i) => (
               <small key={i}>{l}</small>
             ))}
-            <div className="hud-pick-actions">
-              <button
-                className="hud-btn"
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <Button
                 onClick={() => {
                   try {
                     void navigator.clipboard.writeText(`${pick.i.x}, ${pick.i.y}`);
@@ -224,30 +224,35 @@ export function Radar({ state }: { state: PanelState | null }) {
                 }}
               >
                 <Copy size={12} /> {copied ? "Copiado" : "Copiar"}
-              </button>
-              <button
-                className="hud-btn"
+              </Button>
+              <Button
                 onClick={() => {
                   tac.current?.centerOn(pick.i.x, pick.i.y);
                   setPick(null);
                 }}
               >
                 <Crosshair size={12} /> Centrar acá
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
-        <div className={`hud-legend${legend ? "" : " collapsed"}`} role="group" aria-label="Capas del mapa">
-          <button className="hud-legend-toggle" onClick={() => setLegend(!legend)} aria-expanded={legend} title="Capas (L)">
+        <div className={cn("absolute inset-x-0 bottom-0 z-[3] flex flex-wrap items-center gap-1.5 bg-gradient-to-t from-[#0c1013]/90 to-transparent px-2.5 py-2", !legend && "pointer-events-none")} role="group" aria-label="Capas del mapa">
+          <button className="pointer-events-auto h-7 shrink-0 rounded-full border border-strong bg-paper/85 px-2.5 text-xs text-muted" onClick={() => setLegend(!legend)} aria-expanded={legend} title="Capas (L)">
             Capas
           </button>
           {legend &&
             LAYER_META.filter((l) => SHOWN_LAYERS.includes(l.key)).map((l) => (
-              <button key={l.key} className="hud-chip" aria-pressed={layers[l.key]} onClick={() => toggle(l.key)} title={l.hint}>
-                <i style={{ background: css(l.color) }} />
+              <button
+                key={l.key}
+                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-strong bg-paper/85 px-2.5 text-xs text-muted aria-pressed:text-ink not-aria-pressed:opacity-50"
+                aria-pressed={layers[l.key]}
+                onClick={() => toggle(l.key)}
+                title={l.hint}
+              >
+                <i className="size-2 rounded-full" style={{ background: css(l.color) }} />
                 {l.label}
-                {l.key !== "fog" && <b>{n[l.key]}</b>}
+                {l.key !== "fog" && <b className="font-mono font-medium text-faint">{n[l.key]}</b>}
               </button>
             ))}
         </div>

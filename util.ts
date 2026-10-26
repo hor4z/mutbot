@@ -51,5 +51,5 @@ export const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.y - b.y);
 /** ¿Nombre de personaje que el server acepta? (4-10 letras o números, como el cliente web) */
 export const validCharName = (name: string) => /^[A-Za-z0-9]{4,10}$/.test(name);
 
-/** Fuerza de combate de un personaje: suma de sus stats. El nivel y los resets no la miden (nivel 100 con 200 resets y nivel 100 sin resets son otro personaje). 0 = todavía sin stats. */
+/** Fuerza de combate de un personaje: suma de sus stats. El nivel no la mide. 0 = todavía sin stats. */
 export const statPower = (s: { str: number; agi: number; vit: number; ene: number }) => s.str + s.agi + s.vit + s.ene;
