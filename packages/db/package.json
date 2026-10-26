@@ -1,0 +1,16 @@
+{
+  "name": "@mubot/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "up": "docker compose --env-file ../../.env.db -f docker/docker-compose.yml up -d",
+    "migrate": "bun --env-file=../../.env.db src/cli.ts migrate",
+    "seed": "bun --env-file=../../.env.db src/cli.ts seed",
+    "status": "bun --env-file=../../.env.db src/cli.ts status",
+    "init": "bun --env-file=../../.env.db src/cli.ts init",
+    "tsc": "tsc --noEmit"
+  }
+}
