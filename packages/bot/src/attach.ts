@@ -19,7 +19,7 @@ import { loadGameData } from './core/gamedata';
 import { bot, expLog, world } from './core/state';
 import { onMapArrival, parseCharacterInformation097, parseCharacterList097, trackWorld, watchMoney } from './core/world';
 import { sendHit } from './core/actions';
-import { SKILL_TABLE, castReach, checkSurvival, pickAttackSkill, useSkill } from './brain/combat';
+import { SKILL_TABLE, castReach, checkMana, checkSurvival, pickAttackSkill, useSkill } from './brain/combat';
 import { DIR_DELTA, chebyshev, directionTowards, humanPace, log, sleep } from './core/util';
 import { ExperienceGainedPacket, GameServerEnteredPacket } from './packets';
 import { track } from './core/telemetry';
@@ -101,7 +101,7 @@ async function assistLoop() {
   while (true) {
     await sleep(150);
     if (!enabled || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
-    if (checkSurvival()) { await sleep(300); continue; }
+    if (checkSurvival() || checkMana()) { await sleep(300); continue; }
     const skill = pickAttackSkill();
     const reach = skill ? castReach(skill.number) : 1;
     let best: { id: number; x: number; y: number } | null = null;
