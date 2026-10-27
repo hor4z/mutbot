@@ -1,0 +1,9 @@
+{
+  "name": "@mubot/extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/inject.ts --target=browser --format=iife --outfile=dist/inject.js && cp manifest.json dist/manifest.json",
+    "tsc": "tsc --noEmit"
+  }
+}

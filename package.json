@@ -18,7 +18,8 @@
     "db:init": "bun run --cwd packages/db init",
     "extract": "bun run --cwd packages/bot extract",
     "edge:dev": "bun run --cwd packages/edge dev",
-    "edge:deploy": "bun run --cwd packages/edge deploy"
+    "edge:deploy": "bun run --cwd packages/edge deploy",
+    "asistente": "bun run --cwd packages/bot asistente"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

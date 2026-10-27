@@ -27,6 +27,9 @@
         "wrangler": "^4.0.0",
       },
     },
+    "packages/extension": {
+      "name": "@mubot/extension",
+    },
     "packages/panel": {
       "name": "@mubot/panel",
       "dependencies": {
@@ -211,6 +214,8 @@
     "@mubot/db": ["@mubot/db@workspace:packages/db"],
 
     "@mubot/edge": ["@mubot/edge@workspace:packages/edge"],
+
+    "@mubot/extension": ["@mubot/extension@workspace:packages/extension"],
 
     "@mubot/panel": ["@mubot/panel@workspace:packages/panel"],
 

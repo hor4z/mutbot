@@ -45,7 +45,7 @@ function sendToCS(buffer: DataView) {
 // El perfil de cliente 0.97d (V097D) que usa mu.mormon.garden tiene SU PROPIO
 // xor32 key. Con el default de season6 el server no puede descifrar los packets
 // C2S y descarta el login sin responder.
-const XOR32_KEY_097D = new Uint8Array([
+export const XOR32_KEY_097D = new Uint8Array([
   231, 109, 58, 137, 188, 178, 159, 115, 35, 168, 254, 182, 73, 93, 57, 93,
   138, 203, 99, 141, 234, 125, 43, 95, 195, 177, 233, 131, 41, 81, 232, 86,
 ]);
@@ -74,6 +74,20 @@ EventBus.on('wsClosed', (e: any) => {
     bot.kicked = true;
   }
 });
+
+/**
+ * Modo asistente (attach.ts): el socket del juego es el de la pestaña del navegador del usuario. Lo que se manda con sendToGS sale con el mismo
+ * xor32 y el mismo cifrado que usa el bot y se le entrega a `deliver` (la extensión lo escribe en el socket de la página).
+ */
+export function attachFakeGameSocket(deliver: (bytes: Uint8Array) => void) {
+  gsSocket = { readyState: WebSocket.OPEN, send: (d: Uint8Array) => deliver(d) } as unknown as WebSocket;
+  gsEncryptor = new SimpleModulusEncryptor();
+  gsEncryptor.encryptionKeys = SimpleModulusEncryptor.DefaultClientKey;
+}
+
+export function detachFakeGameSocket() {
+  gsSocket = undefined;
+}
 
 export function closeSockets() {
   try { csSocket?.close(); } catch {}

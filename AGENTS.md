@@ -9,11 +9,12 @@ quién pegarle mientras juega. Monorepo de Bun: todo está en `packages/`, cada 
 | `packages/panel` | panel React + Tailwind | [README](packages/panel/README.md) |
 | `packages/db` | ClickHouse: cliente, migrations y seeds | [README](packages/db/README.md) |
 | `packages/protocol` | tipos y órdenes entre bot y panel | [README](packages/protocol/README.md) |
+| `packages/extension` | extensión de Chrome: auto attack en el juego a mano, alimentado por el bot local | [README](packages/extension/README.md) |
 | `packages/edge` | worker de Cloudflare: proxy WebSocket al juego | [README](packages/edge/README.md) |
 
 ## Comandos (desde la raíz)
 
-`bun install` · `bun run tsc` (los 5 paquetes; tiene que quedar limpio) · `bun run estacion` (`http://127.0.0.1:8787`) · `bun run panel:build` / `panel:dev` ·
+`bun install` · `bun run tsc` (los 6 paquetes; tiene que quedar limpio) · `bun run estacion` (`http://127.0.0.1:8787`) · `bun run asistente` (puerto 8792, para la extensión) · `bun run panel:build` / `panel:dev` ·
 `bun run db:migrate` / `db:seed` / `db:status` · `bun run extract` (regenera `packets/`). La conexión a la base va en `.env.db` (copiar `.env.example`).
 
 ## Reglas

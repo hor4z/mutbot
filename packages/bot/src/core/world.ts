@@ -41,7 +41,7 @@ import { trackEvent } from './telemetry';
 const CHAR_DATA_097_LENGTH = 26;
 const CHAR_LIST_097_HEADER = 5;
 
-function parseCharacterList097(raw: any) {
+export function parseCharacterList097(raw: any) {
   const bytes = toBytes(raw);
   const count = bytes[4];
   const out: Array<{ SlotIndex: number; Name: string; Level: number; ClassId: number | null }> = [];
@@ -66,7 +66,7 @@ function parseCharacterList097(raw: any) {
 
 // CharacterInformation del XML es el layout Extended. El server 0.95/0.97 manda el
 // layout chico (52 bytes, X/Y en 4/5), así que leemos ese a mano.
-function parseCharacterInformation097(raw: any) {
+export function parseCharacterInformation097(raw: any) {
   const bytes = toBytes(raw);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return {
