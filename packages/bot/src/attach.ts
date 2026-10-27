@@ -18,7 +18,11 @@ import { trackPanelPackets } from './core/events';
 import { loadGameData } from './core/gamedata';
 import { bot, expLog, world } from './core/state';
 import { onMapArrival, parseCharacterInformation097, parseCharacterList097, trackWorld, watchMoney } from './core/world';
-import { sendHit } from './core/actions';
+import { sendHit, sendPickup } from './core/actions';
+import { drops } from './core/loot-state';
+import { itemInfo } from './core/panel-logic';
+import { bagRoom, watchDrops } from './brain/loot';
+import { isJewel } from './brain/farming';
 import { SKILL_TABLE, castReach, checkMana, checkSurvival, pickAttackSkill, useSkill } from './brain/combat';
 import { DIR_DELTA, chebyshev, directionTowards, humanPace, log, sleep } from './core/util';
 import { ExperienceGainedPacket, GameServerEnteredPacket } from './packets';
@@ -30,6 +34,8 @@ const ALLOWED_ORIGINS = new Set(['https://mu.mormon.garden']);
 const STATION = 'http://127.0.0.1:8787/api/state';
 
 let enabled = false;
+/** Joyero: levanta solo las joyas y los excelentes que caen al alcance y avisa de los que caen cerca. */
+let sniper = false;
 let target = 0;
 let characters: any[] = [];
 let client: { send(d: string | Uint8Array): void } | null = null;
@@ -151,6 +157,48 @@ function recordManualPlay() {
   }, TICK_MS);
 }
 
+// --- Joyero ---------------------------------------------------------------------------------------------------------------------------------
+/** Hasta dónde se pide el ítem sin caminar (el bot camina hasta 1; acá no se camina, así que se prueba un poco más lejos) y hasta dónde se avisa. */
+const SNIPE_REACH = 2;
+const ALERT_TILES = 20;
+const SNIPE_RETRY_MS = 600;
+/** Joyas y excelentes (el Broken Sword de la quest ya no: se consiguió). */
+const wantedDrop = (d: { group: number; num: number; isMoney?: boolean; excellent?: boolean }) =>
+  !d.isMoney && !(d.group === 14 && d.num === 24) && (isJewel(d) || !!d.excellent);
+const askedAt = new Map<number, number>();
+
+function nearestWanted() {
+  let best: { id: number; x: number; y: number; group: number; num: number; d: number } | null = null;
+  for (const dr of drops.values()) {
+    if (!wantedDrop(dr)) continue;
+    const d = chebyshev(world.x, world.y, dr.x, dr.y);
+    if (!best || d < best.d) best = { id: dr.id, x: dr.x, y: dr.y, group: dr.group, num: dr.num, d };
+  }
+  return best;
+}
+
+async function sniperLoop() {
+  while (true) {
+    await sleep(100);
+    if (!sniper || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
+    const t = nearestWanted();
+    if (!t || t.d > SNIPE_REACH || bagRoom() <= 0) continue;
+    const now = Date.now();
+    if (now - (askedAt.get(t.id) ?? 0) < SNIPE_RETRY_MS) continue;
+    askedAt.set(t.id, now);
+    log(`Joyero: pido ${itemInfo(t.group, t.num).name} (a ${t.d} casillas).`);
+    sendPickup(t.id);
+  }
+}
+
+function lootHint() {
+  const t = nearestWanted();
+  if (!t || t.d > ALERT_TILES) return null;
+  const dx = t.x - world.x, dy = t.y - world.y;
+  const dir = (dy < 0 ? 'N' : dy > 0 ? 'S' : '') + (dx > 0 ? 'E' : dx < 0 ? 'O' : '');
+  return { id: t.id, name: itemInfo(t.group, t.num).name, dist: t.d, dir };
+}
+
 function skillName(): string {
   const s = pickAttackSkill();
   return s ? SKILL_TABLE.get(s.number)?.name ?? `skill ${s.number}` : 'golpe';
@@ -159,7 +207,7 @@ function skillName(): string {
 function status(extra: Record<string, unknown> = {}) {
   return JSON.stringify({
     type: 'status', enabled, inGame: !!bot.inGameAt, name: bot.charName, hp: world.hp, maxHp: world.maxHp, mana: world.mana,
-    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target, skill: skillName(), ...extra,
+    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target, skill: skillName(), sniper, loot: lootHint(), ...extra,
   });
 }
 
@@ -171,7 +219,9 @@ async function main() {
   EventBus.on('CharacterList', (raw: any) => { characters = parseCharacterList097(raw); });
   EventBus.on('CharacterInformation', applyCharacterInfo);
   EventBus.on('GameServerEntered', (raw: any) => { bot.playerId = new GameServerEnteredPacket(raw).PlayerId & 0x7fff; });
+  watchDrops();
   void assistLoop();
+  void sniperLoop();
   recordManualPlay();
 
   Bun.serve<Record<string, never>>({
@@ -189,6 +239,7 @@ async function main() {
         client = ws;
         // Mundo nuevo: se empieza de cero (la página se recargó) y lo que se mande sale por esta conexión.
         enabled = false;
+        sniper = false;
         pageDecryptor = newPageDecryptor();
         reader = createPacketReader('[asistente]'); // contador de descifrado nuevo: cada carga de la página empieza el suyo desde cero
         bot.inGameAt = 0;
@@ -198,13 +249,13 @@ async function main() {
       },
       async message(ws, raw) {
         if (typeof raw === 'string') {
-          let m: { type?: string; on?: boolean } = {};
+          let m: { type?: string; on?: boolean; sniper?: boolean } = {};
           try { m = JSON.parse(raw); } catch { return; }
           if (m.type !== 'set') return;
-          if (m.on && (await capitanOnline())) { ws.send(status({ error: 'Capitan está conectado desde la estación: desconectalo antes (son dos sesiones de la misma cuenta).' })); return; }
-          if (m.on && !bot.inGameAt) { ws.send(status({ error: 'Todavía no vi la entrada al mundo: recargá la página del juego con el asistente andando.' })); return; }
-          enabled = !!m.on;
-          log(`Asistente ${enabled ? 'prendido' : 'apagado'}.`);
+          if ((m.on || m.sniper) && (await capitanOnline())) { ws.send(status({ error: 'Capitan está conectado desde la estación: desconectalo antes (son dos sesiones de la misma cuenta).' })); return; }
+          if ((m.on || m.sniper) && !bot.inGameAt) { ws.send(status({ error: 'Todavía no vi la entrada al mundo: recargá la página del juego con el asistente andando.' })); return; }
+          if (m.on !== undefined) { enabled = !!m.on; log(`Asistente ${enabled ? 'prendido' : 'apagado'}.`); }
+          if (m.sniper !== undefined) { sniper = !!m.sniper; log(`Joyero ${sniper ? 'prendido' : 'apagado'}.`); }
           ws.send(status());
           return;
         }
@@ -215,6 +266,7 @@ async function main() {
       close(ws) {
         if (client === ws) client = null;
         enabled = false;
+        sniper = false;
         bot.inGameAt = 0;
         detachFakeGameSocket();
         log('Asistente: la extensión se desconectó.');

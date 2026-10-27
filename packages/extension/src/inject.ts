@@ -87,10 +87,12 @@ NativeWS.prototype.send = function (this: WebSocket, data: Parameters<WebSocket[
 window.WebSocket = HookedWebSocket as unknown as typeof WebSocket;
 
 // --- Botón y estado ----------------------------------------------------------------------------------------------------------------------------
-type Status = { link?: boolean; enabled?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; target?: number; error?: string };
+type Status = { link?: boolean; enabled?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; target?: number; error?: string; sniper?: boolean; loot?: { id: number; name: string; dist: number; dir: string } | null };
 let last: Status = { link: false };
 let box: HTMLDivElement | null = null;
 let btn: HTMLButtonElement | null = null;
+let btn2: HTMLButtonElement | null = null;
+let lastLoot = 0;
 let line: HTMLDivElement | null = null;
 
 // Se mueve arrastrando el título (la esquina que tapa depende del cliente) y la posición se recuerda; doble clic lo achica.
@@ -116,7 +118,7 @@ function dragBox(b: HTMLDivElement, handle: HTMLElement) {
   });
   handle.addEventListener('dblclick', () => {
     const hide = btn?.style.display !== 'none';
-    for (const el of [btn, line]) if (el) el.style.display = hide ? 'none' : '';
+    for (const el of [btn, btn2, line]) if (el) el.style.display = hide ? 'none' : '';
     b.style.width = hide ? 'auto' : '210px';
   });
 }
@@ -141,11 +143,31 @@ function build() {
       bridge.send(JSON.stringify({ type: 'set', on: !last.enabled }));
     }
   };
+  btn2 = document.createElement('button');
+  btn2.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
+  btn2.onclick = () => {
+    if (bridge && bridge.readyState === NativeWS.OPEN) {
+      if (!last.sniper) takeover = true;
+      bridge.send(JSON.stringify({ type: 'set', sniper: !last.sniper }));
+    }
+  };
   line = document.createElement('div');
   line.style.cssText = 'margin-top:6px;color:#aaa;min-height:34px';
-  box.append(title, btn, line);
+  box.append(title, btn, btn2, line);
   document.documentElement.appendChild(box);
   paint({});
+}
+
+// Un pitido corto cuando cae una joya cerca: se avisa de lo que hay que correr a buscar.
+function beep() {
+  try {
+    const ctx = new AudioContext();
+    const o = ctx.createOscillator();
+    o.frequency.value = 880;
+    o.connect(ctx.destination);
+    o.start();
+    o.stop(ctx.currentTime + 0.15);
+  } catch { /* sin audio */ }
 }
 
 function paint(s: Status) {
@@ -154,7 +176,15 @@ function paint(s: Status) {
     if (document.documentElement) build();
     else return;
   }
-  if (!btn || !line) return;
+  if (!btn || !btn2 || !line) return;
+  btn2.textContent = last.sniper ? 'Joyero: ENCENDIDO' : 'Joyero: apagado';
+  btn2.style.background = last.sniper ? '#2e9e5b' : '#555';
+  btn2.style.color = '#fff';
+  btn2.disabled = !last.link;
+  if (last.sniper && last.loot && last.loot.id !== lastLoot) {
+    lastLoot = last.loot.id;
+    beep();
+  }
   btn.textContent = last.enabled ? 'Auto attack: ENCENDIDO' : 'Auto attack: apagado';
   btn.style.background = last.enabled ? '#2e9e5b' : '#555';
   btn.style.color = '#fff';
@@ -162,6 +192,7 @@ function paint(s: Status) {
   if (!last.link) line.textContent = 'Sin conexión con el bot (bun run asistente).';
   else if (last.error) line.textContent = last.error;
   else if (!last.inGame) line.textContent = 'Esperando que entres al mundo (cargá la página con el asistente andando).';
+  else if (last.sniper && last.loot) line.textContent = `${last.loot.name} a ${last.loot.dist} casillas al ${last.loot.dir}`;
   else line.textContent = `${last.name ?? ''} · vida ${last.hp}/${last.maxHp} · ${last.monsters} monstruos · ${last.skill}`;
 }
 
