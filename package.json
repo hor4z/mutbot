@@ -2,43 +2,26 @@
   "name": "mubot",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "bot": "bun --env-file=.env.db run headless-bot.ts",
-    "proxy": "bun run proxy.ts",
-    "db:up": "docker compose --env-file .env.db -f db/docker-compose.yml up -d",
-    "tsc": "tsc --noEmit && bun run --cwd workers/edge tsc",
-    "extract": "bun run extract-packets.ts",
-    "estacion": "bun --env-file=.env.db run estacion.ts",
-    "ui:build": "vite build --config ui/vite.config.ts",
-    "ui:dev": "vite --config ui/vite.config.ts",
-    "alta:keys": "bun run scripts/alta-keys.ts",
-    "edge:dev": "bun run --cwd workers/edge dev",
-    "edge:deploy": "bun run --cwd workers/edge deploy",
-    "db:migrate": "bun --env-file=.env.db scripts/db.ts migrate",
-    "db:seed": "bun --env-file=.env.db scripts/db.ts seed",
-    "db:status": "bun --env-file=.env.db scripts/db.ts status",
-    "db:init": "bun --env-file=.env.db scripts/db.ts init",
-    "db:importar": "bun --env-file=.env.db scripts/importar-local.ts"
+    "tsc": "bun run --filter '*' tsc",
+    "estacion": "bun run --cwd packages/bot estacion",
+    "bot": "bun run --cwd packages/bot bot",
+    "panel:dev": "bun run --cwd packages/panel dev",
+    "panel:build": "bun run --cwd packages/panel build",
+    "db:up": "bun run --cwd packages/db up",
+    "db:migrate": "bun run --cwd packages/db migrate",
+    "db:seed": "bun run --cwd packages/db seed",
+    "db:status": "bun run --cwd packages/db status",
+    "db:init": "bun run --cwd packages/db init",
+    "extract": "bun run --cwd packages/bot extract",
+    "edge:dev": "bun run --cwd packages/edge dev",
+    "edge:deploy": "bun run --cwd packages/edge deploy"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4",
     "@types/bun": "1.3.14",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "tailwindcss": "^4",
-    "typescript": "5.8.3",
-    "vite": "^8.3.4"
-  },
-  "dependencies": {
-    "@base-ui/react": "^1.9.0",
-    "@fontsource/geist": "^5.3.0",
-    "@fontsource/geist-mono": "^5.3.0",
-    "lucide-react": "^1.55.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
-  },
-  "workspaces": [
-    "workers/*"
-  ]
+    "typescript": "5.8.3"
+  }
 }

@@ -1,5 +1,0 @@
-Generated with the built-in image_gen tool; transparent_background=true.
-Prompt:
-Use case: stylized-concept. Asset: transparent decorative character cutout for a sophisticated MU Online companion dashboard. Full-body dark fantasy knight, ornate blackened steel and restrained antique gold armor, elegant small cyan crystal wings close to body, holding a sword pointed down. Three-quarter standing pose, entire silhouette including head, feet, sword and wings completely within frame with ample transparent padding on all sides. Premium detailed 3D fantasy game render, crisp readable silhouette, cool rim lighting, realistic polished materials, no environment, no pedestal, no ground, no rectangular background, no fog outside the silhouette, no text or logo. Portrait composition. Actual transparent alpha background. Intended display at 180px tall in a sidebar decoration, so strong silhouette and no tiny particles.
-
-Saved as WebP retaining alpha; embedded by Vite in the standalone panels.

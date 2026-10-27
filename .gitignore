@@ -6,12 +6,8 @@ node_modules/
 .env.*
 !.env.example
 
-ui/dist/
+panel/dist/
 
-# Archivos del cliente del juego para el radar (91 MB): se generan con `bun run ui:maps`, no van al repo (público).
-assets/radar
 node_modules
-# Íconos de ítems del cliente (62 MB) para el equipo/inventario del panel: no van al repo (público).
-assets/items
 .dev.vars
 .wrangler/
