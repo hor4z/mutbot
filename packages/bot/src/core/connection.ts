@@ -85,6 +85,16 @@ export function attachFakeGameSocket(deliver: (bytes: Uint8Array) => void) {
   gsEncryptor.encryptionKeys = SimpleModulusEncryptor.DefaultClientKey;
 }
 
+/** El contador de cifrado (SimpleModulus) sigue al de la página: lo que ella mande a mano ya consumió estos números. */
+export function syncGameCounter(next: number) {
+  if (gsEncryptor) gsEncryptor.Counter.Count = next & 0xff;
+}
+
+/** Un C3 de la página (ya con xor32, descifrado) vuelve a salir con el contador compartido, así lo suyo y lo nuestro hacen una sola secuencia. */
+export function resendPageFrame(plain: Uint8Array) {
+  if (gsEncryptor) gsSocket?.send(gsEncryptor.Encrypt(plain));
+}
+
 export function detachFakeGameSocket() {
   gsSocket = undefined;
 }

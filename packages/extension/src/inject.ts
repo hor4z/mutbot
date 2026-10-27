@@ -13,6 +13,8 @@ const CONNECT_SERVER_PORT = '44405';
 let gameSock: WebSocket | null = null;
 let bridge: WebSocket | null = null;
 let created = 0;
+/** Desde que se prende el auto attack, los C3 de la página pasan por el bot (ver el envío más abajo) hasta recargar la página. */
+let takeover = false;
 const queue: Uint8Array[] = [];
 let chain: Promise<void> = Promise.resolve();
 
@@ -39,7 +41,7 @@ function openBridge() {
   };
 }
 
-function forward(dir: 0 | 1, data: ArrayBuffer | ArrayBufferView) {
+function forward(dir: 0 | 1 | 2, data: ArrayBuffer | ArrayBufferView) {
   const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   const frame = new Uint8Array(bytes.length + 1);
   frame[0] = dir;
@@ -71,7 +73,15 @@ class HookedWebSocket extends NativeWS {
   }
 }
 NativeWS.prototype.send = function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
-  if (this === gameSock && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) forward(1, data as ArrayBuffer | ArrayBufferView);
+  if (this === gameSock && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
+    const first = data instanceof ArrayBuffer ? new Uint8Array(data)[0] : new Uint8Array(data.buffer, data.byteOffset, 1)[0];
+    // Con el asistente en marcha los C3 de la página (contador de cifrado) los reenvía el bot junto con los suyos: dirección 2, no salen de acá.
+    if (takeover && (first === 0xc3 || first === 0xc4)) {
+      forward(2, data as ArrayBuffer | ArrayBufferView);
+      return;
+    }
+    forward(1, data as ArrayBuffer | ArrayBufferView);
+  }
   return nativeSend.call(this, data);
 };
 window.WebSocket = HookedWebSocket as unknown as typeof WebSocket;
@@ -126,7 +136,10 @@ function build() {
   btn = document.createElement('button');
   btn.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
   btn.onclick = () => {
-    if (bridge && bridge.readyState === NativeWS.OPEN) bridge.send(JSON.stringify({ type: 'set', on: !last.enabled }));
+    if (bridge && bridge.readyState === NativeWS.OPEN) {
+      if (!last.enabled) takeover = true;
+      bridge.send(JSON.stringify({ type: 'set', on: !last.enabled }));
+    }
   };
   line = document.createElement('div');
   line.style.cssText = 'margin-top:6px;color:#aaa;min-height:34px';

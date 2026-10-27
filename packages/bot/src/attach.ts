@@ -9,11 +9,11 @@
  * Mensajes: binario cliente→acá = <0 | 1> + frame (0: del server, 1: lo que mandó la página); acá→cliente binario = bytes a escribir en el socket
  * de la página. JSON cliente→acá: { type: 'set', on: boolean }; acá→cliente: { type: 'status', ... } cada 1 s.
  */
-import { Xor32Decryptor } from './net/encryption';
+import { SimpleModulusDecryptor, Xor32Decryptor } from './net/encryption';
 import { EventBus } from './net/eventBus';
 import { createPacketReader } from './net/socket';
 import { ATTACK_PACE_MS, SKILL_PACE_MS } from './core/config';
-import { XOR32_KEY_097D, attachFakeGameSocket, detachFakeGameSocket } from './core/connection';
+import { XOR32_KEY_097D, attachFakeGameSocket, detachFakeGameSocket, resendPageFrame, syncGameCounter } from './core/connection';
 import { trackPanelPackets } from './core/events';
 import { loadGameData } from './core/gamedata';
 import { bot, expLog, world } from './core/state';
@@ -37,8 +37,29 @@ const reader = createPacketReader('[asistente]');
 const xor = new Xor32Decryptor();
 xor.xor32Key = XOR32_KEY_097D;
 
+/**
+ * Los C3 (skills, recoger ítems) llevan un contador que el server exige en orden. Mientras el asistente está apagado la página manda sus
+ * C3 sola y acá solo se lee el contador. Una vez prendido, la extensión retiene los C3 de la página (dirección 2) y salen de acá, con el mismo
+ * contador que los nuestros: una sola secuencia, sin repetidos ni saltos.
+ */
+let pageDecryptor = newPageDecryptor();
+function newPageDecryptor() {
+  const d = new SimpleModulusDecryptor();
+  d.decryptionKeys = SimpleModulusDecryptor.DefaultServerKey;
+  return d;
+}
+function onPageC3(frame: Uint8Array, held: boolean) {
+  const plain = pageDecryptor.Decrypt(Uint8Array.from(frame))[1];
+  if (held) resendPageFrame(plain);
+  else syncGameCounter(pageDecryptor.Counter.Count);
+}
+
 /** Lo que mandó la página (C1 con xor32): se lee el paso y el personaje elegido para saber dónde está y quién es. */
-function onClientFrame(frame: Uint8Array) {
+function onClientFrame(frame: Uint8Array, held = false) {
+  if (frame[0] === 0xc3 || frame[0] === 0xc4) {
+    try { onPageC3(frame, held); } catch { log('Asistente: no pude leer un C3 de la página.'); }
+    return;
+  }
   if (frame[0] !== 0xc1 || frame.length < 4) return;
   const p = xor.Decrypt(Uint8Array.from(frame))[1];
   if (p[2] === 0x10 && p.length >= 6) {
@@ -167,6 +188,7 @@ async function main() {
         client = ws;
         // Mundo nuevo: se empieza de cero (la página se recargó) y lo que se mande sale por esta conexión.
         enabled = false;
+        pageDecryptor = newPageDecryptor();
         bot.inGameAt = 0;
         world.npcs.clear();
         attachFakeGameSocket((b) => { try { ws.send(b); } catch { /* cliente caído */ } });
@@ -186,7 +208,7 @@ async function main() {
         }
         const b = new Uint8Array(raw as Buffer);
         if (b[0] === 0) reader.push(b.subarray(1));
-        else if (b[0] === 1) onClientFrame(b.subarray(1));
+        else if (b[0] === 1 || b[0] === 2) onClientFrame(b.subarray(1), b[0] === 2);
       },
       close(ws) {
         if (client === ws) client = null;
