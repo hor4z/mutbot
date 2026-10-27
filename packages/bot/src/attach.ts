@@ -12,19 +12,14 @@
 import { SimpleModulusDecryptor, Xor32Decryptor } from './net/encryption';
 import { EventBus } from './net/eventBus';
 import { createPacketReader } from './net/socket';
-import { ATTACK_PACE_MS, SKILL_PACE_MS } from './core/config';
 import { XOR32_KEY_097D, attachFakeGameSocket, detachFakeGameSocket, resendPageFrame, syncGameCounter } from './core/connection';
 import { trackPanelPackets } from './core/events';
 import { loadGameData } from './core/gamedata';
-import { bot, expLog, world } from './core/state';
+import { assist, bot, expLog, world } from './core/state';
+import { hotEntry } from './core/hot';
 import { onMapArrival, parseCharacterInformation097, parseCharacterList097, trackWorld, watchMoney } from './core/world';
-import { sendHit, sendPickup } from './core/actions';
-import { drops } from './core/loot-state';
-import { itemInfo } from './core/panel-logic';
-import { bagRoom, watchDrops } from './brain/loot';
-import { isJewel } from './brain/farming';
-import { SKILL_TABLE, castReach, checkMana, checkSurvival, pickAttackSkill, useSkill } from './brain/combat';
-import { DIR_DELTA, chebyshev, directionTowards, humanPace, log, sleep } from './core/util';
+import { watchChat } from './core/chat';
+import { DIR_DELTA, chebyshev, log, sleep } from './core/util';
 import { ExperienceGainedPacket, GameServerEnteredPacket } from './packets';
 import { track } from './core/telemetry';
 
@@ -33,10 +28,13 @@ const PORT = 8792;
 const ALLOWED_ORIGINS = new Set(['https://mu.mormon.garden']);
 const STATION = 'http://127.0.0.1:8787/api/state';
 
-let enabled = false;
-/** Joyero: levanta solo las joyas y los excelentes que caen al alcance y avisa de los que caen cerca. */
-let sniper = false;
-let target = 0;
+/**
+ * El auto attack, las pociones y el Joyero viven en `brain/assist.ts`, que se recarga en caliente (hot.ts) cada vez que cambia un archivo de
+ * `src/brain/`. Acá queda lo que no se recarga: el socket con la extensión, los paquetes de la página y el estado (`assist`, en core/state.ts).
+ */
+type AssistBrain = typeof import('./brain/assist');
+const assistHot = hotEntry<AssistBrain>('assist.ts', 'assist');
+let brain: AssistBrain | null = null;
 let characters: any[] = [];
 let client: { send(d: string | Uint8Array): void } | null = null;
 let reader = createPacketReader('[asistente]');
@@ -102,24 +100,24 @@ function applyCharacterInfo(raw: any) {
   log(`Asistente: ${bot.charName} en (${info.x},${info.y}) mapa ${info.map}, nivel ${world.level}.`);
 }
 
-/** El auto attack: un golpe o skill por ritmo humano al monstruo más cercano que esté al alcance. No camina. */
-async function assistLoop() {
+/** Corre el cerebro del asistente. Al cambiar el código termina limpio y arranca el nuevo; si el nuevo falla enseguida, vuelve al anterior. */
+async function runAssist() {
+  let fresh = false;
+  brain = await assistHot.take();
   while (true) {
-    await sleep(150);
-    if (!enabled || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
-    if (checkSurvival() || checkMana()) { await sleep(300); continue; }
-    const skill = pickAttackSkill();
-    const reach = skill ? castReach(skill.number) : 1;
-    let best: { id: number; x: number; y: number } | null = null;
-    let bestD = Infinity;
-    for (const n of world.npcs.values()) {
-      const d = chebyshev(world.x, world.y, n.x, n.y);
-      if (d <= reach && d < bestD) { best = n; bestD = d; }
+    assist.reload = false;
+    const t0 = Date.now();
+    try {
+      await brain.run();
+    } catch (e) {
+      const back = fresh && Date.now() - t0 < 15_000 ? assistHot.revert() : null;
+      log(`El cerebro del asistente falló al correr (${(e as Error).message}); ${back ? 'vuelvo al anterior' : 'reintento'}.`);
+      if (back) { brain = back; fresh = false; continue; }
+      await sleep(3000);
+      continue;
     }
-    if (!best) { target = 0; continue; }
-    target = best.id;
-    if (skill && useSkill(best.id, skill)) await sleep(humanPace(SKILL_PACE_MS));
-    else if (bestD <= 1) { sendHit(best.id, directionTowards(world.x, world.y, best.x, best.y)); await sleep(humanPace(ATTACK_PACE_MS)); }
+    brain = await assistHot.take();
+    fresh = true;
   }
 }
 
@@ -152,62 +150,15 @@ function recordManualPlay() {
     track('ticks', {
       map: world.map, x: world.x, y: world.y, level: world.level, exp_total: expTotal, exp_min_1m: expLog.perMin(now, 60_000),
       hp: Math.max(0, world.hp), mp: Math.max(0, world.mana), mode: 'farm', phase: near > 0 ? 'fight' : 'walk', spot: 'manual',
-      skill: enabled ? pickAttackSkill()?.number ?? 0 : 0, monsters_near: near, doing: enabled ? 'auto attack (extensión)' : 'a mano',
+      skill: assist.enabled ? brain?.skillNumber() ?? 0 : 0, monsters_near: near, doing: assist.enabled ? 'auto attack (extensión)' : 'a mano',
     }, now);
   }, TICK_MS);
 }
 
-// --- Joyero ---------------------------------------------------------------------------------------------------------------------------------
-/** Hasta dónde se pide el ítem sin caminar (el bot camina hasta 1; acá no se camina, así que se prueba un poco más lejos) y hasta dónde se avisa. */
-const SNIPE_REACH = 2;
-const ALERT_TILES = 20;
-const SNIPE_RETRY_MS = 600;
-/** Joyas y excelentes (el Broken Sword de la quest ya no: se consiguió). */
-const wantedDrop = (d: { group: number; num: number; isMoney?: boolean; excellent?: boolean }) =>
-  !d.isMoney && !(d.group === 14 && d.num === 24) && (isJewel(d) || !!d.excellent);
-const askedAt = new Map<number, number>();
-
-function nearestWanted() {
-  let best: { id: number; x: number; y: number; group: number; num: number; d: number } | null = null;
-  for (const dr of drops.values()) {
-    if (!wantedDrop(dr)) continue;
-    const d = chebyshev(world.x, world.y, dr.x, dr.y);
-    if (!best || d < best.d) best = { id: dr.id, x: dr.x, y: dr.y, group: dr.group, num: dr.num, d };
-  }
-  return best;
-}
-
-async function sniperLoop() {
-  while (true) {
-    await sleep(100);
-    if (!sniper || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
-    const t = nearestWanted();
-    if (!t || t.d > SNIPE_REACH || bagRoom() <= 0) continue;
-    const now = Date.now();
-    if (now - (askedAt.get(t.id) ?? 0) < SNIPE_RETRY_MS) continue;
-    askedAt.set(t.id, now);
-    log(`Joyero: pido ${itemInfo(t.group, t.num).name} (a ${t.d} casillas).`);
-    sendPickup(t.id);
-  }
-}
-
-function lootHint() {
-  const t = nearestWanted();
-  if (!t || t.d > ALERT_TILES) return null;
-  const dx = t.x - world.x, dy = t.y - world.y;
-  const dir = (dy < 0 ? 'N' : dy > 0 ? 'S' : '') + (dx > 0 ? 'E' : dx < 0 ? 'O' : '');
-  return { id: t.id, name: itemInfo(t.group, t.num).name, dist: t.d, dir };
-}
-
-function skillName(): string {
-  const s = pickAttackSkill();
-  return s ? SKILL_TABLE.get(s.number)?.name ?? `skill ${s.number}` : 'golpe';
-}
-
 function status(extra: Record<string, unknown> = {}) {
   return JSON.stringify({
-    type: 'status', enabled, inGame: !!bot.inGameAt, name: bot.charName, hp: world.hp, maxHp: world.maxHp, mana: world.mana,
-    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target, skill: skillName(), sniper, loot: lootHint(), ...extra,
+    type: 'status', enabled: assist.enabled, inGame: !!bot.inGameAt, name: bot.charName, hp: world.hp, maxHp: world.maxHp, mana: world.mana,
+    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target: assist.target, skill: brain?.skillName() ?? 'golpe', sniper: assist.sniper, loot: brain?.lootHint() ?? null, ...extra,
   });
 }
 
@@ -219,9 +170,10 @@ async function main() {
   EventBus.on('CharacterList', (raw: any) => { characters = parseCharacterList097(raw); });
   EventBus.on('CharacterInformation', applyCharacterInfo);
   EventBus.on('GameServerEntered', (raw: any) => { bot.playerId = new GameServerEnteredPacket(raw).PlayerId & 0x7fff; });
-  watchDrops();
-  void assistLoop();
-  void sniperLoop();
+  watchChat(); // los avisos del server ("no es tuyo", "sin lugar") quedan en el log: dicen por qué un pedido de ítem no entra
+  EventBus.on('ItemAddedToInventory', (raw: any) => { const b = Uint8Array.from(raw instanceof Uint8Array ? raw : (raw?.buffer ? new Uint8Array(raw.buffer) : [])); if (assist.sniper) log(`Joyero: el server respondió ${b[3] === 0xff ? 'no se pudo' : b[3] === 0xfe ? 'zen' : 'ítem al inventario'}.`); });
+  assistHot.watch(() => { assist.reload = true; });
+  void runAssist();
   recordManualPlay();
 
   Bun.serve<Record<string, never>>({
@@ -238,8 +190,9 @@ async function main() {
       open(ws) {
         client = ws;
         // Mundo nuevo: se empieza de cero (la página se recargó) y lo que se mande sale por esta conexión.
-        enabled = false;
-        sniper = false;
+        assist.enabled = false;
+        assist.sniper = false;
+        assist.press = (key) => { try { ws.send(JSON.stringify({ type: 'key', key })); } catch { /* cliente caído */ } };
         pageDecryptor = newPageDecryptor();
         reader = createPacketReader('[asistente]'); // contador de descifrado nuevo: cada carga de la página empieza el suyo desde cero
         bot.inGameAt = 0;
@@ -254,8 +207,8 @@ async function main() {
           if (m.type !== 'set') return;
           if ((m.on || m.sniper) && (await capitanOnline())) { ws.send(status({ error: 'Capitan está conectado desde la estación: desconectalo antes (son dos sesiones de la misma cuenta).' })); return; }
           if ((m.on || m.sniper) && !bot.inGameAt) { ws.send(status({ error: 'Todavía no vi la entrada al mundo: recargá la página del juego con el asistente andando.' })); return; }
-          if (m.on !== undefined) { enabled = !!m.on; log(`Asistente ${enabled ? 'prendido' : 'apagado'}.`); }
-          if (m.sniper !== undefined) { sniper = !!m.sniper; log(`Joyero ${sniper ? 'prendido' : 'apagado'}.`); }
+          if (m.on !== undefined) { assist.enabled = !!m.on; log(`Asistente ${assist.enabled ? 'prendido' : 'apagado'}.`); }
+          if (m.sniper !== undefined) { assist.sniper = !!m.sniper; log(`Joyero ${assist.sniper ? 'prendido' : 'apagado'}.`); }
           ws.send(status());
           return;
         }
@@ -265,8 +218,9 @@ async function main() {
       },
       close(ws) {
         if (client === ws) client = null;
-        enabled = false;
-        sniper = false;
+        assist.enabled = false;
+        assist.sniper = false;
+        assist.press = null;
         bot.inGameAt = 0;
         detachFakeGameSocket();
         log('Asistente: la extensión se desconectó.');

@@ -131,6 +131,22 @@ export const bot = {
   goalPoint: null as [number, number] | null,
 };
 
+/**
+ * El asistente de la extensión (attach.ts): lo que el usuario prende en el flotante. Lo lee el cerebro del asistente (brain/assist.ts, recargable en
+ * caliente: hot.ts); vive acá, en el núcleo, para que sobreviva a cada recarga.
+ */
+export const assist = {
+  enabled: false,
+  /** Joyero: levanta joyas, piezas de alas y excelentes al alcance. */
+  sniper: false,
+  /** Monstruo al que apunta ahora (lo muestra el flotante). */
+  target: 0,
+  /** Cambió el cerebro del asistente: los loops terminan limpio y se arrancan los nuevos. */
+  reload: false,
+  /** Aprieta una tecla del hotbar en la página del juego (la pone attach.ts cuando la extensión está conectada). */
+  press: null as null | ((key: string) => void),
+};
+
 // Registro de exp por segundo (farming.ts, ExpLog): TODAS las mediciones de exp/min salen de acá.
 export const expLog = new ExpLog(Date.now());
 

@@ -29,7 +29,11 @@ function openBridge() {
   };
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') {
-      try { paint({ link: true, ...JSON.parse(e.data) }); } catch { /* mensaje inválido */ }
+      try {
+        const m = JSON.parse(e.data);
+        if (m.type === 'key') pressKey(String(m.key));
+        else paint({ link: true, ...m });
+      } catch { /* mensaje inválido */ }
       return;
     }
     if (gameSock && gameSock.readyState === NativeWS.OPEN) nativeSend.call(gameSock, e.data as ArrayBuffer);
@@ -97,6 +101,18 @@ let line: HTMLDivElement | null = null;
 
 // Se mueve arrastrando el título (la esquina que tapa depende del cliente) y la posición se recuerda; doble clic lo achica.
 const POS_KEY = 'asistente-pos';
+/** Teclas del hotbar que el asistente puede apretar: las pociones (Q curación, W maná). El juego hace el resto, con el casillero que tenga ahí. */
+const HOTBAR_KEYS = new Set(['q', 'w', 'e', 'r']);
+function pressKey(key: string) {
+  if (!HOTBAR_KEYS.has(key)) return;
+  const code = key.toUpperCase().charCodeAt(0);
+  for (const type of ['keydown', 'keyup']) {
+    const ev = new KeyboardEvent(type, { key, code: `Key${key.toUpperCase()}`, keyCode: code, which: code, bubbles: true, cancelable: true });
+    window.dispatchEvent(ev);
+    document.dispatchEvent(ev);
+  }
+}
+
 function placeBox(b: HTMLDivElement) {
   try {
     const p = JSON.parse(localStorage.getItem(POS_KEY) ?? 'null') as { x: number; y: number } | null;
