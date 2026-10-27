@@ -49,9 +49,10 @@ function newPageDecryptor() {
   return d;
 }
 function onPageC3(frame: Uint8Array, held: boolean) {
-  const plain = pageDecryptor.Decrypt(Uint8Array.from(frame))[1];
+  // El contador viene dentro del paquete: así sirve aunque el asistente se haya enganchado con el juego ya empezado.
+  const [count, plain] = (pageDecryptor as unknown as { DecryptC3(d: Uint8Array): [number, Uint8Array] }).DecryptC3(Uint8Array.from(frame));
   if (held) resendPageFrame(plain);
-  else syncGameCounter(pageDecryptor.Counter.Count);
+  else syncGameCounter(count + 1);
 }
 
 /** Lo que mandó la página (C1 con xor32): se lee el paso y el personaje elegido para saber dónde está y quién es. */
