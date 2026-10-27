@@ -6,6 +6,7 @@
  */
 import {
   CharacterLevelUpdatePacket,
+  ExperienceGainedPacket,
   ClientReadyAfterMapChangePacket,
   CurrentHealthAndShieldPacket,
   CurrentManaAndAbilityPacket,
@@ -25,7 +26,7 @@ import { EventBus } from '../net/eventBus';
 import { parseHitDamage, parseHitExtended, parsePositionFix } from './protocol097';
 import { HpTracker } from './health';
 import { learnBlocked } from './terrain';
-import { PARTY_DECLINE_DELAY_MS, buildPartyDecline, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
+import { PARTY_DECLINE_DELAY_MS, buildPartyAccept, isObjectMovedPacket, parseInventory, parseItemAdded, parsePartyRequest } from './protocol097';
 import { MONSTER_TYPE_NUMBERS, bot, monsterLevel, monsterMaxHp, monsterName, world, type SkillInfo } from './state';
 import { log, toBytes } from './util';
 import { trackEvent } from './telemetry';
@@ -195,6 +196,8 @@ export function onMapArrival() {
 // Vida de 16 bits que se da vuelta (health.ts): world.hp/maxHp quedan con la vida real estimada.
 const hpTracker = new HpTracker();
 export function trackWorld() {
+  // Exp total: la exp de cada kill suma acá (el panel arma la barra con esto).
+  EventBus.on('ExperienceGained', (raw: any) => { world.exp += new ExperienceGainedPacket(raw).AddedExperience; });
   EventBus.on('CharacterLevelUpdate', (raw: any) => {
     const p = new CharacterLevelUpdatePacket(raw);
     world.level = p.Level;
@@ -238,6 +241,27 @@ export function trackWorld() {
     world.inventory.clear();
     for (const it of items) world.inventory.set(it.slot, it);
     log(`Inventario: ${world.inventory.size} item(s)${world.inventory.size <= 12 ? ' [' + [...world.inventory.values()].map((i) => `slot ${i.slot}: ${i.group}/${i.num}${i.level ? ' +' + i.level : ''}`).join(', ') + ']' : ''}.`);
+  });
+
+  // Tirar un ítem: ItemDropResponse (C1 23: éxito en @3) y ItemRemoved (C1 28: casilla en @3). Se quita de la bolsa lo que el server confirma.
+  EventBus.on('ItemDropResponse', (raw: any) => {
+    const b = toBytes(raw);
+    log(`Tirar ítem: respuesta ${[...b].map((x) => x.toString(16).padStart(2, '0')).join('')}`);
+    if (b[3] === 1 && world.pendingDrop != null) world.inventory.delete(world.pendingDrop);
+    world.pendingDrop = null;
+  });
+  EventBus.on('ItemRemoved', (raw: any) => {
+    const b = toBytes(raw);
+    log(`Ítem quitado de la casilla ${b[3]}`);
+    world.inventory.delete(b[3]);
+  });
+
+  // Compra a un NPC: C1 len 32 <casilla> <ítem>; la misma forma que levantar un ítem. FF = no se pudo.
+  EventBus.on('ItemBought' as any, (raw: any) => {
+    const b = toBytes(raw);
+    log(`Compra: ${[...b].map((x) => x.toString(16).padStart(2, '0')).join('')}`);
+    const it = b[3] === 0xff ? null : parseItemAdded(b);
+    if (it) world.inventory.set(it.slot, it);
   });
 
   EventBus.on('ItemAddedToInventory', (raw: any) => {
@@ -366,6 +390,7 @@ export function trackWorld() {
   // server manda el scope inicial (y el del mapa nuevo tras /move) antes de que
   // el loop exista; enganchar tarde = bot ciego a los monstruos.
   const npcs = world.npcs;
+  const ignoredSeen = new Set<number>();
   const onAdd = (raw: any) => {
     for (const n of parseNpcs095(raw)) {
       // MUBOT_DEBUG_NPCS=1: loguea todo tipo que aparezca, pase o no el filtro
@@ -375,6 +400,11 @@ export function trackWorld() {
         log(`NPC en scope (debug): Id=${n.Id} tipo=${n.TypeNumber} monstruo=${isMonster} en (${n.CurrentPositionX},${n.CurrentPositionY})`);
       }
       if (!isMonster) {
+        // Lo que no se reconoce como monstruo ni NPC del pueblo se ignora: se avisa una vez por tipo para ver si el radar se pierde monstruos.
+        if (!isTownNpcType(n.TypeNumber) && !ignoredSeen.has(n.TypeNumber)) {
+          ignoredSeen.add(n.TypeNumber);
+          log(`NPC ignorado: tipo ${n.TypeNumber} en (${n.CurrentPositionX},${n.CurrentPositionY}): no está en la tabla de monstruos ni es del pueblo.`);
+        }
         if (isTownNpcType(n.TypeNumber)) {
           const tid = n.Id & 0x7fff;
           world.townNpcs.set(tid, { id: tid, type: n.TypeNumber, x: n.CurrentPositionX, y: n.CurrentPositionY });
@@ -463,14 +493,14 @@ export function trackWorld() {
     onMapArrival();
   });
 
-  // Invitaciones a party: se rechazan siempre (con party la exp se reparte). Con un respiro humano.
+  // Invitaciones a party: se aceptan siempre (el usuario quiere party). Con un respiro humano.
   EventBus.on('PartyRequest', (raw: any) => {
     const id = parsePartyRequest(toBytes(raw));
     if (id == null) return;
     const [lo, hi] = PARTY_DECLINE_DELAY_MS;
     setTimeout(() => {
-      sendToGS(new DataView(buildPartyDecline(id).buffer));
-      log(`Party rechazada (de ${world.players.get(id)?.name ?? '#' + id}).`);
+      sendToGS(new DataView(buildPartyAccept(id).buffer));
+      log(`Party aceptada (de ${world.players.get(id)?.name ?? '#' + id}).`);
     }, lo + Math.random() * (hi - lo));
   });
   for (const ev of ['PartyList', 'PartyList075']) EventBus.on(ev, () => { if (!bot.inParty) trackEvent('party', 'join'); bot.inParty = true; });
@@ -545,6 +575,8 @@ export async function selectCharacter(charListBytes: any) {
     level: target.Level ?? world.level,
     classId: target.ClassId ?? null,
     levelUpPoints: info.levelUpPoints,
+    exp: info.exp,
+    expForNext: info.expForNext,
     stats: { str: info.str, agi: info.agi, vit: info.vit, ene: info.ene },
   });
   log(

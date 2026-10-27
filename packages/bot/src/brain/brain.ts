@@ -7,14 +7,16 @@ import { D } from '../core/directivas';
 import { SKILL_TABLE, pickAttackSkill } from './combat';
 import { STAT_SHARES, lastPlace, targetValue } from './area';
 import { resetStatTracking } from './progress';
-import { hooks } from '../core/state';
+import { hooks, world } from '../core/state';
+import { mapName } from '../core/panel-logic';
 
 export { autonomousLoop, type LoopResult } from './farm-loop';
 
 /** Conecta el cerebro con el núcleo. Se llama cada vez que el cerebro (re)arranca. */
 export function install() {
   resetStatTracking(); // el seguimiento del reparto de puntos arranca de cero en cada sesión y en cada recarga
-  hooks.placeName = () => lastPlace.v?.name ?? '';
+  // La zona elegida solo vale en su mapa: descansando en el pueblo el evento dice el pueblo, no la zona de farmeo.
+  hooks.placeName = () => (lastPlace.v && lastPlace.v.warp.map === world.map ? lastPlace.v.name : mapName(world.map));
   hooks.value = targetValue;
   hooks.skill = () => {
     const s = pickAttackSkill();

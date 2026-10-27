@@ -9,7 +9,7 @@ import { track, trackEvent } from '../core/telemetry';
 import { closeSockets } from '../core/connection';
 import { ATTACK_PACE_MS, SKILL_PACE_MS, TARGET_NO_KILL_MS, UNREACHABLE_MS } from '../core/config';
 import { sendHit, sendTargetedSkill } from '../core/actions';
-import { SKILL_TABLE, castReach, checkSurvival, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
+import { SKILL_TABLE, castReach, checkMana, checkSurvival, isMage, pickAttackSkill, skillLevelOk, useSkill } from './combat';
 import { D } from '../core/directivas';
 import { decide } from '../core/journal';
 import { lootStep, watchDrops } from './loot';
@@ -19,10 +19,12 @@ import { EventBus } from '../net/eventBus';
 import { CurrentHealthAndShieldPacket, ExperienceGainedPacket, ObjectGotKilledPacket } from '../packets';
 import { currentMode, sessionStart, setLoopView } from '../core/panel';
 import { mapName } from '../core/panel-logic';
-import { choosePlace, farFrom, isAttackable, lastPlace, noteDeath, noteProgress, recoveryWarp, targetValue, travelTo, type Place } from './area';
+import { choosePlace, farFrom, isAttackable, lastPlace, noteDanger, noteDeath, noteProgress, recoveryWarp, targetValue, travelTo, type Place } from './area';
 import { noteExp, noteKill } from './learning';
 import { investStatPointsInBackground } from './progress';
 import { scoutShopsStep } from './shop-scout';
+import { buyManaStep } from './shop-buy';
+import { partyStep } from './party';
 import { bot, expLog, monsterName, world, type ScopedNpc } from '../core/state';
 import { isSafeZone } from '../core/terrain';
 import { warp, warpAndWait } from './warps';
@@ -45,7 +47,10 @@ const WAY_TILES = 8;
 /** Solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
 const CHASE_TILES = 12;
 /** Vida (fracción) por debajo de la cual huye al pueblo si hay monstruos encima, y a la que vuelve a salir. Sin pociones es lo único que lo salva. */
-const FLEE_BELOW = 0.5;
+/** Solo huye al pueblo en una emergencia: antes de eso sigue peleando (con pociones) o, si la zona no se aguanta, cambia de zona (`noteDanger`). */
+const FLEE_BELOW = 0.25;
+/** Vida con la que una zona cuenta como "no la aguanto" (con 3 o más monstruos encima). */
+const DANGER_BELOW = 0.45;
 const RECOVER_TO = 0.7;
 
 let lastTickAt = 0;
@@ -83,6 +88,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
   log(`\n--- Modo autónomo: ${deadline ? `hasta ${new Date(deadline).toLocaleTimeString()}` : 'sin límite'} ---`);
   const ctx = newLoopCtx();
   let fleeing = false;
+  let dipped = false;
 
   // Monstruos atacables: los de world.npcs fuera de zona segura que el personaje puede farmear (power.ts).
   const refreshAttackable = () => {
@@ -211,6 +217,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await sleep(humanPace(SKILL_PACE_MS));
     }
 
+    if (checkMana()) {
+      await sleep(200);
+      continue;
+    }
     if (checkSurvival()) {
       potionsDrunk++;
       await sleep(200);
@@ -221,6 +231,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     if (world.maxHp > 0) {
       const pct = world.hp / world.maxHp;
       const attackers = [...world.npcs.values()].filter((m) => chebyshev(m.x, m.y, world.x, world.y) <= 6 && !isSafeZone(world.map, m.x, m.y)).length;
+      if (!fleeing) {
+        if (pct < DANGER_BELOW && attackers >= 3) { if (!dipped) { dipped = true; noteDanger(); } }
+        else if (pct > 0.65) dipped = false;
+      }
       // En el pueblo con poca vida no se sale a farmear: se descansa hasta el 70 % (al reiniciar el bot, por ejemplo).
       const resting = isSafeZone(world.map, world.x, world.y) && pct < RECOVER_TO && !attackers;
       if (!fleeing && (resting || (pct < FLEE_BELOW && attackers))) {
@@ -256,6 +270,7 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       continue;
     }
 
+    if (D.comprarMana > 0 && (await buyManaStep(ctx))) continue;
     if (D.scoutShops && (await scoutShopsStep(ctx))) continue;
 
     // --- 2. Puntos -------------------------------------------------------------------------------------------------
@@ -265,8 +280,11 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const place = choosePlace();
     if (!place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
     if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
-    // Camino al spot: si hay monstruos al paso (a 8 tiles), se pelea con ellos en vez de pasar entre medio.
-    if (farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
+    // Con un lugar que mandó el usuario (zonaMapa), de camino NO se pelea: máxima prioridad llegar (se cae el objetivo que hubiera). Sin orden del usuario, si hay
+    // monstruos al paso (a 8 tiles) se pelea con ellos en vez de pasar entre medio.
+    const ordered = D.zonaMapa > 0 && farFrom(place, 4);
+    if (ordered) ctx.target = null;
+    else if (farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
       const onTheWay = [...ctx.npcs.values()].filter((m) => !unreachable.has(m.id) && chebyshev(m.x, m.y, world.x, world.y) <= WAY_TILES);
       const t = onTheWay.reduce<ScopedNpc | null>((b, m) => (b == null || chebyshev(m.x, m.y, world.x, world.y) < chebyshev(b.x, b.y, world.x, world.y) ? m : b), null);
       if (t) pickTarget(t);
@@ -279,6 +297,8 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
       await walkTowards(ctx, place.anchor.x, place.anchor.y);
       continue;
     }
+
+    partyStep();
 
     // --- 4. Loot (salvo con un objetivo a distancia de golpe) ------------------------------------------------------
     const targetInMelee = ctx.target != null && ctx.npcs.has(ctx.target) && chebyshev(world.x, world.y, ctx.npcs.get(ctx.target)!.x, ctx.npcs.get(ctx.target)!.y) <= 1;

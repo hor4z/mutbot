@@ -8,7 +8,7 @@ const u8 = (raw: Uint8Array | DataView | ArrayBuffer): Uint8Array =>
   raw instanceof Uint8Array ? raw : raw instanceof DataView ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw);
 
 // ---------------------------------------------------------------------------
-// Party: se rechaza siempre.
+// Party: se acepta toda invitación y el bot pide party a los jugadores que tiene cerca (brain/party.ts).
 // PartyRequest (C1 05 40) trae el id del que invita en el byte 3 (BE). La respuesta es
 // PartyInviteResponse C1 06 41 <aceptado 0/1> <id BE>, como la manda el agente web (con un respiro
 // humano de 0.6-1.5 s antes de contestar, que pone el bot). Invitar: PartyInviteRequest C1 05 40 <id BE>.
@@ -27,6 +27,12 @@ export function buildPartyAccept(requesterId: number): Uint8Array {
   return Uint8Array.from([0xc1, 0x06, 0x41, 0x01, (requesterId >> 8) & 0xff, requesterId & 0xff]);
 }
 
+/** Pedir party a un jugador: C1 05 40 <id BE>. */
+export function buildPartyInvite(targetId: number): Uint8Array {
+  return Uint8Array.from([0xc1, 0x05, 0x40, (targetId >> 8) & 0xff, targetId & 0xff]);
+}
+
+/** Respiro humano antes de contestar una invitación (ms). */
 export const PARTY_DECLINE_DELAY_MS: readonly [number, number] = [600, 1500];
 
 // ---------------------------------------------------------------------------

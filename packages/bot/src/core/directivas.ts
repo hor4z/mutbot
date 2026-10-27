@@ -9,9 +9,14 @@ import { deleteDirective, readDirectives, writeDirective } from '@mubot/db';
 type Spec = { def: boolean | number; min?: number; max?: number; doc: string };
 
 export const ESQUEMA = {
+  zonaWarp: { def: 0, min: 0, max: 40, doc: 'Índice del warp del menú para llegar a la zona fijada (0 = el más cercano a la zona). Ej.: 17 = Lost Tower 4.' },
+  comprarMana: { def: 0, min: 0, max: 400, doc: 'Pociones que compra a Amy (Lorencia) en un viaje: esa cantidad de maná y esa cantidad de vida, de las más grandes. Al terminar queda en pausa y se pone en 0 sola.' },
   scoutShops: { def: false, doc: 'Recorrer las tiendas del pueblo (Lorencia) y anotar lo que vende cada NPC en la base; no compra ni vende. Corre una vez; para repetir, ponerla en false y de nuevo en true.' },
   statBatch: { def: 10, min: 1, max: 500, doc: 'Puntos que se juntan antes de repartir.' },
   agiTarget: { def: 90, min: 0, max: 400, doc: 'Agilidad a la que se llega primero (velocidad de ataque = Agi / 15; 90 = 6).' },
+  zonaMapa: { def: 0, min: 0, max: 100, doc: 'Número de mapa donde farmear fijo (1 = Dungeon, 2 = Devias); 0 = que el bot elija.' },
+  zonaX: { def: 0, min: 0, max: 255, doc: 'X del centro de la zona fija (con zonaMapa).' },
+  zonaY: { def: 0, min: 0, max: 255, doc: 'Y del centro de la zona fija (con zonaMapa).' },
 } as const satisfies Record<string, Spec>;
 
 export type Clave = keyof typeof ESQUEMA;

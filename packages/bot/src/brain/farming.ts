@@ -136,18 +136,25 @@ export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_
 // mejoran el equipo que ya tenemos. Todo lo demás se deja en el piso: pociones, cajas, armas y armaduras comunes, anillos, etc.
 export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean; level?: number };
 
-/** Joyas: Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31 (los Cristales) y Chaos 12/15. */
-const JEWELS_GROUP_14 = new Set([13, 14, 16, 22, 31]);
+/** Joyas: Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31 (los Cristales), Chaos 12/15 y el Broken Sword 14/24 (ítem de la quest de Sebina, lo pidió el usuario). */
+const JEWELS_GROUP_14 = new Set([13, 14, 16, 22, 24, 31]);
 export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS_GROUP_14.has(d.num)) || (d.group === 12 && d.num === 15);
 
-export type LootReason = 'zen' | 'joya' | 'excelente' | 'mejora';
+/** Orbs de skill del Dark Knight: Twisting Slash 12/7, Rageful Blow 12/12, Impale 12/13, Greater Fortitude 12/14, Fire Slash 12/16, Death Stab 12/19. */
+const DK_ORBS = new Set([7, 12, 13, 14, 16, 19]);
+/** Qué skill enseña cada orb (número de skill de la tabla de skills): un orb de un skill que ya se tiene es basura. */
+export const ORB_SKILL: Record<number, number> = { 7: 41, 12: 42, 13: 47, 14: 48, 16: 55, 19: 43 };
+export const isDkOrb = (d: DropInfo) => d.group === 12 && DK_ORBS.has(d.num);
+
+export type LootReason = 'zen' | 'joya' | 'excelente' | 'mejora' | 'skill';
 /** Lo que el loop sabe y farming.ts no: si el ítem mejora el equipo puesto y si cabe en la bolsa. */
-export type LootRules = { upgrade: (d: DropInfo) => boolean; room: (d: DropInfo) => boolean };
+export type LootRules = { upgrade: (d: DropInfo) => boolean; room: (d: DropInfo) => boolean; skillKnown: (skill: number) => boolean };
 
 /** Por qué vale la pena levantar este drop (o null si es basura). Sin lugar en la bolsa solo se levanta el zen. */
 export function lootReason(d: DropInfo, rules: LootRules): LootReason | null {
   if (d.isMoney) return 'zen';
   if (!rules.room(d)) return null;
+  if (isDkOrb(d)) return rules.skillKnown(ORB_SKILL[d.num]!) ? null : 'skill';
   if (isJewel(d)) return 'joya';
   if (d.excellent) return 'excelente';
   if (rules.upgrade(d)) return 'mejora';

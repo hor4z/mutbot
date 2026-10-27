@@ -3,8 +3,11 @@
  * bot ya trackea de los packets: funciona igual sin navegador. Las órdenes se aplican en el próximo tick del loop (< 1 s).
  */
 import { decide, recentNotes } from './journal';
+import { dropItem } from './actions';
+import { recentChat, sayFromPanel } from './chat';
+import { isSafeZone } from './terrain';
+import { itemInfo, mapName } from './panel-logic';
 import { drops, lootState } from './loot-state';
-import { mapName } from './panel-logic';
 import type { BotMode, PanelCommand, PanelState } from '@mubot/protocol';
 import { bot, expLog, hooks, monsterName, world } from './state';
 import type { CommandResult } from './ws-server';
@@ -27,6 +30,18 @@ function runPanelCommand(c: PanelCommand): CommandResult {
       if (!bot.paused) return { ok: true, msg: 'no estaba en pausa' };
       bot.paused = false;
       return { ok: true, msg: 'sigo farmeando' };
+    case 'drop': {
+      if (!bot.inGameAt || world.hp <= 0) return { ok: false, msg: 'no estoy en el juego' };
+      if (isSafeZone(world.map, world.x, world.y)) return { ok: false, msg: 'en zona segura no se puede tirar nada: esperá a que esté afuera' };
+      const it = world.inventory.get(c.slot);
+      if (!it) return { ok: false, msg: `la casilla ${c.slot} está vacía` };
+      world.pendingDrop = c.slot;
+      dropItem(c.slot);
+      const info = itemInfo(it.group, it.num);
+      return { ok: true, msg: `tiro ${info.name}${it.level ? ` +${it.level}` : ''}${it.excellent ? ' excelente' : ''}` };
+    }
+    case 'say':
+      return sayFromPanel(c);
     case 'town':
       bot.paused = true;
       bot.townNow = true;
@@ -96,6 +111,23 @@ function buildPanelEntities(): NonNullable<PanelState['entities']> {
   };
 }
 
+const JEWELS14 = new Set([13, 14, 16, 22, 31]);
+function itemKind(group: number, num: number): NonNullable<PanelState['inventory']>[number]['kind'] {
+  if ((group === 14 && JEWELS14.has(num)) || (group === 12 && num === 15)) return 'joya';
+  if (group === 12 && [7, 12, 13, 14, 16, 19].includes(num)) return 'skill';
+  if (group === 14 || (group === 13 && num === 3)) return 'pocion';
+  return group <= 11 ? 'equipo' : 'otro';
+}
+function buildPanelInventory(): NonNullable<PanelState['inventory']> {
+  return [...world.inventory.values()].map((it) => {
+    const i = itemInfo(it.group, it.num);
+    return { slot: it.slot, group: it.group, num: it.num, name: i.name, level: it.level ?? 0, excellent: !!it.excellent, w: i.w, h: i.h, kind: itemKind(it.group, it.num) };
+  });
+}
+
+/** Exp total que pide el servidor para llegar a un nivel (fórmula clásica de MU; coincide con lo que manda el server de Slow a nivel 286). */
+const expAt = (lv: number) => (lv <= 0 ? 0 : (9 + lv) * lv * lv * 10 + (lv > 255 ? (lv - 255 + 9) * (lv - 255) ** 2 * 1000 : 0));
+
 export function buildPanelState(now: number): PanelState {
   return {
     at: now,
@@ -112,15 +144,25 @@ export function buildPanelState(now: number): PanelState {
       zen: bot.inGameAt ? bot.lastMoney : null,
     },
     where: { map: world.map, mapName: mapName(world.map), x: world.x, y: world.y, spot: bot.currentSpot?.name ?? null },
-    exp: { perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5: Math.round(expLog.perMin(now, 5 * 60_000)) },
+    exp: (() => {
+      const perMin5 = Math.round(expLog.perMin(now, 5 * 60_000));
+      const from = expAt(world.level - 1), to = world.expForNext > world.exp && world.expForNext > from ? world.expForNext : expAt(world.level);
+      return {
+        perMin1: Math.round(expLog.perMin(now, 60_000)), perMin5,
+        ...(world.exp > 0 ? { now: world.exp, from, to, etaMin: perMin5 > 0 ? Math.max(0, (to - world.exp) / perMin5) : null } : {}),
+      };
+    })(),
     nearby: {
       monsters: [...world.npcs.values()].filter((n) => Math.hypot(n.x - world.x, n.y - world.y) <= 10).length,
       players: world.players.size,
     },
+    inParty: bot.inParty,
     trail: trail.map(([x, y]) => [x, y] as [number, number]),
     camp: bot.goalPoint,
     entities: buildPanelEntities(),
+    inventory: buildPanelInventory(),
     plan: hooks.plan() ?? undefined,
+    chat: recentChat(),
     notes: recentNotes(),
     session: (() => {
       const v = loopView?.();
