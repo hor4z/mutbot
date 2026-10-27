@@ -83,15 +83,46 @@ let box: HTMLDivElement | null = null;
 let btn: HTMLButtonElement | null = null;
 let line: HTMLDivElement | null = null;
 
+// Se mueve arrastrando el título (la esquina que tapa depende del cliente) y la posición se recuerda; doble clic lo achica.
+const POS_KEY = 'asistente-pos';
+function placeBox(b: HTMLDivElement) {
+  try {
+    const p = JSON.parse(localStorage.getItem(POS_KEY) ?? 'null') as { x: number; y: number } | null;
+    if (p) Object.assign(b.style, { left: `${Math.min(p.x, innerWidth - 60)}px`, top: `${Math.min(p.y, innerHeight - 30)}px` });
+  } catch { /* sin almacenamiento */ }
+}
+function dragBox(b: HTMLDivElement, handle: HTMLElement) {
+  handle.addEventListener('pointerdown', (e) => {
+    const dx = e.clientX - b.offsetLeft, dy = e.clientY - b.offsetTop;
+    const move = (m: PointerEvent) => Object.assign(b.style, { left: `${Math.max(0, m.clientX - dx)}px`, top: `${Math.max(0, m.clientY - dy)}px` });
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      try { localStorage.setItem(POS_KEY, JSON.stringify({ x: b.offsetLeft, y: b.offsetTop })); } catch { /* sin almacenamiento */ }
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    e.preventDefault();
+  });
+  handle.addEventListener('dblclick', () => {
+    const hide = btn?.style.display !== 'none';
+    for (const el of [btn, line]) if (el) el.style.display = hide ? 'none' : '';
+    b.style.width = hide ? 'auto' : '210px';
+  });
+}
+
 function build() {
   box = document.createElement('div');
   Object.assign(box.style, {
-    position: 'fixed', right: '12px', bottom: '12px', zIndex: '2147483647', font: '12px/1.4 system-ui, sans-serif', color: '#e8e8e8',
+    position: 'fixed', left: '12px', top: '12px', zIndex: '2147483647', font: '12px/1.4 system-ui, sans-serif', color: '#e8e8e8',
     background: 'rgba(20,20,24,.92)', border: '1px solid #444', borderRadius: '8px', padding: '8px 10px', width: '210px', userSelect: 'none',
   });
   const title = document.createElement('div');
   title.textContent = 'Asistente de Capitan';
-  title.style.cssText = 'font-weight:600;margin-bottom:6px';
+  title.style.cssText = 'font-weight:600;margin-bottom:6px;cursor:move';
+  title.title = 'Arrastrá para moverlo; doble clic para achicarlo';
+  placeBox(box);
+  dragBox(box, title);
   btn = document.createElement('button');
   btn.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
   btn.onclick = () => {
