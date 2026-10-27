@@ -33,7 +33,7 @@ let enabled = false;
 let target = 0;
 let characters: any[] = [];
 let client: { send(d: string | Uint8Array): void } | null = null;
-const reader = createPacketReader('[asistente]');
+let reader = createPacketReader('[asistente]');
 const xor = new Xor32Decryptor();
 xor.xor32Key = XOR32_KEY_097D;
 
@@ -190,6 +190,7 @@ async function main() {
         // Mundo nuevo: se empieza de cero (la página se recargó) y lo que se mande sale por esta conexión.
         enabled = false;
         pageDecryptor = newPageDecryptor();
+        reader = createPacketReader('[asistente]'); // contador de descifrado nuevo: cada carga de la página empieza el suyo desde cero
         bot.inGameAt = 0;
         world.npcs.clear();
         attachFakeGameSocket((b) => { try { ws.send(b); } catch { /* cliente caído */ } });
