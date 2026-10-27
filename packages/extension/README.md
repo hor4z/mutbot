@@ -23,3 +23,7 @@ página del juego ── frames (entran y salen) ──> ws://127.0.0.1:8792 (bo
 - La posición propia sale de la entrada al mundo y de los pasos que manda la página (`WalkRequest075`, C1 con xor32).
 - Los skills y los golpes con skill van como C3: salen cifrados con un contador propio, distinto al de la página. Si el server lo rechaza, el
   asistente solo golpea a mano; sin probar contra el server real.
+
+## Registro de lo que jugás a mano
+
+Mientras `bun run asistente` esté andando y el juego abierto, el asistente anota cada 5 s tu posición, los monstruos cerca y la exp/min en la base (`ticks`, modo `farm`, spot `manual`), prendas o no el auto attack. Así `v_cell_rate` y el aprendizaje del bot ven los spots que descubrís jugando.

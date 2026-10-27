@@ -16,12 +16,13 @@ import { ATTACK_PACE_MS, SKILL_PACE_MS } from './core/config';
 import { XOR32_KEY_097D, attachFakeGameSocket, detachFakeGameSocket } from './core/connection';
 import { trackPanelPackets } from './core/events';
 import { loadGameData } from './core/gamedata';
-import { bot, world } from './core/state';
+import { bot, expLog, world } from './core/state';
 import { onMapArrival, parseCharacterInformation097, parseCharacterList097, trackWorld, watchMoney } from './core/world';
 import { sendHit } from './core/actions';
 import { SKILL_TABLE, castReach, checkSurvival, pickAttackSkill, useSkill } from './brain/combat';
 import { DIR_DELTA, chebyshev, directionTowards, humanPace, log, sleep } from './core/util';
-import { GameServerEnteredPacket } from './packets';
+import { ExperienceGainedPacket, GameServerEnteredPacket } from './packets';
+import { track } from './core/telemetry';
 
 const PORT = 8792;
 /** Solo la página del juego (la extensión corre ahí) y esta máquina pueden hablarle. */
@@ -104,6 +105,30 @@ async function capitanOnline(): Promise<boolean> {
   }
 }
 
+/**
+ * Registro de lo que se juega a mano: cada 5 s un tick con la posición, los monstruos cerca y la exp/min, igual que los del bot (modo 'farm',
+ * spot 'manual'). Así `v_cell_rate` y el aprendizaje ven los spots que el usuario descubre jugando, con el asistente prendido o no.
+ */
+const TICK_MS = 5_000;
+let expTotal = 0;
+function recordManualPlay() {
+  EventBus.on('ExperienceGained', (raw: any) => {
+    const added = new ExperienceGainedPacket(raw).AddedExperience;
+    expTotal += added;
+    expLog.add(added, Date.now());
+  });
+  setInterval(() => {
+    if (!bot.inGameAt || !client || world.maxHp <= 0 || world.hp <= 0) return;
+    const near = [...world.npcs.values()].filter((m) => chebyshev(m.x, m.y, world.x, world.y) <= 8).length;
+    const now = Date.now();
+    track('ticks', {
+      map: world.map, x: world.x, y: world.y, level: world.level, exp_total: expTotal, exp_min_1m: expLog.perMin(now, 60_000),
+      hp: Math.max(0, world.hp), mp: Math.max(0, world.mana), mode: 'farm', phase: near > 0 ? 'fight' : 'walk', spot: 'manual',
+      skill: enabled ? pickAttackSkill()?.number ?? 0 : 0, monsters_near: near, doing: enabled ? 'auto attack (extensión)' : 'a mano',
+    }, now);
+  }, TICK_MS);
+}
+
 function skillName(): string {
   const s = pickAttackSkill();
   return s ? SKILL_TABLE.get(s.number)?.name ?? `skill ${s.number}` : 'golpe';
@@ -125,6 +150,7 @@ async function main() {
   EventBus.on('CharacterInformation', applyCharacterInfo);
   EventBus.on('GameServerEntered', (raw: any) => { bot.playerId = new GameServerEnteredPacket(raw).PlayerId & 0x7fff; });
   void assistLoop();
+  recordManualPlay();
 
   Bun.serve<Record<string, never>>({
     hostname: '127.0.0.1',
