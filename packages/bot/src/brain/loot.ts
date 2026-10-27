@@ -6,7 +6,7 @@ import { MoneyDropped075Packet } from '../packets';
 import { WALK_PACE_MS } from '../core/config';
 import { step, sendPickup } from '../core/actions';
 import { itemInfo } from '../core/panel-logic';
-import { classFamily, lootReason, pickLoot, type DropInfo, type LootRules } from './farming';
+import { ORB_SKILL, classFamily, isJewel, lootReason, pickLoot, type DropInfo, type LootRules } from './farming';
 import { itemRow } from '../core/gamedata';
 import { decide, journal } from '../core/journal';
 import { EventBus } from '../net/eventBus';
@@ -46,7 +46,14 @@ function parseDropsPacket(raw: any): ScopedDrop[] {
 export function watchDrops(): () => void {
   const onDrop = (raw: any) => {
     try {
-      for (const d of parseDropsPacket(raw)) drops.set(d.id, { ...d, seenAt: Date.now() });
+      for (const d of parseDropsPacket(raw)) {
+        // Todo lo que cae queda en la base (evento `drop`), se levante o no: para saber qué cae, dónde y con qué frecuencia.
+        if (!drops.has(d.id)) {
+          const name = d.isMoney ? 'Zen' : itemInfo(d.group, d.num).name;
+          trackEvent('drop', name, d.isMoney ? (d.amount ?? 0) : d.level ?? 0, d.excellent ? 1 : 0, { group: d.group, num: d.num, x: d.x, y: d.y, id: d.id, level: d.level ?? 0, excellent: !!d.excellent, zen: !!d.isMoney });
+        }
+        drops.set(d.id, { ...d, seenAt: Date.now() });
+      }
     } catch (e) {
       log(`AVISO: no pude parsear un drop, lo ignoro: ${(e as Error).message}`);
     }
@@ -116,25 +123,36 @@ const scoreOf = (group: number, num: number, level = 0, excellent = false): numb
   const base = Math.max(r.def, r.dmg, r.mag);
   return base + level * 3 + (excellent ? base * 0.2 : 0);
 };
-/** El equipo puesto en un slot (0 a 11): los slots de anillo (10 y 11) se comparan con el peor de los dos. */
-const wornIn = (slot: number) => (slot === 10 || slot === 11 ? [10, 11] : [slot]).map((s) => world.inventory.get(s));
+
+/** Se levantan armas que mejoran lo puesto y lo que ya está en la bolsa (escudos y armaduras no: llenaban la bolsa y no dejaban lugar para un excelente); solo las de la clase del personaje (Dark Knight). El bot todavía no se equipa solo: las deja en la bolsa para ponerlas a mano. */
+const PICK_UPGRADES = true;
 
 /** ¿El drop es equipo que podemos usar y que supera lo que llevamos puesto en ese slot (por más de un 5 %)? */
 function isUpgrade(d: DropInfo): boolean {
+  if (!PICK_UPGRADES) return false;
   const r = itemRow(d.group, d.num);
-  if (!r || r.equipSlot < 0) return false;
+  if (!r || r.equipSlot < 0 || r.equipSlot > 1 || d.group > 5) return false; // solo armas (grupos 0 a 5); lo demás solo si es excelente o joya
   const family = classFamily(world.classId);
   if (!family || !(r.cls & CLASS_MASK[family])) return false;
   if (r.reqLevel > world.level) return false;
   const mine = scoreOf(d.group, d.num, d.level ?? 0, !!d.excellent);
   if (mine <= 0) return false; // sin defensa, daño ni poder (anillos, colgantes, mascotas): solo cuentan si son excelentes
-  const worn = wornIn(r.equipSlot);
-  if (worn.some((w) => !w)) return true; // un slot libre: cualquier equipo que podamos usar mejora
-  return worn.every((w) => mine > scoreOf(w!.group, w!.num, w!.level ?? 0, !!w!.excellent) * 1.05);
+  // El mejor arma que ya tenemos (puesta o en la bolsa): hay que superarla, así la bolsa guarda una sola.
+  let best = 0;
+  for (const it of world.inventory.values()) if (it.group <= 5 && it.slot < 76) best = Math.max(best, scoreOf(it.group, it.num, it.level ?? 0, !!it.excellent));
+  return mine > best * 1.05;
 }
 /** ¿Cabe en la bolsa? (aproximado por casillas: no mira la forma del hueco). Sin lugar solo se levanta el zen. */
-const hasRoom = (d: DropInfo) => { const i = itemInfo(d.group, d.num); return bagRoom() >= i.w * i.h; };
-export const RULES: LootRules = { upgrade: isUpgrade, room: hasRoom };
+/** Casillas que se dejan libres para joyas y excelentes: un arma o un orb solo se levanta si después sigue quedando este lugar. */
+const RESERVE = 8;
+const hasRoom = (d: DropInfo) => {
+  const i = itemInfo(d.group, d.num);
+  const need = i.w * i.h + (d.excellent || isJewel(d) || d.isMoney ? 0 : RESERVE);
+  return bagRoom() >= need;
+};
+/** Un orb que ya está en la bolsa cuenta como sabido: con uno alcanza (se levantaban 24 iguales). */
+const orbInBag = (skill: number) => [...world.inventory.values()].some((it) => it.slot >= 12 && it.group === 12 && ORB_SKILL[it.num] === skill);
+export const RULES: LootRules = { upgrade: isUpgrade, room: hasRoom, skillKnown: (n) => world.skills.has(n) || orbInBag(n) };
 
 // Devuelve true si hizo algo (un paso o el pickup).
 /**
@@ -166,7 +184,9 @@ export async function lootStep(): Promise<boolean> {
   }
   for (const [id, until] of foreignUntil) if (until <= now || !drops.has(id)) foreignUntil.delete(id);
   const mine = [...drops.values()].filter((dr) => !foreignUntil.has(dr.id));
-  const pool = mine.filter((dr) => ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2));
+  // Joyas (incluye el Broken Sword 14/24, de la quest) y excelentes se intentan aunque haya jugadores al lado: el 26/10 dos Jewel of Chaos y un Broken Sword cayeron
+  // en una pila con otros y se dejaron. Si no son nuestros, el server avisa y se reintenta cada FOREIGN_RETRY_MS. Lo demás (zen, armas, orbs) sigue sin pelearse.
+  const pool = mine.filter((dr) => isJewel(dr) || dr.excellent || ![...world.players.values()].some((p) => chebyshev(p.x, p.y, dr.x, dr.y) <= 2));
   const d = lootState.looting ? drops.get(lootState.looting.id)! : pickLoot({ x: world.x, y: world.y }, pool, LOOT_RADIUS, RULES);
   if (!d) return false;
   if (!lootState.looting) {

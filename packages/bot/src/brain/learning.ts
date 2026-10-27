@@ -28,6 +28,7 @@ type LearnState = {
   deathCells: Map<string, number>;
   kills: Map<number, { n: number; sum: number }>;
   group: Group | null;
+  hints?: { map: number; x: number; y: number; expMin: number }[];
   timer?: ReturnType<typeof setInterval>;
 };
 const L: LearnState = ((globalThis as { __learn?: LearnState }).__learn ??= {
@@ -110,6 +111,9 @@ export async function refreshLearned(force = false): Promise<void> {
     const rate = await queryDb<{ map: number; cx: number; cy: number; ticks: number; exp_min: number }>('SELECT map, cx, cy, ticks, exp_min FROM v_cell_rate FORMAT JSONEachRow');
     const dead = await queryDb<{ map: number; cx: number; cy: number; deaths: number }>('SELECT map, cx, cy, deaths FROM v_deaths FORMAT JSONEachRow');
     const value = await queryDb<{ type: number; n: number; exp: number }>('SELECT type, n, exp FROM v_kill_value FORMAT JSONEachRow');
+    // Pistas del usuario (eventos `spot_hint`: zonas que probó a mano, con su exp/h): cuentan como medidas hasta que el bot mida las suyas.
+    const hints = await queryDb<{ map: number; x: number; y: number; exp_h: number }>("SELECT map, x, y, max(num1) AS exp_h FROM events WHERE kind = 'spot_hint' AND x > 0 GROUP BY map, x, y FORMAT JSONEachRow");
+    L.hints = hints.map((h) => ({ map: Number(h.map), x: Number(h.x), y: Number(h.y), expMin: Number(h.exp_h) / 60 }));
     L.cells.clear();
     for (const r of rate) L.cells.set(`${r.map}:${r.cx}:${r.cy}`, { ticks: Number(r.ticks), expMin: Number(r.exp_min) });
     L.deathCells.clear();
@@ -126,3 +130,6 @@ export async function refreshLearned(force = false): Promise<void> {
     L.loading = false;
   }
 }
+
+/** Zonas que el usuario probó a mano (pista): sirven como candidatas medidas mientras el bot no tenga datos propios de esa celda. */
+export const hintCells = (map: number) => (L.hints ?? []).filter((h) => h.map === map);

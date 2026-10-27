@@ -3,13 +3,16 @@
  * tiempo real. Derecha: lo que decide el bot y por qué, una línea por decisión.
  */
 import {
-  Activity, Backpack, ChevronsUp, CircleCheck, Coins, Droplet, Dumbbell, Gauge, Heart, House, Info, ListChecks, MapPin, Pause, Play, Plug, RotateCw, Route,
-  ShieldAlert, Skull, Swords, Terminal, TriangleAlert, TrendingUp, Unplug, X, Zap, Anchor, type LucideIcon,
+  Activity, Backpack, ChevronsUp, CircleCheck, Coins, Droplet, Dumbbell, Gauge, Heart, Info, ListChecks, MapPin, Pause, Play, Plug, RotateCw, Route,
+  MessageSquare, PanelRightClose, PanelRightOpen, ShieldAlert, Skull, Swords, Terminal, TriangleAlert, TrendingUp, Unplug, Users, X, Zap, Anchor, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { NoteKind, PanelState } from "@mubot/protocol";
+import { Chat } from "./Chat";
+import { Inventory } from "./Inventory";
 import { Radar } from "./Radar";
-import { Badge, Bar, Button, Label, Panel, Stat, cn, type Tone } from "./components";
+import { Travel } from "./Travel";
+import { Badge, Bar, Button, Panel, Stat, cn, useOpen, type Tone } from "./components";
 import { useActions, useStation, type Result } from "./station-data";
 
 const fmtExp = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
@@ -70,6 +73,13 @@ function Feed({ g }: { g: PanelState | null }) {
   );
 }
 
+type TabId = "decisiones" | "chat" | "bolsa";
+const TABS: { id: TabId; label: string; Icon: LucideIcon }[] = [
+  { id: "decisiones", label: "Decisiones", Icon: ListChecks },
+  { id: "chat", label: "Chat", Icon: MessageSquare },
+  { id: "bolsa", label: "Bolsa", Icon: Backpack },
+];
+
 const STAT_KEYS = ["str", "agi", "vit", "ene"] as const;
 
 export function App() {
@@ -83,6 +93,11 @@ export function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const [tab, setTab] = useState<TabId>("decisiones");
+  const [rightOpen, setRightOpen] = useOpen("columna-derecha");
+  const [seenChat, setSeenChat] = useState(0);
+  const chatLen = data.game?.chat?.length ?? 0;
+  useEffect(() => { if (tab === "chat") setSeenChat(chatLen); }, [tab, chatLen]);
   const g = data.game;
   const inGame = g != null && g.mode !== "connecting";
   const st = STATUS[data.status] ?? STATUS.off!;
@@ -93,12 +108,15 @@ export function App() {
   const statTotal = stats ? stats.str + stats.agi + stats.vit + stats.ene : 0;
 
   return (
-    <div className="grid h-screen grid-cols-[340px_minmax(0,1fr)_380px] gap-1 bg-canvas p-1 max-[1100px]:h-auto max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_60vh_auto]">
+    <div className={cn("grid h-screen gap-1 bg-canvas p-1 max-[1100px]:h-auto max-[1100px]:grid-cols-1 max-[1100px]:grid-rows-[auto_60vh_auto]", rightOpen ? "grid-cols-[340px_minmax(0,1fr)_380px]" : "grid-cols-[340px_minmax(0,1fr)_44px]")}>
       <aside className="flex min-h-0 flex-col gap-1 overflow-auto">
         <Panel className="flex-row items-center justify-between gap-2.5 py-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">{data.char ?? "Sin personaje"}</h1>
-            <Badge tone={st.tone}>{st.text}</Badge>
+            <div className="flex flex-wrap gap-1">
+              <Badge tone={st.tone}>{st.text}</Badge>
+              {inGame && g && <Badge tone={g.inParty ? "success" : "default"}>{g.inParty ? "En party" : "Sin party"}</Badge>}
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {online && data.status !== "starting" && (
@@ -127,24 +145,19 @@ export function App() {
 
         {inGame && g && (
           <>
-            <Panel>
-              <Label icon={Activity}>Ahora</Label>
+            <Panel id="ahora" title="Ahora" icon={Activity} summary={g.doing}>
               <p className="text-lg">{g.doing}</p>
-              <div>
-                <Button title="Va a Lorencia y queda en pausa" onClick={() => void act.order({ cmd: "town" })}>
-                  <House size={13} />
-                  Ir al pueblo
-                </Button>
-              </div>
+              <Travel onTown={() => void act.order({ cmd: "town" })} />
             </Panel>
 
-            <Panel>
+            <Panel id="nivel" title={`Nivel ${g.char.level}`} icon={TrendingUp} summary={`${fmtExp(g.exp.perMin1)}/min · vida ${Math.round(pct(g.char.hp[0], g.char.hp[1]))} %`}>
               <div className="flex items-baseline justify-between">
-                <strong className="font-semibold tracking-tight">Nivel {g.char.level}</strong>
+                <strong className="sr-only">Nivel {g.char.level}</strong>
                 <span className="font-mono text-sm text-faint">
                   {g.where.mapName} · {g.where.x},{g.where.y}
                 </span>
               </div>
+              <ExpBar g={g} />
               <Bar value={Math.max(0, g.char.hp[0])} max={g.char.hp[1]} tone="danger" label="Vida" icon={Heart} />
               <Bar value={Math.max(0, g.char.mp[0])} max={g.char.mp[1]} tone="info" label="Maná" icon={Droplet} />
               <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-line pt-2">
@@ -154,11 +167,11 @@ export function App() {
                 <Stat label="Sesión" icon={Swords}>{g.session ? `${g.session.kills} kills · ${g.session.deaths} muertes` : "—"}</Stat>
                 <Stat label="Subió" icon={ChevronsUp}>{g.session ? `${g.char.level - g.session.level0} niveles en ${ago(g.session.since, now)}` : "—"}</Stat>
                 <Stat label="Ataque" icon={Zap}>{g.session?.skill ?? "—"}</Stat>
+                <Stat label="Party" icon={Users}>{g.inParty ? "Sí, en party" : "No"}</Stat>
               </dl>
             </Panel>
 
-            <Panel>
-              <Label icon={Dumbbell}>Stats</Label>
+            <Panel id="stats" title="Stats" icon={Dumbbell} summary={stats ? `STR ${stats.str} · AGI ${stats.agi} · VIT ${stats.vit} · ENE ${stats.ene}` : undefined}>
               {stats && (
                 <div className="grid grid-cols-2 gap-1.5">
                   {STAT_KEYS.map((k) => (
@@ -191,10 +204,69 @@ export function App() {
         {inGame ? <Radar state={g} /> : <div className="grid h-full place-items-center text-faint">{online ? "Esperando al personaje…" : "Conectá a Capitan para ver el mapa."}</div>}
       </main>
 
-      <section className="flex min-h-0 flex-col gap-1.5 rounded-lg bg-soft px-4 py-3">
-        <Label icon={ListChecks}>Decisiones</Label>
-        <Feed g={g} />
+      {!rightOpen ? (
+        <button
+          onClick={() => setRightOpen(true)}
+          title="Mostrar decisiones, chat y bolsa"
+          aria-label="Mostrar decisiones, chat y bolsa"
+          className="flex min-h-0 flex-col items-center gap-3 rounded-lg border-0 bg-soft py-3 text-faint hover:text-ink max-[1100px]:h-10"
+        >
+          <PanelRightOpen size={16} aria-hidden />
+          {TABS.map(({ id, Icon }) => <Icon key={id} size={14} aria-hidden />)}
+        </button>
+      ) : (
+      <section className="flex min-h-0 flex-col rounded-lg bg-soft max-[1100px]:h-[70vh]">
+        <div className="flex items-center gap-1 border-b border-line px-2 pt-2" role="tablist">
+          {TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "-mb-px flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium",
+                tab === id ? "border-accent text-ink" : "border-transparent text-faint hover:text-ink",
+              )}
+            >
+              <Icon size={14} aria-hidden /> {label}
+              {id === "chat" && tab !== "chat" && (g?.chat?.length ?? 0) > seenChat && <i className="size-1.5 rounded-full bg-accent" aria-label="mensajes nuevos" />}
+            </button>
+          ))}
+          <button onClick={() => setRightOpen(false)} title="Replegar" aria-label="Replegar la columna" className="mb-1 ml-auto grid size-7 place-items-center rounded-md border-0 bg-transparent text-faint hover:bg-hover hover:text-ink">
+            <PanelRightClose size={15} aria-hidden />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-3">
+          {tab === "decisiones" && <Feed g={g} />}
+          {tab === "chat" && <Chat lines={g?.chat ?? []} disabled={!inGame} onSay={(c) => void act.order(c)} />}
+          {tab === "bolsa" && (inGame && g ? <Inventory g={g} onDrop={(slot) => void act.order({ cmd: "drop", slot })} /> : <p className="text-faint">Entrá al juego para ver la bolsa.</p>)}
+        </div>
       </section>
+      )}
+    </div>
+  );
+}
+
+/** Barra de experiencia del nivel: cuánto lleva, cuánto falta y en cuánto sube al ritmo de los últimos 5 min. */
+function ExpBar({ g }: { g: PanelState }) {
+  const { now, from, to, etaMin, perMin5 } = g.exp;
+  if (now == null || from == null || to == null || to <= from) return null;
+  const done = Math.max(0, Math.min(100, (100 * (now - from)) / (to - from)));
+  const left = Math.max(0, to - now);
+  const eta = etaMin == null ? "—" : etaMin < 1 ? `${Math.round(etaMin * 60)} s` : etaMin < 90 ? `${Math.round(etaMin)} min` : `${(etaMin / 60).toFixed(1)} h`;
+  return (
+    <div className="grid gap-1" title={`Exp ${now.toLocaleString("es")} de ${to.toLocaleString("es")}`}>
+      <div className="relative h-5 overflow-hidden rounded-sm bg-hover">
+        <i className="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_75%,var(--paper))] transition-[width] duration-500" style={{ width: `${done}%` }} />
+        <span className="relative z-10 flex items-center justify-between px-2 font-mono text-sm leading-5">
+          <span>Exp {done.toFixed(1)} %</span>
+          <small className="text-muted">faltan {fmtExp(left)}</small>
+        </span>
+      </div>
+      <small className="flex justify-between font-mono text-xs text-muted">
+        <span>{perMin5 > 0 ? `${fmtExp(perMin5)}/min` : "sin ritmo todavía"}</span>
+        <span>sube en {eta}</span>
+      </small>
     </div>
   );
 }

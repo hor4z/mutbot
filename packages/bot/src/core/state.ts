@@ -60,9 +60,13 @@ export const world = {
   maxMana: 0,
   level: 0,
   levelUpPoints: 0,
+  /** Exp total (la de CharacterInformation al entrar más lo que llega por ExperienceGained) y la que pide el server para el nivel siguiente. */
+  exp: 0,
+  expForNext: 0,
   stats: { str: 0, agi: 0, vit: 0, ene: 0 } as Record<StatName, number>,
   skills: new Map<number, SkillInfo>(), // por número de skill
   inventory: new Map<number, ItemSlot>(), // por slot de inventario
+  pendingDrop: null as number | null, // casilla del ítem que se pidió tirar (la respuesta del server no la trae)
   npcs: new Map<number, ScopedNpc>(), // solo monstruos (isMonsterType)
   hits: new Map<number, HitInfo>(), // vida conocida de los golpeados (ver HitInfo)
   // Otros jugadores en scope (para no competirles el objetivo, ver farming.ts).

@@ -1,11 +1,44 @@
 /** Piezas base del panel con el lenguaje de sherpa (src/widgets.rs): panel `soft` sin borde, etiqueta de sección, badge en pastilla, botón y barra. */
-import type { LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { ChevronDown, type LucideIcon } from "lucide-react";
+import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 
 export const cn = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
-export function Panel({ className, children }: { className?: string; children: ReactNode }) {
-  return <section className={cn("flex flex-col gap-2 rounded-lg bg-soft px-4 pt-3 pb-3.5", className)}>{children}</section>;
+/** Estado plegado/abierto de cada panel, guardado en el navegador (si no hay storage, arranca abierto). */
+export function useOpen(id: string | undefined, initial = true): [boolean, (v: boolean) => void] {
+  const key = id ? `panel:${id}` : null;
+  const [open, setOpen] = useState(() => {
+    try { const v = key ? localStorage.getItem(key) : null; return v == null ? initial : v === "1"; } catch { return initial; }
+  });
+  const set = (v: boolean) => {
+    setOpen(v);
+    try { if (key) localStorage.setItem(key, v ? "1" : "0"); } catch { /* sin storage */ }
+  };
+  return [open, set];
+}
+
+/** Panel. Con `title` se puede replegar y expandir tocando el encabezado; `summary` se ve aun plegado. */
+export function Panel({ className, children, id, title, icon: Icon, summary, defaultOpen = true }: {
+  className?: string; children: ReactNode; id?: string; title?: ReactNode; icon?: LucideIcon; summary?: ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useOpen(id, defaultOpen);
+  if (title == null) return <section className={cn("flex flex-col gap-2 rounded-lg bg-soft px-4 pt-3 pb-3.5", className)}>{children}</section>;
+  return (
+    <section className={cn("flex flex-col gap-2 rounded-lg bg-soft px-4 py-2.5", className)}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left font-mono text-[10.5px] leading-4 font-medium tracking-[0.08em] text-faint uppercase hover:text-ink"
+      >
+        {Icon && <Icon size={12} aria-hidden />}
+        <span>{title}</span>
+        {!open && summary != null && <span className="ml-1 min-w-0 flex-1 truncate font-sans text-xs tracking-normal text-muted normal-case">{summary}</span>}
+        <ChevronDown size={14} className={cn("ml-auto shrink-0 transition-transform", !open && "-rotate-90")} aria-hidden />
+      </button>
+      {open && children}
+    </section>
+  );
 }
 
 /** Etiqueta de sección: mono, mayúsculas, `faint` (sherpa: label). */

@@ -12,7 +12,7 @@
 import { D } from '../core/directivas';
 import { decide } from '../core/journal';
 import { classFamily, planByClass, type StatValues } from './farming';
-import { cellKey, cellStat, deathsIn, learnedReady, measuredMaps, MIN_TICKS, refreshLearned, valueOf } from './learning';
+import { cellKey, cellStat, deathsIn, hintCells, learnedReady, measuredMaps, MIN_TICKS, refreshLearned, valueOf } from './learning';
 import { mapName } from '../core/panel-logic';
 import { canFarmMonster, type Fighter } from './power';
 import { hotspots, isMonster, spawnsOf, type Hotspot } from './spawns';
@@ -56,6 +56,8 @@ export const isAttackable = (n: ScopedNpc) => MONSTER_TYPE_NUMBERS.has(n.type) &
 
 // --- Elegir la zona -----------------------------------------------------------------------------------------------------------------
 const AREA_RADIUS = 12;
+/** Con un punto fijado por el usuario se pelea más pegado a él (el radio de 12 lo dejaba parado en el borde, a 13 o 17 casillas). */
+const FIXED_RADIUS = 7;
 const EMPTY_MS = 45_000;
 const EMPTY_AVOID_MS = 10 * 60_000;
 const DEATH_AVOID_MS = 60 * 60_000;
@@ -116,6 +118,24 @@ export function noteProgress() {
   S.progressAt = Date.now();
 }
 
+/**
+ * La vida bajó de la mitad con 3 o más monstruos encima: si pasa 3 veces en 15 min en la misma celda, esa zona no se aguanta y se evita 30 min
+ * (se elige otra, de este mapa u otro). Un punto fijado por el usuario no se toca: ahí manda él.
+ */
+export function noteDanger() {
+  if (D.zonaMapa > 0 && (D.zonaX > 0 || D.zonaY > 0)) return;
+  const now = Date.now();
+  const key = cellKey(world.map, world.x, world.y);
+  const log = ((globalThis as { __danger?: Map<string, number[]> }).__danger ??= new Map<string, number[]>());
+  const hits = (log.get(key) ?? []).filter((t) => now - t < 15 * 60_000).concat(now);
+  log.set(key, hits);
+  if (hits.length < 3) return;
+  log.delete(key);
+  S.avoid.set(key, now + 30 * 60_000);
+  decide(`No aguanto ${areaName(world.map, here())}: la vida bajó de la mitad 3 veces en 15 min. La evito 30 min y busco otra zona.`, { kind: 'flee', area: key });
+  S.cur = null;
+}
+
 /** La muerte marca la zona para evitarla un buen rato (y se vuelve a decidir). */
 export function noteDeath() {
   S.avoid.set(cellKey(world.map, world.x, world.y), Date.now() + DEATH_AVOID_MS);
@@ -140,6 +160,14 @@ function candidatesIn(map: number, from: Pos): Cand[] {
   const hs: Hotspot[] = hotspots(map, (t) => isMonster(t) && MONSTER_TYPE_NUMBERS.has(t) && canFarm(t)).filter((h) => h.walkable >= 0.7);
   for (const h of hs) add(h.x, h.y, h.density);
   for (const s of S.seen.values()) if (s.map === map && now - s.at < 30 * 60_000) add(s.x, s.y, 0.001);
+  // Pistas del usuario: una zona que probó a mano vale como medida hasta que el bot tenga datos propios de esa celda.
+  for (const h of hintCells(map)) {
+    const k = cellKey(map, h.x, h.y);
+    if ((S.avoid.get(k) ?? 0) > now || deathsIn(map, h.x, h.y) >= 2) continue;
+    const mine = cellStat(map, h.x, h.y);
+    if (mine && mine.ticks >= MIN_TICKS) continue;
+    byCell.set(k, { x: h.x, y: h.y, density: 1, measured: true, expMin: h.expMin, dist: dist({ x: h.x, y: h.y }, from) });
+  }
   return [...byCell.values()];
 }
 
@@ -161,10 +189,62 @@ function pickCell(cands: Cand[]): { c: Cand; why: string } | null {
 
 /** El warp de un mapa más cercano a un punto (al que se llega por nivel). */
 function warpFor(map: number, to: Pos): Warp | null {
+  const forced = D.zonaWarp > 0 && D.zonaMapa === map ? WARPS.find((w) => w.index === D.zonaWarp && w.map === map && w.reqLevel <= world.level) : null;
+  if (forced) return forced;
   const opts = WARPS.filter((w) => w.map === map && w.reqLevel <= world.level);
   if (!opts.length) return null;
-  return [...opts].sort((a, b) => dist(a.arrival ?? to, to) - dist(b.arrival ?? to, to))[0]!;
+  // Un warp sin llegada conocida va al final: no es "el más cercano" por no saber dónde deja.
+  const far = (w: Warp) => (w.arrival ? dist(w.arrival, to) : 1e6);
+  return [...opts].sort((a, b) => far(a) - far(b))[0]!;
 }
+/**
+ * Zona fijada lejos de donde está el personaje, en el mismo mapa: Dungeon 3 (warp 10) deja en el sector oeste (x < 50, y 50 a 125), así que se salta
+ * ahí una sola vez por zona en vez de cruzar el mapa caminando. Después camina (si el warp no dejó cerca, no se repite).
+ */
+const jumped = ((globalThis as { __jumped?: Set<string> }).__jumped ??= new Set<string>());
+const jumpWarps = new WeakSet<Warp>();
+const jumpedAt = ((globalThis as { __jumpedAt?: Map<string, number> }).__jumpedAt ??= new Map<string, number>());
+/** El warp que el usuario pidió desde el panel (directiva zonaWarp) para el mapa fijado, si ya se puede usar. */
+function forcedWarp(): Warp | null {
+  if (D.zonaWarp <= 0 || D.zonaMapa <= 0) return null;
+  return WARPS.find((w) => w.index === D.zonaWarp && w.map === D.zonaMapa && w.reqLevel <= world.level) ?? null;
+}
+function jumpWarp(cur: Pick): Warp | null {
+  const fw = forcedWarp();
+  if (fw && cur.map === fw.map) {
+    // Un warp pedido a mano se usa una vez por pedido (cambiar de warp en el panel lo vuelve a usar), aunque el bot ya esté en ese mapa.
+    const key = `${cur.map}:${cur.anchor.x},${cur.anchor.y}:w${fw.index}`;
+    // Se vuelve a usar cada vez que se lo pide estando lejos de donde deja (el panel lo pide cuantas veces haga falta); 90 s de espera contra un bucle.
+    if (Date.now() - (jumpedAt.get(key) ?? 0) < 90_000 || (fw.arrival && dist(here(), fw.arrival) < 25)) return null;
+    const j = { ...fw };
+    jumpWarps.add(j);
+    jumpKey.v = key;
+    return j;
+  }
+  if (D.zonaMapa === cur.map && cur.map !== 1) {
+    // Zona fijada en otro mapa con warps de llegada conocida (Devias 3, 4…): si uno deja mucho más cerca de la zona que donde estoy, salto una vez.
+    const key = `${cur.map}:${cur.anchor.x},${cur.anchor.y}`;
+    const w = warpFor(cur.map, cur.anchor);
+    // Con un warp pedido a mano (zonaWarp) se usa una vez aunque no se sepa dónde deja: se mide al llegar.
+    const forced = D.zonaWarp > 0 && w?.index === D.zonaWarp;
+    if (jumped.has(key) || !w || (!forced && (!w.arrival || dist(here(), cur.anchor) - dist(w.arrival, cur.anchor) < 70))) return null;
+    const j = { ...w };
+    jumpWarps.add(j);
+    jumpKey.v = key;
+    return j;
+  }
+  if (D.zonaMapa !== cur.map || cur.map !== 1 || cur.anchor.x >= 50 || cur.anchor.y < 50 || cur.anchor.y > 125) return null;
+  const key = `${cur.map}:${cur.anchor.x},${cur.anchor.y}`;
+  if (jumped.has(key) || dist(here(), cur.anchor) < 70) return null;
+  const w = WARPS.find((x) => x.index === 10);
+  if (!w || w.reqLevel > world.level) return null;
+  const j = { ...w };
+  jumpWarps.add(j);
+  jumpKey.v = key;
+  return j;
+}
+const jumpKey = { v: '' };
+const lastForced = ((globalThis as { __lastForced?: { v: number } }).__lastForced ??= { v: 0 });
 /** Un "warp" sin índice: el mismo mapa (travelTo no lo usa, solo camina). */
 const inMap = (map: number): Warp => ({ index: -1, name: mapName(map), reqLevel: 0, map });
 /** El warp para volver al área elegida (lo usa el loop para salir de una traba): null si no hay área o no hay warp a su mapa. */
@@ -231,6 +311,28 @@ function announce(p: Place, why: string, kind: 'spot' | 'travel' = 'spot') {
   decide(`Farmeo en ${p.name} (nivel ${world.level}): ${why}.`, { kind, area: p.name, map: p.warp.map });
 }
 
+/**
+ * Ritmo bajo sostenido: si en RATE_WINDOW_MS la exp real (con huidas y caminatas incluidas) fue menos de RATE_MIN_FRAC de lo que rindió la mejor zona
+ * medida, la celda no sirve aunque haya algún monstruo (una hora en una celda casi vacía rindió 70k/min contra 1,4M en otra). Un punto marcado a mano no se deja.
+ */
+const RATE_WINDOW_MS = 8 * 60_000;
+const RATE_MIN_FRAC = 0.25;
+const RATE_AVOID_MS = 30 * 60_000;
+const rate = ((globalThis as { __rate?: { key: string; at: number; exp: number } }).__rate ??= { key: '', at: 0, exp: 0 });
+function checkRate(pick: Pick, now: number) {
+  if (world.map !== pick.map || dist(here(), pick.anchor) > AREA_RADIUS + 10) return;
+  const key = cellKey(pick.map, pick.anchor.x, pick.anchor.y);
+  if (rate.key !== key || world.exp < rate.exp) { rate.key = key; rate.at = now; rate.exp = world.exp; return; }
+  if (now - rate.at < RATE_WINDOW_MS) return;
+  const perMin = ((world.exp - rate.exp) / (now - rate.at)) * 60_000;
+  const best = measuredMaps()[0]?.expMin ?? 0;
+  rate.at = now; rate.exp = world.exp;
+  if (best <= 0 || perMin >= best * RATE_MIN_FRAC) return;
+  S.avoid.set(key, now + RATE_AVOID_MS);
+  S.cur = null;
+  decide(`${areaName(pick.map, pick.anchor)} rinde ${Math.round(perMin / 1000)}k exp/min en los últimos ${RATE_WINDOW_MS / 60_000} min contra ${Math.round(best / 1000)}k de la mejor zona: la dejo ${RATE_AVOID_MS / 60_000} min y busco otra.`, { kind: 'spot', slow: true });
+}
+
 /** ¿Hay algo atacable en el área, estando en ella? Cuenta el tiempo que no (EMPTY_MS: se marca como vacía). */
 function checkEmpty(pick: Pick) {
   if (world.map !== pick.map || dist(here(), pick.anchor) > AREA_RADIUS) { S.emptySince = 0; return; }
@@ -271,7 +373,27 @@ function decidePlace(): Place | null {
   if (!learnedReady()) return null;
   noteSeen();
   const now = Date.now();
+  // Zona fijada a mano (directivas zonaMapa/zonaX/zonaY): manda sobre lo aprendido hasta que se ponga zonaMapa en 0.
+  // Con zonaX y zonaY en 0 se fija solo el mapa: dentro de él el bot elige la mejor celda (la que más rinde o la más poblada).
+  const fw = forcedWarp();
+  const landing = fw && D.zonaX === 0 && D.zonaY === 0 ? fw.arrival : undefined; // warp pedido con llegada conocida: se farmea donde deja
+  const mapLocked = D.zonaMapa > 0 && D.zonaX === 0 && D.zonaY === 0;
+  if (mapLocked) {
+    S.homeMap = D.zonaMapa;
+    if (S.cur && S.cur.map !== D.zonaMapa) S.cur = null;
+    if (lastForced.v !== (fw?.index ?? 0)) { lastForced.v = fw?.index ?? 0; S.cur = null; } // otro warp pedido: se vuelve a elegir celda cerca de donde deja
+    S.progressAt = now;
+  } else if (D.zonaMapa > 0) {
+    const anchor = { x: D.zonaX, y: D.zonaY };
+    if (!S.cur || S.cur.map !== D.zonaMapa || S.cur.anchor.x !== anchor.x || S.cur.anchor.y !== anchor.y) {
+      S.cur = { map: D.zonaMapa, anchor, why: `zona fijada por vos en ${areaName(D.zonaMapa, anchor)}`, at: now };
+      S.homeMap = D.zonaMapa;
+    }
+    S.cur.at = now;
+    S.progressAt = now;
+  }
   if (S.cur) checkEmpty(S.cur);
+  if (S.cur && !(D.zonaMapa > 0 && (D.zonaX > 0 || D.zonaY > 0))) checkRate(S.cur, now);
   if (S.cur && now - S.progressAt > NO_PROGRESS_MS) giveUpArea(S.cur, now);
   if (S.cur && now - S.cur.at > REDECIDE_MS) S.cur = null; // un cambio de zona cada tanto, para seguir midiendo y probando
   if (!S.cur) {
@@ -280,13 +402,16 @@ function decidePlace(): Place | null {
     // Reaparece en el pueblo tras morir: se decide sobre el mapa donde farmeaba, no sobre el pueblo.
     let map = S.homeMap;
     let prefix = '';
-    const canMove = now - S.lastRelocateAt > RELOCATE_COOLDOWN_MS;
+    const canMove = !mapLocked && now - S.lastRelocateAt > RELOCATE_COOLDOWN_MS;
     if (canMove) {
       const b = betterMap(map);
       if (b) { S.lastRelocateAt = now; S.homeMap = map = b.map; prefix = `cambio de mapa: ${b.why}; `; }
     }
     const from = (m: number) => (m === world.map ? here() : (WARPS.find((w) => w.map === m)?.arrival ?? here()));
-    let pick = pickCell(candidatesIn(map, from(map)));
+    // Con un warp pedido a mano se farmea cerca de donde deja (hasta 45 tiles), pero en la mejor celda de ahí, no en la de la llegada.
+    const all = candidatesIn(map, from(map));
+    const nearLanding = landing ? all.filter((c) => dist(c, landing) <= 45) : [];
+    let pick = pickCell(nearLanding.length ? nearLanding : all);
     if (!pick && canMove) {
       const f = fallbackMap(map);
       if (f) {
@@ -302,8 +427,8 @@ function decidePlace(): Place | null {
   }
   if (!S.cur) return null;
   const place: Place = {
-    warp: S.cur.map === world.map ? inMap(S.cur.map) : (warpFor(S.cur.map, S.cur.anchor) ?? inMap(S.cur.map)),
-    anchor: S.cur.anchor, radius: AREA_RADIUS, name: areaName(S.cur.map, S.cur.anchor),
+    warp: S.cur.map === world.map ? (jumpWarp(S.cur) ?? inMap(S.cur.map)) : (warpFor(S.cur.map, S.cur.anchor) ?? inMap(S.cur.map)),
+    anchor: S.cur.anchor, radius: D.zonaMapa > 0 && (D.zonaX > 0 || D.zonaY > 0) ? FIXED_RADIUS : AREA_RADIUS, name: areaName(S.cur.map, S.cur.anchor),
   };
   announce(place, S.cur.why, S.cur.map === world.map ? 'spot' : 'travel');
   return place;
@@ -319,14 +444,17 @@ export { valueOf as targetValue } from './learning';
  * true = viajó o esperó (el tick ya está usado).
  */
 export async function travelTo(place: Place): Promise<boolean> {
-  if (world.map === place.warp.map || place.warp.index < 0) return false;
+  if ((world.map === place.warp.map && !jumpWarps.has(place.warp)) || place.warp.index < 0) return false;
   if (Date.now() - bot.lastWarpAt < WARP_COOLDOWN_MS) {
     bot.doing = `esperando para ir a ${place.name}`;
     return true;
   }
   bot.doing = `viajando a ${place.name} (nivel ${world.level})`;
   decide(`Viajo a ${place.name} por el warp ${place.warp.name}.`, { kind: 'travel', warp: place.warp.index, map: place.warp.map });
+  if (jumpWarps.has(place.warp)) { jumped.add(jumpKey.v); jumpedAt.set(jumpKey.v, Date.now()); }
   await warpAndWait(place.warp);
+  const known = WARPS.find((x) => x.index === place.warp.index);
+  if (known && !known.arrival && world.map === known.map) { known.arrival = { x: world.x, y: world.y }; log(`Aprendí dónde deja ${known.name}: ${world.x}, ${world.y}.`); }
   return true;
 }
 

@@ -4,6 +4,8 @@
  * quien llama elige qué y cuándo (a ritmo humano, ver config.ts).
  */
 import { sendToGS } from './connection';
+import { buildPartyInvite } from './protocol097';
+import { isWalkable } from './terrain';
 import { world } from './state';
 import { DIR_DELTA, log } from './util';
 
@@ -84,6 +86,19 @@ export function sendEcho() {
 
 // Menú de warp (C1 8E/02): índice de la lista de movimiento del cliente
 // (Lorencia = 2). El server valida nivel y zen.
+/** Tirar al suelo el ítem de una casilla de la bolsa, en la posición actual: C1 07 23 x y casilla. */
+export function dropItem(slot: number) {
+  // El cliente real tira en la casilla de al lado, no encima: se busca una vecina por donde se pueda caminar.
+  const near = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]].map(([dx, dy]) => [world.x + dx!, world.y + dy!] as const).find(([x, y]) => isWalkable(world.map, x, y));
+  const [x, y] = near ?? [world.x, world.y];
+  sendToGS(rawPacket([0xc1, 0x07, 0x23, x, y, slot]));
+}
+
+/** Pide party al jugador con ese id (no espera la respuesta: si acepta llega PartyList). */
+export function inviteToParty(id: number) {
+  sendToGS(new DataView(buildPartyInvite(id).buffer));
+}
+
 export function warpTo(warpIndex: number) {
   sendToGS(rawPacket([0xc1, 0x0a, 0x8e, 0x02, 0, 0, 0, 0, warpIndex, warpIndex >> 8]));
   log(`Warp al índice ${warpIndex}`);

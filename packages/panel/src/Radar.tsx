@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Crosshair, LocateFixed, Map as MapIcon, Maximize, Minimize, Minus, Plus, X } from "lucide-react";
+import { Copy, Crosshair, Flag, LocateFixed, Map as MapIcon, Maximize, Minimize, Minus, Plus, X } from "lucide-react";
 import type { PanelState } from "@mubot/protocol";
 import { cheb } from "./hud-logic";
 import { counts, css, LAYER_META, loadLayers, saveLayers, type Info, type LayerKey, type Layers } from "./radar-model";
@@ -34,6 +34,15 @@ export function Radar({ state }: { state: PanelState | null }) {
   const [tiles, setTiles] = useState(60);
   const [fs, setFs] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [zoneMsg, setZoneMsg] = useState<string | null>(null);
+  /** Le marca al bot dónde farmear (directivas zonaMapa/zonaX/zonaY): se queda ahí hasta que se suelte. */
+  const setZone = useCallback(async (map: number, x: number, y: number) => {
+    try {
+      const r = await fetch("/api/directivas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ set: { zonaMapa: map, zonaX: x, zonaY: y, zonaWarp: 0 } }) });
+      setZoneMsg(r.ok ? (map ? `Listo: va a farmear en ${x}, ${y}` : "Listo: vuelve a elegir solo") : "No se pudo guardar");
+    } catch { setZoneMsg("No se pudo guardar"); }
+    setTimeout(() => setZoneMsg(null), 3500);
+  }, []);
   const [fogV, setFogV] = useState(0);
   const discovered = useRef(new Map<number, Uint8Array>());
   const tilesRef = useRef(60);
@@ -103,6 +112,19 @@ export function Radar({ state }: { state: PanelState | null }) {
   const n = useMemo(() => counts(state), [state]);
   const toggle = (k: LayerKey) => setLayers((l) => ({ ...l, [k]: !l[k] }));
   const me = state?.where;
+  // Monstruos a la vista por tipo: cuántos hay, a cuántos tiles el más cercano y cuánta exp vale cada uno (lo medido).
+  const byType = useMemo(() => {
+    const m = new Map<string, { name: string; n: number; near: number; value: number }>();
+    for (const q of state?.entities?.monsters ?? []) {
+      const d = state ? Math.max(Math.abs(q.x - state.where.x), Math.abs(q.y - state.where.y)) : 0;
+      const e = m.get(q.name) ?? { name: q.name, n: 0, near: 99, value: q.value };
+      e.n++; e.near = Math.min(e.near, d);
+      m.set(q.name, e);
+    }
+    return [...m.values()].sort((a, b) => b.n - a.n);
+  }, [state]);
+  const total = byType.reduce((a, t) => a + t.n, 0);
+  const close = (state?.entities?.monsters ?? []).filter((q) => state && Math.max(Math.abs(q.x - state.where.x), Math.abs(q.y - state.where.y)) <= 10).length;
   const stageW = stage.current?.clientWidth ?? 600;
   const scaleTiles = nice(Math.max(1, tiles / 5));
   const scalePx = Math.round((scaleTiles / Math.max(1, tiles)) * stageW);
@@ -167,6 +189,28 @@ export function Radar({ state }: { state: PanelState | null }) {
           <small className="text-2xs text-white/80">{scaleTiles} tiles</small>
         </div>
 
+        {state && (
+          <div className="pointer-events-none absolute top-14 left-2.5 z-[3] grid min-w-44 gap-1 rounded-lg border border-strong bg-paper/80 px-2.5 py-2 text-xs backdrop-blur-sm" aria-label="Monstruos a la vista">
+            <div className="flex items-baseline justify-between gap-3 font-mono text-[10.5px] tracking-[0.08em] text-faint uppercase">
+              <span>Monstruos</span>
+              <b className="font-medium text-ink">{total} · {close} a menos de 10</b>
+            </div>
+            {byType.slice(0, 8).map((t) => (
+              <div key={t.name} className="flex items-baseline justify-between gap-3">
+                <span className="truncate">{t.name}</span>
+                <span className="font-mono text-muted">
+                  <b className="font-medium text-ink">{t.n}</b> · {t.near}t{t.value > 0 ? ` · ${t.value >= 1000 ? `${Math.round(t.value / 1000)}k` : Math.round(t.value)} exp` : ""}
+                </span>
+              </div>
+            ))}
+            {!byType.length && <span className="text-faint">Ninguno a la vista</span>}
+            <div className="flex justify-between border-t border-line pt-1 text-faint">
+              <span>Jugadores {n.players}</span>
+              <span>Drops {n.loot}</span>
+            </div>
+          </div>
+        )}
+
         <div className="absolute top-2.5 right-2.5 z-[4] grid gap-1 rounded-xl border border-strong bg-paper/80 p-1 backdrop-blur-sm" role="toolbar" aria-label="Controles del mapa">
           <button className={tool} aria-pressed={follow} onClick={() => setFollow(!follow)} title="Seguir al personaje (F)" aria-label="Seguir al personaje">
             <LocateFixed size={15} />
@@ -194,6 +238,7 @@ export function Radar({ state }: { state: PanelState | null }) {
             {me && hover.i.kind !== "self" && hover.i.kind !== "tile" && <small>{cheb(hover.i.x, hover.i.y, me.x, me.y)} tiles de vos</small>}
           </div>
         )}
+        {zoneMsg && <div className={`${card} top-2.5 right-14 max-w-60`} role="status">{zoneMsg}</div>}
         {pick && me && (
           <div className={`${card} max-w-60 gap-1 p-3`} style={clampPos(pick, 230, 150)} role="dialog" aria-label="Detalle del punto">
             <button className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-sm border-0 bg-transparent text-muted hover:bg-hover hover:text-ink" onClick={() => setPick(null)} aria-label="Cerrar">
@@ -232,6 +277,9 @@ export function Radar({ state }: { state: PanelState | null }) {
                 }}
               >
                 <Crosshair size={12} /> Centrar acá
+              </Button>
+              <Button variant="primary" onClick={() => { void setZone(me.map, pick.i.x, pick.i.y); setPick(null); }}>
+                <Flag size={12} /> Farmear acá
               </Button>
             </div>
           </div>

@@ -7,6 +7,7 @@ import { ATTACK_SKILL_POOL, HEAL_AT_PCT } from '../core/config';
 import { sendToGS } from '../core/connection';
 import { sendAreaSkill, sendTargetedSkill } from '../core/actions';
 import { world, type ItemSlot, type SkillInfo } from '../core/state';
+import { decide } from '../core/journal';
 import { directionTowards, log } from '../core/util';
 import { onGameData, skills as skillsData } from '../core/gamedata';
 
@@ -42,6 +43,31 @@ function useHealingPotion(): boolean {
   return true;
 }
 
+// Maná: sin él los skills de área no salen y el bot pega a mano (mucho menos exp). Se toma una poción azul (14/4 a 14/6) cuando queda poco.
+const MANA_POTION_NUMS = new Set([4, 5, 6]);
+const MANA_LOW_PCT = 25;
+let lastManaPotionAt = 0;
+let noManaPotionWarned = false;
+export function checkMana(): boolean {
+  if (world.maxMana <= 0 || (world.mana / world.maxMana) * 100 > MANA_LOW_PCT || Date.now() - lastManaPotionAt < POTION_COOLDOWN_MS) return false;
+  let best: ItemSlot | undefined;
+  for (const it of world.inventory.values()) {
+    if (it.group !== POTION_GROUP || !MANA_POTION_NUMS.has(it.num)) continue;
+    if (!best || it.num > best.num) best = it;
+  }
+  if (!best) {
+    if (!noManaPotionWarned) { log('Sin maná y sin pociones azules: pego a mano.'); noManaPotionWarned = true; }
+    return false;
+  }
+  noManaPotionWarned = false;
+  const p = ConsumeItemRequest075Packet.createPacket();
+  p.ItemSlot = best.slot;
+  p.TargetSlot = 0xff;
+  sendToGS(p.buffer);
+  lastManaPotionAt = Date.now();
+  return true;
+}
+
 // Devuelve true SOLO si tomó una poción. Si está bajo pero no tiene, devuelve
 // false para que el loop siga con el resto de la prioridades en vez de
 // quedarse girando en un busy-loop.
@@ -54,7 +80,9 @@ export function checkSurvival(): boolean {
     noPotionWarned = false;
     return true;
   }
-  if (!noPotionWarned) {
+  // Solo avisa si de verdad no hay pociones: durante la espera entre una y otra (1,5 s) useHealingPotion también devuelve false.
+  const has = [...world.inventory.values()].some((it) => it.group === POTION_GROUP && HEAL_POTION_NUMS.has(it.num));
+  if (!has && !noPotionWarned) {
     log(`HP ${world.hp}/${world.maxHp} (${pct.toFixed(0)}%) bajo y NO hay pocion de curacion en el inventario.`);
     noPotionWarned = true;
   }
@@ -125,6 +153,29 @@ export function spotIsTight(monsters: readonly { x: number; y: number }[], me: {
   return decay >= 0.8 * evil;
 }
 
+// --- Prueba de ataques ------------------------------------------------------
+// Para encontrar el mejor ataque se rota entre los que el personaje conoce y alcanza (Twisting Slash 41, Rageful Blow 42, Death Stab 43, Cyclone 22):
+// cada bloque de TRIAL_BLOCK_MS usa uno, durante TRIAL_TOTAL_MS desde que arranca el bot, y cada cambio se anota con decide(). La exp por minuto de
+// cada skill queda en `ticks` (vista v_skill_rate) para compararlos en la misma zona. Pasado ese rato vuelve al orden de ATTACK_SKILL_POOL.
+const TRIAL_SKILLS = [41, 42, 43, 22];
+const TRIAL_BLOCK_MS = 6 * 60_000;
+const TRIAL_TOTAL_MS = 48 * 60_000;
+const trialState = ((globalThis as { __skillTrial?: { start: number; last: number } }).__skillTrial ??= { start: Date.now(), last: -1 });
+function trialSkill(): SkillInfo | undefined {
+  const t = Date.now() - trialState.start;
+  if (t > TRIAL_TOTAL_MS || isMage()) return undefined;
+  const known = TRIAL_SKILLS.filter((n) => world.skills.has(n) && skillLevelOk(n));
+  // Con menos de tres skills no hay nada que probar (Twisting Slash ya rindió más que Cyclone): rotar solo le quita exp.
+  if (known.length < 3) return undefined;
+  const block = Math.floor(t / TRIAL_BLOCK_MS);
+  const num = known[block % known.length]!;
+  if (trialState.last !== block) {
+    trialState.last = block;
+    decide(`Prueba de ataques: ahora uso ${SKILL_TABLE.get(num)?.name ?? num} durante ${TRIAL_BLOCK_MS / 60_000} min (conozco ${known.map((n) => SKILL_TABLE.get(n)?.name ?? n).join(', ')}).`, { kind: 'system', skill: num });
+  }
+  return world.skills.get(num);
+}
+
 /** `prefer`: skill a usar si se lo conoce. Por defecto, para el mago: Decay con competencia o compañero. */
 export function pickAttackSkill(prefer: number | undefined = isMage() && mageNeedsPower() ? 38 : undefined): SkillInfo | undefined {
   if (world.mana <= 0) return undefined;
@@ -132,6 +183,8 @@ export function pickAttackSkill(prefer: number | undefined = isMage() && mageNee
   const affordable = (num: number) => world.mana >= (SKILL_TABLE.get(num)?.mana ?? 0);
   const preferred = prefer != null ? world.skills.get(prefer) : undefined;
   if (preferred && affordable(preferred.number)) return preferred;
+  const trial = trialSkill();
+  if (trial && affordable(trial.number)) return trial;
   // El nivel viene en 0 para skills normales, así que no se filtra por nivel.
   for (const num of isMage() ? MAGE_ATTACK_SKILLS : ATTACK_SKILL_POOL) {
     const known = world.skills.get(num);

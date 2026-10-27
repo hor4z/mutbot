@@ -1,11 +1,13 @@
 -- Conocimiento del Slow: respuestas fijas sobre los datos (learning.ts las lee; también sirven para mirar a mano).
 -- exp/min = promedio de exp_min_1m de los ticks farmeando (5 s cada uno: 12 ticks = 1 min medido).
 
--- Cuánto rinde cada zona (celda de 16×16 tiles, últimos 14 días): exp/min de los ticks farmeando. Es lo que decide dónde farmear.
+-- Cuánto rinde cada zona (celda de 16×16 tiles): exp/min de los ticks farmeando con monstruos cerca, solo con el nivel actual (hasta 5 niveles menos):
+-- la exp por kill baja al subir de nivel, y los ticks de descanso en el pueblo arrastran la exp de la pelea anterior. Es lo que decide dónde farmear.
 CREATE OR REPLACE VIEW v_cell_rate AS
 SELECT map, intDiv(x, 16) AS cx, intDiv(y, 16) AS cy, count() AS ticks, round(avg(exp_min_1m)) AS exp_min,
        round(quantileExact(0.5)(exp_min_1m)) AS exp_min_p50, uniq(session) AS sessions, max(ts) AS last
 FROM ticks WHERE mode = 'farm' AND phase = 'fight' AND ts > now() - INTERVAL 14 DAY
+  AND monsters_near > 0 AND level >= (SELECT max(level) FROM ticks WHERE ts > now() - INTERVAL 1 DAY) - 5
 GROUP BY map, cx, cy;
 
 -- Muertes por zona (últimos 14 días) y quién mata.
