@@ -11,3 +11,4 @@ panel/dist/
 node_modules
 .dev.vars
 .wrangler/
+packages/extension/dist/

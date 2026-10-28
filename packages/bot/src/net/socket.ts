@@ -34,17 +34,15 @@ const INFO_LOG = process.env.MUBOT_PACKET_LOG === '1'; // una línea por paquete
 const DUMP_CODES = new Set((process.env.DUMP_CODES ?? '').split(',').filter(Boolean).map((h) => parseInt(h, 16)));
 const dumped = new Map<number, number>();
 
-export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
-  const LOG_PREFIX = `[${tcpIP}:${tcpPort}]`;
-
+/**
+ * Corta un stream de bytes del server en packets MU, descifra los C3/C4 y los emite por nombre en el EventBus. `push` recibe los bytes tal cual
+ * llegan (un frame puede traer varios packets o la mitad de uno). Lo usan el socket del bot y el modo asistente (attach.ts).
+ */
+export function createPacketReader(LOG_PREFIX: string) {
   const decryptor = new SimpleModulusDecryptor();
   decryptor.decryptionKeys = SimpleModulusDecryptor.DefaultClientKey;
 
-  const socket = new WebSocket(`${wsAddress}?host=${tcpIP}&port=${tcpPort}`);
-  socket.binaryType = 'arraybuffer';
-
   let bytes = new Uint8Array(0);
-
   function removePacketAndGoNext(length: number) {
     bytes = bytes.slice(length);
     if (bytes.byteLength > 0) handlePacketsQueue();
@@ -112,11 +110,25 @@ export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
     removePacketAndGoNext(length);
   }
 
+  return {
+    push(newBytes: Uint8Array) {
+      bytes = new Uint8Array([...bytes, ...newBytes]);
+      handlePacketsQueue();
+    },
+  };
+}
+
+export function createSocket({ wsAddress, tcpIP, tcpPort }: Options) {
+  const LOG_PREFIX = `[${tcpIP}:${tcpPort}]`;
+  const reader = createPacketReader(LOG_PREFIX);
+
+  const socket = new WebSocket(`${wsAddress}?host=${tcpIP}&port=${tcpPort}`);
+  socket.binaryType = 'arraybuffer';
+
   socket.addEventListener('message', event => {
     const newBytes = new Uint8Array(event.data as ArrayBuffer);
     DEBUG_LOG && console.log(`${LOG_PREFIX}received ${newBytes.length} bytes:`, newBytes);
-    bytes = new Uint8Array([...bytes, ...newBytes]);
-    handlePacketsQueue();
+    reader.push(newBytes);
   });
 
   socket.addEventListener('open', event => {

@@ -35,11 +35,10 @@ const tsIn = (dir: string) => readdirSync(dir).filter((f) => f.endsWith('.ts')).
 const brainFiles = () => tsIn(BRAIN_DIR);
 const signature = () => brainFiles().map((f) => (existsSync(f) ? statSync(f).mtimeMs : 0)).join('|');
 
-/** Compila el cerebro a un archivo propio y lo carga. Tira si no compila o no carga. */
-async function build(): Promise<{ mod: Brain; id: string }> {
-  const id = `${Date.now().toString(36)}-${++seq}`;
+/** Compila un punto de entrada del cerebro a un solo archivo de texto. Tira si no compila. */
+async function bundle(entry: string): Promise<string> {
   const result = await Bun.build({
-    entrypoints: [join(BRAIN_DIR, 'brain.ts')],
+    entrypoints: [join(BRAIN_DIR, entry)],
     target: 'bun',
     format: 'esm',
     packages: 'external', // los paquetes (node_modules) no se copian al bundle: una sola instancia, la del proceso
@@ -58,9 +57,16 @@ async function build(): Promise<{ mod: Brain; id: string }> {
     }],
   });
   if (!result.success) throw new Error(result.logs.map((l) => l.message).join('; ').slice(0, 400) || 'no compiló');
+  return await result.outputs[0]!.text();
+}
+
+/** Compila el cerebro a un archivo propio y lo carga. Tira si no compila o no carga. */
+async function build(): Promise<{ mod: Brain; id: string }> {
+  const id = `${Date.now().toString(36)}-${++seq}`;
+  const text = await bundle('brain.ts');
   mkdirSync(OUT_DIR, { recursive: true });
   const file = join(OUT_DIR, `brain-${id}.mjs`);
-  writeFileSync(file, await result.outputs[0]!.text());
+  writeFileSync(file, text);
   try {
     return { mod: (await import(file)) as Brain, id };
   } finally {
@@ -119,4 +125,66 @@ export function watchBrain() {
 /** Los archivos del núcleo (`src/core/` y `src/station/`): solo se vigilan para avisar. */
 function coreSignature(): string {
   return [...tsIn(CORE_DIR), ...tsIn(join(SRC, 'station'))].map((f) => statSync(f).mtimeMs).join('|');
+}
+
+/**
+ * Otro punto de entrada recargable con las mismas reglas (el asistente de la extensión: `brain/assist.ts`). `take` da el módulo con el que arranca el
+ * loop, `revert` vuelve al anterior si el nuevo falló al correr y `watch` avisa (`onChange`) cuando hay uno nuevo listo.
+ */
+export function hotEntry<M>(entry: string, name: string) {
+  let cur: { mod: M; id: string } | null = null;
+  let nxt: { mod: M; id: string } | null = null;
+  let prev: { mod: M; id: string } | null = null;
+  let n = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  async function load(): Promise<{ mod: M; id: string }> {
+    const id = `${Date.now().toString(36)}-${++n}`;
+    const text = await bundle(entry);
+    mkdirSync(OUT_DIR, { recursive: true });
+    const file = join(OUT_DIR, `${name}-${id}.mjs`);
+    writeFileSync(file, text);
+    try {
+      return { mod: (await import(file)) as M, id };
+    } finally {
+      for (const f of readdirSync(OUT_DIR)) if (f.startsWith(`${name}-`) && f !== `${name}-${id}.mjs` && f !== `${name}-${cur?.id}.mjs`) try { unlinkSync(join(OUT_DIR, f)); } catch { /* en uso */ }
+    }
+  }
+
+  return {
+    async take(): Promise<M> {
+      if (nxt) { prev = cur; cur = nxt; nxt = null; return cur.mod; }
+      if (!cur) cur = await load();
+      return cur.mod;
+    },
+    revert(): M | null {
+      if (!prev) return null;
+      cur = prev;
+      prev = null;
+      return cur.mod;
+    },
+    watch(onChange: () => void) {
+      if (timer) return;
+      let seen = signature();
+      let busy = false;
+      timer = setInterval(async () => {
+        if (busy) return;
+        const sig = signature();
+        if (sig === seen) return;
+        seen = sig;
+        busy = true;
+        try {
+          const b = await load();
+          nxt = b;
+          log(`Cambió el cerebro del asistente: lo recargo sin cortar el juego (${b.id}).`);
+          onChange();
+        } catch (e) {
+          log(`El cerebro nuevo del asistente no compila o no carga (${(e as Error).message}); sigo con el anterior.`);
+        } finally {
+          busy = false;
+        }
+      }, POLL_MS);
+      timer.unref?.();
+    },
+  };
 }

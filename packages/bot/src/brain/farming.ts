@@ -136,9 +136,12 @@ export function capStats(plan: Partial<StatValues>, cur: StatValues, cap = STAT_
 // mejoran el equipo que ya tenemos. Todo lo demás se deja en el piso: pociones, cajas, armas y armaduras comunes, anillos, etc.
 export type DropInfo = { group: number; num: number; isMoney?: boolean; excellent?: boolean; level?: number };
 
-/** Joyas: Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31 (los Cristales), Chaos 12/15 y el Broken Sword 14/24 (ítem de la quest de Sebina, lo pidió el usuario). */
+/** Joyas y piezas de alas: Bless 14/13, Soul 14/14, Life 14/16, Creation 14/22, Guardian 14/31 (los Cristales), Chaos 12/15 y el Broken Sword 14/24 (ítem de la quest de Sebina, lo pidió el usuario). */
 const JEWELS_GROUP_14 = new Set([13, 14, 16, 22, 24, 31]);
-export const isJewel = (d: DropInfo) => (d.group === 14 && JEWELS_GROUP_14.has(d.num)) || (d.group === 12 && d.num === 15);
+/** Piezas de las alas: Loch's Feather 13/14 (alas de nivel 2), Flame of Condor 13/52 y Feather of Condor 13/53 (alas de nivel 3); Horn of Dinorant 13/3 (montura, el usuario pidió priorizarlo igual). Valen como una joya: prioridad y sin reserva de casillas. */
+const WING_PARTS_GROUP_13 = new Set([3, 14, 52, 53]);
+export const isJewel = (d: DropInfo) =>
+  (d.group === 14 && JEWELS_GROUP_14.has(d.num)) || (d.group === 12 && d.num === 15) || (d.group === 13 && WING_PARTS_GROUP_13.has(d.num));
 
 /** Orbs de skill del Dark Knight: Twisting Slash 12/7, Rageful Blow 12/12, Impale 12/13, Greater Fortitude 12/14, Fire Slash 12/16, Death Stab 12/19. */
 const DK_ORBS = new Set([7, 12, 13, 14, 16, 19]);
