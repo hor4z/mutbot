@@ -5,7 +5,7 @@
  * terminan limpio y arrancan los nuevos, sin cortar el juego.
  */
 import { ATTACK_PACE_MS, HEAL_AT_PCT, SKILL_PACE_MS } from '../core/config';
-import { sendHit, sendPickup } from '../core/actions';
+import { sendHit, sendPickup, sendTargetedSkill } from '../core/actions';
 import { drops } from '../core/loot-state';
 import { itemInfo } from '../core/panel-logic';
 import { assist, bot, world } from '../core/state';
@@ -31,11 +31,13 @@ function drinkIfNeeded(): boolean {
   const now = Date.now();
   if (world.maxHp > 0 && (world.hp / world.maxHp) * 100 <= HEAL_AT_PCT && now - lastHealAt >= POTION_GAP_MS) {
     lastHealAt = now;
+    log(`Asistente: vida ${world.hp}/${world.maxHp}, aprieto ${HEAL_KEY.toUpperCase()}.`);
     assist.press(HEAL_KEY);
     return true;
   }
   if (world.maxMana > 0 && (world.mana / world.maxMana) * 100 <= MANA_LOW_PCT && now - lastManaAt >= POTION_GAP_MS) {
     lastManaAt = now;
+    log(`Asistente: maná ${world.mana}/${world.maxMana}, aprieto ${MANA_KEY.toUpperCase()}.`);
     assist.press(MANA_KEY);
     return true;
   }
@@ -59,7 +61,14 @@ async function assistLoop() {
     }
     if (!best) { assist.target = 0; continue; }
     assist.target = best.id;
-    if (skill && useSkill(best.id, skill)) await sleep(humanPace(SKILL_PACE_MS));
+    if (skill && useSkill(best.id, skill)) {
+      // Combo del usuario: con el Twisting Slash (41) ya tirado, suma el segundo poder del DK (capturado del
+      // click real del usuario en la página: TargetedSkill con índice 146, no está en la lista de skills que
+      // manda el server, así que no se puede armar con useSkill). Mismo objetivo, mismo instante. El índice
+      // 146 es de esta sesión de login y puede cambiar en la próxima reconexión.
+      if (skill.number === 41 && bestD <= 1 && world.mana > 0) sendTargetedSkill(146, best.id);
+      await sleep(humanPace(SKILL_PACE_MS));
+    }
     else if (bestD <= 1) { sendHit(best.id, directionTowards(world.x, world.y, best.x, best.y)); await sleep(humanPace(ATTACK_PACE_MS)); }
   }
 }
