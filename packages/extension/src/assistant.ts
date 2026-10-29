@@ -60,9 +60,24 @@ function newPageDecryptor() {
  */
 let counterSynced = false;
 
+/** Qué pasó con lo que mandó la página (`window.__mu.diag`): si un paquete tuyo no sale o sale distinto, acá queda anotado. */
+export const diag = { c3: 0, c3Retained: 0, c3Raw: 0, errors: 0, dropped: 0, serverErrors: 0, lastError: '', lastErrorAt: 0 };
+const fail = (what: string, e: unknown) => { diag.errors++; diag.lastError = `${what}: ${(e as Error)?.message ?? e}`; diag.lastErrorAt = Date.now(); log(`Asistente: ${diag.lastError}`); };
+
 /** Un frame que la página va a mandar al servidor. true: ya salió por acá (con el contador compartido), el gancho no debe mandarlo. */
 export function onPageSend(frame: Uint8Array): boolean {
+  // Lo que la página manda tiene que salir SIEMPRE: si algo de acá falla, el paquete sale tal cual (nunca se traga un movimiento o un ataque).
+  try {
+    return onPageSendUnsafe(frame);
+  } catch (e) {
+    fail('error leyendo un paquete de la página, sale tal cual', e);
+    return false;
+  }
+}
+
+function onPageSendUnsafe(frame: Uint8Array): boolean {
   if (frame[0] === 0xc3 || frame[0] === 0xc4) {
+    diag.c3++;
     try {
       // El contador viene dentro del paquete: así sirve aunque el asistente se haya enganchado con el juego ya empezado.
       const [count, plain] = (pageDecryptor as unknown as { DecryptC3(d: Uint8Array): [number, Uint8Array] }).DecryptC3(Uint8Array.from(frame));
@@ -70,8 +85,9 @@ export function onPageSend(frame: Uint8Array): boolean {
       if (plain[2] !== 0x0e) bot.lastManualActionAt = Date.now();
       if (!counterSynced) { syncGameCounter(count); counterSynced = true; }
       resendPageFrame(plain);
+      diag.c3Retained++;
       return true;
-    } catch { log('Asistente: no pude leer un C3 de la página; sale tal cual.'); }
+    } catch (e) { diag.c3Raw++; fail('no pude leer un C3 de la página, sale tal cual', e); }
     return false;
   }
   if (frame[0] !== 0xc1 || frame.length < 4) return false;
@@ -97,7 +113,12 @@ export function onPageSend(frame: Uint8Array): boolean {
 
 /** Un frame que el servidor le manda a la página. */
 export function onServerFrame(bytes: Uint8Array) {
-  reader.push(bytes);
+  try {
+    reader.push(bytes);
+  } catch (e) {
+    diag.serverErrors++;
+    fail('error procesando un paquete del servidor', e);
+  }
 }
 
 /** La página abrió (o reabrió) el socket del juego: se empieza de cero, cada conexión lleva su propio contador. */
@@ -171,7 +192,7 @@ export function startAssistant(deps: Io) {
   if (started) return;
   started = true;
   assist.press = (key) => io?.press(key);
-  (window as unknown as { __mu?: unknown }).__mu = { mods: HOST_MODS, swapBrain, state: { world, bot, assist }, status: () => status() };
+  (window as unknown as { __mu?: unknown }).__mu = { mods: HOST_MODS, swapBrain, state: { world, bot, assist }, status: () => status(), diag };
   loadEmbeddedGameData();
   trackWorld();
   trackPanelPackets();

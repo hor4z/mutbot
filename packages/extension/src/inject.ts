@@ -5,7 +5,7 @@
  *     cifrado que el cliente: una sola secuencia. No hay proceso aparte, ni red local, ni base de datos.
  *  3. Un panel chico en la esquina: prende y apaga el auto attack y el Joyero, reparte puntos y muestra qué está haciendo.
  */
-import { onGameSocket, onGameSocketClosed, onPageSend, onServerFrame, setAssist, startAssistant, status as assistantStatus } from './assistant';
+import { diag, onGameSocket, onGameSocketClosed, onPageSend, onServerFrame, setAssist, startAssistant, status as assistantStatus } from './assistant';
 
 const NativeWS = window.WebSocket;
 const nativeSend = NativeWS.prototype.send;
@@ -48,7 +48,7 @@ NativeWS.prototype.send = function (this: WebSocket, data: Parameters<WebSocket[
 };
 window.WebSocket = HookedWebSocket as unknown as typeof WebSocket;
 startAssistant({
-  write: (bytes) => { if (gameSock && gameSock.readyState === NativeWS.OPEN) nativeSend.call(gameSock, bytes); },
+  write: (bytes) => { if (gameSock && gameSock.readyState === NativeWS.OPEN) nativeSend.call(gameSock, bytes); else diag.dropped++; },
   press: (key) => pressKey(key),
 });
 
@@ -242,6 +242,21 @@ function paint(s: Status) {
   else if (last.sniper && last.loot) line.textContent = `${last.loot.name} a ${last.loot.dist} casillas al ${last.loot.dir}`;
   else line.textContent = `${last.name ?? ''} · vida ${last.hp}/${last.maxHp} · ${last.monsters} monstruos · ${last.skill}`;
 }
+
+// --- Que el panel nunca se quede con un "soltar" del juego ----------------------------------------------------------------------------------------
+// Si empezás a apretar sobre el juego (atacar, perseguir) y soltás con el mouse encima del panel, el juego no recibe nunca el "soltar": queda con el
+// botón apretado y el personaje sigue persiguiendo sin poder soltarlo. Se reenvía al mismo elemento donde empezó el click.
+let downTarget: EventTarget | null = null;
+window.addEventListener('pointerdown', (e: PointerEvent) => { downTarget = e.target; }, true);
+window.addEventListener('pointerup', (e: PointerEvent) => {
+  const from = downTarget;
+  downTarget = null;
+  if (!from || !box || !(from instanceof Element) || !(e.target instanceof Node)) return;
+  if (!box.contains(e.target) || box.contains(from)) return;
+  const init = { bubbles: true, cancelable: true, composed: true, clientX: e.clientX, clientY: e.clientY, button: e.button, buttons: 0 };
+  from.dispatchEvent(new PointerEvent('pointerup', { ...init, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary }));
+  from.dispatchEvent(new MouseEvent('mouseup', init));
+}, true);
 
 /** Actualiza el panel con lo que ve el asistente; `error` es el motivo de un pedido que no se pudo cumplir. */
 function tick(error?: string | null) {
