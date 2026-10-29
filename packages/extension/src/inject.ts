@@ -1,103 +1,56 @@
 /**
  * Extensión del asistente (se inyecta en la página del juego, en el mundo de la página, antes de que cargue el cliente). Hace tres cosas:
- *  1. Engancha el WebSocket del game server y le manda al bot local (ws://127.0.0.1:8792, ver bot/src/attach.ts) cada frame que entra y cada
- *     frame que sale. Solo copia: lo que ve la página no cambia.
- *  2. Lo que el bot le devuelve (paquetes ya cifrados) lo escribe en ese mismo socket, con el `send` original (no se vuelve a copiar).
- *  3. Un botón chico en la esquina: prende y apaga el auto attack y muestra qué está haciendo.
+ *  1. Engancha el WebSocket del game server y le da al asistente (assistant.ts, que corre acá mismo) cada frame que entra y cada frame que sale.
+ *  2. El asistente decide a quién pegarle y qué levantar y escribe sus paquetes en ese mismo socket, con el `send` original y el mismo contador de
+ *     cifrado que el cliente: una sola secuencia. No hay proceso aparte, ni red local, ni base de datos.
+ *  3. Un panel chico en la esquina: prende y apaga el auto attack y el Joyero, reparte puntos y muestra qué está haciendo.
  */
+import { onGameSocket, onGameSocketClosed, onPageSend, onServerFrame, setAssist, startAssistant, status as assistantStatus } from './assistant';
+
 const NativeWS = window.WebSocket;
 const nativeSend = NativeWS.prototype.send;
-const ASSISTANT_URL = 'ws://127.0.0.1:8792';
 const CONNECT_SERVER_PORT = '44405';
 
 let gameSock: WebSocket | null = null;
-let bridge: WebSocket | null = null;
 let created = 0;
-/** Con el auto attack o el Joyero prendidos, los C3 de la página pasan por el bot (ver el envío más abajo) para compartir el contador de
- * cifrado; con los dos apagados vuelve a dejarlos salir directo (el bot solo escucha el contador, no los retiene: ver onPageC3 en attach.ts). */
-let takeover = false;
-const queue: Uint8Array[] = [];
 let chain: Promise<void> = Promise.resolve();
-
-// --- Puente con el bot local -------------------------------------------------------------------------------------------------------------------
-function openBridge() {
-  const ws = new NativeWS(ASSISTANT_URL);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
-    bridge = ws;
-    for (const f of queue.splice(0)) ws.send(f);
-    paint({ link: true });
-  };
-  ws.onmessage = (e) => {
-    if (typeof e.data === 'string') {
-      try {
-        const m = JSON.parse(e.data);
-        if (m.type === 'key') pressKey(String(m.key));
-        else {
-          // El bot es la fuente de verdad de `enabled`/`sniper`: todo status (el de cada segundo y el de
-          // cada toggle) los manda. Si el click optimista de abajo puso `takeover` en true pero el bot
-          // nunca lo prendió de verdad (error: "no vi la entrada al mundo", "Capitán conectado"...), esto
-          // lo destraba solo. Antes quedaba pegado en true para siempre y los clicks del usuario quedaban
-          // retenidos sin que el asistente los reenviara, hasta recargar la página.
-          if (typeof m.enabled === 'boolean' && typeof m.sniper === 'boolean') takeover = m.enabled || m.sniper;
-          paint({ link: true, ...m });
-        }
-      } catch { /* mensaje inválido */ }
-      return;
-    }
-    if (gameSock && gameSock.readyState === NativeWS.OPEN) nativeSend.call(gameSock, e.data as ArrayBuffer);
-  };
-  ws.onclose = () => {
-    bridge = null;
-    paint({ link: false });
-    setTimeout(openBridge, 3000);
-  };
-}
-
-function forward(dir: 0 | 1 | 2, data: ArrayBuffer | ArrayBufferView) {
-  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  const frame = new Uint8Array(bytes.length + 1);
-  frame[0] = dir;
-  frame.set(bytes, 1);
-  if (bridge && bridge.readyState === NativeWS.OPEN) bridge.send(frame);
-  else if (queue.length < 2000) queue.push(frame);
-}
 
 // --- Enganche del socket del juego -------------------------------------------------------------------------------------------------------------
 function isGameSocket(url: string): boolean {
-  if (url.startsWith(ASSISTANT_URL)) return false;
   const port = /[?&]port=(\d+)/.exec(url)?.[1];
   return port ? port !== CONNECT_SERVER_PORT : created > 1; // sin puerto en la URL: el primer socket es el connect server
 }
 
+const toBytes = (d: ArrayBuffer | ArrayBufferView) => (d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+
 class HookedWebSocket extends NativeWS {
   constructor(url: string | URL, protocols?: string | string[]) {
     super(url, protocols);
-    if (String(url).startsWith(ASSISTANT_URL)) return;
     created++;
     if (!isGameSocket(String(url))) return;
     gameSock = this;
+    onGameSocket();
     this.addEventListener('message', (e) => {
       const d = e.data;
       if (typeof d === 'string') return;
-      chain = chain.then(async () => forward(0, d instanceof Blob ? await d.arrayBuffer() : (d as ArrayBuffer)));
+      // En orden aunque algún mensaje llegue como Blob (que se lee de forma asíncrona).
+      chain = chain.then(async () => onServerFrame(new Uint8Array(d instanceof Blob ? await d.arrayBuffer() : (d as ArrayBuffer))));
     });
-    this.addEventListener('close', () => { if (gameSock === this) gameSock = null; });
+    this.addEventListener('close', () => { if (gameSock === this) { gameSock = null; onGameSocketClosed(); } });
   }
 }
 NativeWS.prototype.send = function (this: WebSocket, data: Parameters<WebSocket['send']>[0]) {
   if (this === gameSock && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
-    const first = data instanceof ArrayBuffer ? new Uint8Array(data)[0] : new Uint8Array(data.buffer, data.byteOffset, 1)[0];
-    // Con el asistente en marcha los C3 de la página (contador de cifrado) los reenvía el bot junto con los suyos: dirección 2, no salen de acá.
-    if (takeover && (first === 0xc3 || first === 0xc4)) {
-      forward(2, data as ArrayBuffer | ArrayBufferView);
-      return;
-    }
-    forward(1, data as ArrayBuffer | ArrayBufferView);
+    // Con el asistente en marcha, los C3 de la página se vuelven a cifrar con el contador compartido y salen desde el asistente.
+    if (onPageSend(Uint8Array.from(toBytes(data)))) return;
   }
   return nativeSend.call(this, data);
 };
 window.WebSocket = HookedWebSocket as unknown as typeof WebSocket;
+startAssistant({
+  write: (bytes) => { if (gameSock && gameSock.readyState === NativeWS.OPEN) nativeSend.call(gameSock, bytes); },
+  press: (key) => pressKey(key),
+});
 
 // --- Reparto de stats: clicks reales en el panel de personaje, no paquetes ----------------------------------------------------------------------
 // El panel (ventana "Character" del cliente web) manda directo al server con sus propios clicks, con su propio
@@ -161,12 +114,13 @@ async function investStatsNow() {
 }
 
 // --- Botón y estado ----------------------------------------------------------------------------------------------------------------------------
-type Status = { link?: boolean; enabled?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; target?: number; error?: string; sniper?: boolean; loot?: { id: number; name: string; dist: number; dir: string } | null };
-let last: Status = { link: false };
+type Status = { link?: boolean; enabled?: boolean; gold?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; target?: number; error?: string; sniper?: boolean; loot?: { id: number; name: string; dist: number; dir: string } | null };
+let last: Status = { link: true };
 let box: HTMLDivElement | null = null;
 let btn: HTMLButtonElement | null = null;
 let btn2: HTMLButtonElement | null = null;
 let btn3: HTMLButtonElement | null = null;
+let btnGold: HTMLButtonElement | null = null;
 let lastLoot = 0;
 let line: HTMLDivElement | null = null;
 
@@ -207,7 +161,7 @@ function dragBox(b: HTMLDivElement, handle: HTMLElement) {
   });
   handle.addEventListener('dblclick', () => {
     const hide = btn?.style.display !== 'none';
-    for (const el of [btn, btn2, btn3, line]) if (el) el.style.display = hide ? 'none' : '';
+    for (const el of [btn, btn2, btnGold, btn3, line]) if (el) el.style.display = hide ? 'none' : '';
     b.style.width = hide ? 'auto' : '210px';
   });
 }
@@ -226,31 +180,20 @@ function build() {
   dragBox(box, title);
   btn = document.createElement('button');
   btn.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
-  btn.onclick = () => {
-    if (bridge && bridge.readyState === NativeWS.OPEN) {
-      const next = !last.enabled;
-      if (next) takeover = true;
-      else if (!last.sniper) takeover = false;
-      bridge.send(JSON.stringify({ type: 'set', on: next }));
-    }
-  };
+  btn.onclick = () => { tick(setAssist({ on: !last.enabled })); };
   btn2 = document.createElement('button');
   btn2.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
-  btn2.onclick = () => {
-    if (bridge && bridge.readyState === NativeWS.OPEN) {
-      const next = !last.sniper;
-      if (next) takeover = true;
-      else if (!last.enabled) takeover = false;
-      bridge.send(JSON.stringify({ type: 'set', sniper: next }));
-    }
-  };
+  btn2.onclick = () => { tick(setAssist({ sniper: !last.sniper })); };
+  btnGold = document.createElement('button');
+  btnGold.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
+  btnGold.onclick = () => { tick(setAssist({ gold: !last.gold })); };
   btn3 = document.createElement('button');
   btn3.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600;background:#555;color:#fff';
   btn3.textContent = 'Repartir puntos';
   btn3.onclick = () => { void investStatsNow(); };
   line = document.createElement('div');
   line.style.cssText = 'margin-top:6px;color:#aaa;min-height:34px';
-  box.append(title, btn, btn2, btn3, line);
+  box.append(title, btn, btn2, btnGold, btn3, line);
   document.documentElement.appendChild(box);
   paint({});
 }
@@ -273,11 +216,15 @@ function paint(s: Status) {
     if (document.documentElement) build();
     else return;
   }
-  if (!btn || !btn2 || !btn3 || !line) return;
+  if (!btn || !btn2 || !btnGold || !btn3 || !line) return;
   const points = readPoints();
   btn3.textContent = points > 0 ? `Repartir puntos (${points})` : 'Repartir puntos';
   btn3.disabled = points <= 0;
   btn3.style.opacity = btn3.disabled ? '0.5' : '1';
+  btnGold.textContent = last.gold ? 'Oro: ENCENDIDO' : 'Oro: apagado';
+  btnGold.style.background = last.gold ? '#2e9e5b' : '#555';
+  btnGold.style.color = '#fff';
+  btnGold.disabled = !last.link;
   btn2.textContent = last.sniper ? 'Joyero: ENCENDIDO' : 'Joyero: apagado';
   btn2.style.background = last.sniper ? '#2e9e5b' : '#555';
   btn2.style.color = '#fff';
@@ -290,13 +237,16 @@ function paint(s: Status) {
   btn.style.background = last.enabled ? '#2e9e5b' : '#555';
   btn.style.color = '#fff';
   btn.disabled = !last.link;
-  if (!last.link) line.textContent = 'Sin conexión con el bot (bun run asistente).';
-  else if (last.error) line.textContent = last.error;
-  else if (!last.inGame) line.textContent = 'Esperando que entres al mundo (cargá la página con el asistente andando).';
+  if (last.error) line.textContent = last.error;
+  else if (!last.inGame) line.textContent = 'Esperando que entres al mundo.';
   else if (last.sniper && last.loot) line.textContent = `${last.loot.name} a ${last.loot.dist} casillas al ${last.loot.dir}`;
   else line.textContent = `${last.name ?? ''} · vida ${last.hp}/${last.maxHp} · ${last.monsters} monstruos · ${last.skill}`;
 }
 
-openBridge();
+/** Actualiza el panel con lo que ve el asistente; `error` es el motivo de un pedido que no se pudo cumplir. */
+function tick(error?: string | null) {
+  paint({ ...assistantStatus(), error: error ?? undefined });
+}
+setInterval(() => tick(), 1000);
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => paint({}));
 else paint({});

@@ -129,25 +129,27 @@ export const bot = {
   doing: 'conectando',
   // Punto al que va ahora (campamento, salida, celda de la cacería).
   goalPoint: null as [number, number] | null,
-  // Modo asistente (attach.ts): último C3/C4 que mandó la página sola (el usuario jugando a mano), no lo
+  // Modo asistente (extensión): último C3/C4 que mandó la página sola (el usuario jugando a mano), no lo
   // que manda el bot. El asistente se pausa un rato después de esto para no compartir el contador de
   // cifrado con el usuario al mismo tiempo (ver brain/assist.ts, el problema que desconectaba).
   lastManualActionAt: 0,
 };
 
 /**
- * El asistente de la extensión (attach.ts): lo que el usuario prende en el flotante. Lo lee el cerebro del asistente (brain/assist.ts, recargable en
+ * El asistente de la extensión (packages/extension): lo que el usuario prende en el panel. Lo lee el cerebro del asistente (brain/assist.ts, recargable en
  * caliente: hot.ts); vive acá, en el núcleo, para que sobreviva a cada recarga.
  */
 export const assist = {
   enabled: false,
   /** Joyero: levanta joyas, piezas de alas y excelentes al alcance. */
   sniper: false,
+  /** Oro: levanta el Zen que cae cerca (aparte del Joyero y del auto attack: se prende y se apaga solo). */
+  gold: false,
   /** Monstruo al que apunta ahora (lo muestra el flotante). */
   target: 0,
   /** Cambió el cerebro del asistente: los loops terminan limpio y se arrancan los nuevos. */
   reload: false,
-  /** Aprieta una tecla del hotbar en la página del juego (la pone attach.ts cuando la extensión está conectada). */
+  /** Aprieta una tecla del hotbar en la página del juego (la pone la extensión). */
   press: null as null | ((key: string) => void),
 };
 

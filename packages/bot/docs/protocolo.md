@@ -49,3 +49,13 @@ tamaño real del buffer: sin eso el parser lee fuera de rango y tira el proceso.
 
 `SpeedHackDetectPlugIn`: delay base de ataque 450 ms y token bucket de 5. Ritmos del bot: caminata 380 ms, ataque 500 ms, skills 900 ms, chat 2,5 s.
 **Son deliberados: no bajarlos** ni tocar la configuración del server para que el bot vaya más rápido.
+
+Excepción medida: el asistente de la extensión (`packages/extension`) tira el skill cada 500 ms (`ASSIST_SKILL_PACE_MS` en `brain/assist.ts`), que es lo que manda el
+cliente real con el click apretado (223 envíos medidos: un Giro cada 500 ms exactos). El server lo confirmó en vivo: un `AreaSkillAnimation` cada ~500 ms. El bot
+de la estación sigue en 900 ms.
+
+## Contador de cifrado de los C3/C4 (modo extensión)
+
+Los C3/C4 (skills, recoger ítems) llevan un contador que el server exige en orden. En la página del juego todos los C3 del cliente se descifran y se vuelven a
+cifrar con un único contador (el del asistente, que arranca donde iba la página en el primero que se ve), así lo del usuario y lo del asistente hacen una
+sola secuencia. El latido del cliente (`C3 0E`, cada 5 s) no cuenta como una acción manual. Ver `packages/extension/src/assistant.ts`, `onPageSend`.

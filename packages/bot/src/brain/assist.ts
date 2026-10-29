@@ -1,11 +1,10 @@
 /**
- * Cerebro del asistente de la extensión (attach.ts), recargable en caliente (hot.ts): el auto attack, las pociones por atajo y el Joyero.
- * attach.ts (el núcleo del asistente: socket con la extensión, paquetes de la página) nunca importa nada de acá más que el módulo ya cargado;
- * lo que el usuario prende vive en `assist` (core/state.ts) y sobrevive a cada recarga. Al cambiar un archivo de `src/brain/` los loops de acá
- * terminan limpio y arrancan los nuevos, sin cortar el juego.
+ * Cerebro del asistente de la extensión: el auto attack, las pociones por atajo y el Joyero. Corre dentro de la página del juego, empaquetado por
+ * la extensión (packages/extension/src/assistant.ts, que le da los frames y escribe lo que se manda). Lo que el usuario prende vive en `assist`
+ * (core/state.ts). Los loops terminan cuando `assist.reload` se pone en true.
  */
-import { ATTACK_PACE_MS, HEAL_AT_PCT, SKILL_PACE_MS } from '../core/config';
-import { sendHit, sendPickup, sendTargetedSkill } from '../core/actions';
+import { ATTACK_PACE_MS, HEAL_AT_PCT } from '../core/config';
+import { sendHit, sendPickup } from '../core/actions';
 import { drops } from '../core/loot-state';
 import { itemInfo } from '../core/panel-logic';
 import { assist, bot, world } from '../core/state';
@@ -51,10 +50,15 @@ function drinkIfNeeded(): boolean {
 const MANUAL_PAUSE_MS = 2500;
 
 // --- Auto attack ------------------------------------------------------------------------------------------------------------------------------
+/** Ritmo del skill del asistente: el mismo que manda el cliente del usuario con el click apretado (medido: un Giro cada 500 ms, 223 envíos). */
+const ASSIST_SKILL_PACE_MS = 500;
 /** Un golpe o skill por ritmo humano al monstruo más cercano que esté al alcance. No camina. */
 async function assistLoop() {
+  // Tras un golpe ya se esperó el ritmo completo: el sondeo de 150 ms solo corre cuando no se atacó (si no, se sumaba a cada golpe).
+  let attacked = false;
   while (!assist.reload) {
-    await sleep(150);
+    if (!attacked) await sleep(150);
+    attacked = false;
     if (!assist.enabled || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
     if (Date.now() - bot.lastManualActionAt < MANUAL_PAUSE_MS) continue;
     if (drinkIfNeeded()) await sleep(150);
@@ -69,14 +73,10 @@ async function assistLoop() {
     if (!best) { assist.target = 0; continue; }
     assist.target = best.id;
     if (skill && useSkill(best.id, skill)) {
-      // Combo del usuario: con el Twisting Slash (41) ya tirado, suma el segundo poder del DK (capturado del
-      // click real del usuario en la página: TargetedSkill con índice 146, no está en la lista de skills que
-      // manda el server, así que no se puede armar con useSkill). Mismo objetivo, mismo instante. El índice
-      // 146 es de esta sesión de login y puede cambiar en la próxima reconexión.
-      if (skill.number === 41 && bestD <= 1 && world.mana > 0) sendTargetedSkill(146, best.id);
-      await sleep(humanPace(SKILL_PACE_MS));
+      await sleep(humanPace(ASSIST_SKILL_PACE_MS));
+      attacked = true;
     }
-    else if (bestD <= 1) { sendHit(best.id, directionTowards(world.x, world.y, best.x, best.y)); await sleep(humanPace(ATTACK_PACE_MS)); }
+    else if (bestD <= 1) { sendHit(best.id, directionTowards(world.x, world.y, best.x, best.y)); await sleep(humanPace(ATTACK_PACE_MS)); attacked = true; }
   }
 }
 
@@ -90,10 +90,11 @@ const wantedDrop = (d: { group: number; num: number; isMoney?: boolean; excellen
   d.isMoney || (!(d.group === 14 && d.num === 24) && (isJewel(d) || !!d.excellent));
 const askedAt = new Map<number, number>();
 
-function nearestWanted() {
+/** `onlyZen`: solo el oro (lo que se levanta con el auto attack solo; joyas y excelentes son del Joyero). */
+function nearestWanted(onlyZen = false) {
   let best: { id: number; x: number; y: number; group: number; num: number; isMoney: boolean; d: number } | null = null;
   for (const dr of drops.values()) {
-    if (!wantedDrop(dr)) continue;
+    if (!wantedDrop(dr) || (onlyZen && !dr.isMoney)) continue;
     const d = chebyshev(world.x, world.y, dr.x, dr.y);
     if (!best || d < best.d) best = { id: dr.id, x: dr.x, y: dr.y, group: dr.group, num: dr.num, isMoney: !!dr.isMoney, d };
   }
@@ -103,9 +104,10 @@ function nearestWanted() {
 async function sniperLoop() {
   while (!assist.reload) {
     await sleep(100);
-    if (!assist.sniper || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
+    // El oro tiene su propio interruptor; las joyas, piezas de alas y excelentes son del Joyero (que también levanta oro).
+    if (!(assist.sniper || assist.gold) || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
     if (Date.now() - bot.lastManualActionAt < MANUAL_PAUSE_MS) continue;
-    const t = nearestWanted();
+    const t = nearestWanted(!assist.sniper);
     if (!t || t.d > SNIPE_REACH || (!t.isMoney && bagRoom() <= 0)) continue;
     const now = Date.now();
     if (now - (askedAt.get(t.id) ?? 0) < SNIPE_RETRY_MS) continue;
@@ -115,10 +117,10 @@ async function sniperLoop() {
   }
 }
 
-// --- Lo que attach.ts le muestra a la extensión -----------------------------------------------------------------------------------------------
+// --- Lo que el panel de la extensión le muestra al usuario -----------------------------------------------------------------------------------------------
 // El reparto de stats ("Repartir puntos" del flotante) no pasa por acá: la extensión clickea los íconos reales
 // del panel de personaje (packages/extension/src/inject.ts, investStatsNow), sin mandar ningún paquete por el
-// bot. Eso evita compartir el contador de cifrado con lo que el usuario hace a mano (ver attach.ts, onPageC3).
+// bot. Eso evita compartir el contador de cifrado con lo que el usuario hace a mano (ver onPageSend en packages/extension/src/assistant.ts).
 export function lootHint() {
   const t = nearestWanted();
   if (!t || t.d > ALERT_TILES) return null;

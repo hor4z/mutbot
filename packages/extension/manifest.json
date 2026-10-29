@@ -2,11 +2,15 @@
   "manifest_version": 3,
   "name": "MU Slow · Asistente de Capitan",
   "version": "0.1.0",
-  "description": "Auto attack en la página del juego, alimentado por el bot local (127.0.0.1:8792). Solo corre en el juego.",
+  "description": "Auto attack, Joyero y reparto de puntos en la página del juego. Todo corre dentro de la página: sin servidor ni proceso externo. Solo corre en el juego.",
   "content_scripts": [
     {
-      "matches": ["https://mu.mormon.garden/*"],
-      "js": ["inject.js"],
+      "matches": [
+        "https://mu.mormon.garden/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }

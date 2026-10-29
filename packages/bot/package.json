@@ -6,8 +6,7 @@
     "bot": "bun --env-file=../../.env.db run src/main.ts",
     "estacion": "bun --env-file=../../.env.db run src/station/estacion.ts",
     "extract": "bun run tools/extract-packets.ts",
-    "tsc": "tsc --noEmit",
-    "asistente": "bun --env-file=../../.env.db run src/attach.ts"
+    "tsc": "tsc --noEmit"
   },
   "dependencies": {
     "@mubot/db": "workspace:*",
