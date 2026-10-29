@@ -76,7 +76,7 @@ EventBus.on('wsClosed', (e: any) => {
 });
 
 /**
- * Modo asistente (attach.ts): el socket del juego es el de la pestaña del navegador del usuario. Lo que se manda con sendToGS sale con el mismo
+ * Modo asistente (packages/extension/src/assistant.ts): el socket del juego es el de la pestaña del navegador del usuario. Lo que se manda con sendToGS sale con el mismo
  * xor32 y el mismo cifrado que usa el bot y se le entrega a `deliver` (la extensión lo escribe en el socket de la página).
  */
 export function attachFakeGameSocket(deliver: (bytes: Uint8Array) => void) {

@@ -51,6 +51,14 @@ export async function loadGameDataOnce(): Promise<void> {
   ], );
   const vacias = [['monsters', m], ['skills', s], ['items', i], ['spawns', sp]].filter(([, rows]) => !(rows as unknown[]).length).map(([n]) => n);
   if (vacias.length) throw new MissingGameDataError(`las tablas ${vacias.join(', ')} están vacías: falta correr \`bun run db:seed\``);
+  applyGameData(m, s, i, sp);
+}
+
+/** Llena las tablas con filas ya leídas (de la base o, en la extensión del navegador, de los seeds embebidos) y avisa a los suscriptores. */
+export function applyGameData(
+  m: Record<string, unknown>[], s: Record<string, unknown>[], i: Record<string, unknown>[],
+  sp: { map: number; type: number; x1: number; y1: number; x2: number; y2: number; qty: number }[],
+): void {
   monsters.length = 0;
   for (const r of m) monsters.push(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'Name' ? String(v) : num(v)])) as unknown as MonsterRow);
   skills.length = 0;

@@ -1,11 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ESNext", "DOM"],
-    "types": []
+    "lib": [
+      "ESNext",
+      "DOM"
+    ]
   },
   "include": [
-    "src"
+    "src",
+    "../bot/src/types.d.ts"
   ],
   "exclude": [
     "node_modules"

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/inject.ts --target=browser --format=iife --outfile=dist/inject.js && cp manifest.json dist/manifest.json",
-    "tsc": "tsc --noEmit"
+    "build": "bun run build.ts",
+    "tsc": "tsc --noEmit",
+    "brain": "bun run brain-build.ts"
   }
 }

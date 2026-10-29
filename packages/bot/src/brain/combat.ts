@@ -163,7 +163,8 @@ const TRIAL_TOTAL_MS = 48 * 60_000;
 const trialState = ((globalThis as { __skillTrial?: { start: number; last: number } }).__skillTrial ??= { start: Date.now(), last: -1 });
 function trialSkill(): SkillInfo | undefined {
   const t = Date.now() - trialState.start;
-  if (t > TRIAL_TOTAL_MS || isMage()) return undefined;
+  // Con Giro (Twisting Slash) a mano no se prueba nada: ya rindió más que el resto y rotar lo saca del mejor ataque.
+  if (t > TRIAL_TOTAL_MS || isMage() || (world.skills.has(41) && skillLevelOk(41))) return undefined;
   const known = TRIAL_SKILLS.filter((n) => world.skills.has(n) && skillLevelOk(n));
   // Con menos de tres skills no hay nada que probar (Twisting Slash ya rindió más que Cyclone): rotar solo le quita exp.
   if (known.length < 3) return undefined;

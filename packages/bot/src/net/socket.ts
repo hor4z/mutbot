@@ -36,7 +36,7 @@ const dumped = new Map<number, number>();
 
 /**
  * Corta un stream de bytes del server en packets MU, descifra los C3/C4 y los emite por nombre en el EventBus. `push` recibe los bytes tal cual
- * llegan (un frame puede traer varios packets o la mitad de uno). Lo usan el socket del bot y el modo asistente (attach.ts).
+ * llegan (un frame puede traer varios packets o la mitad de uno). Lo usan el socket del bot y el modo asistente (extensión).
  */
 export function createPacketReader(LOG_PREFIX: string) {
   const decryptor = new SimpleModulusDecryptor();
