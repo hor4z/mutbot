@@ -6,7 +6,7 @@ import { items, onGameData } from './gamedata';
 // Índices de mapa del 0.97d.
 export const MAP_NAMES: Record<number, string> = {
   0: 'Lorencia', 1: 'Dungeon', 2: 'Devias', 3: 'Noria', 4: 'Lost Tower', 6: 'Arena',
-  7: 'Atlans', 8: 'Tarkan', 33: 'Aida',
+  7: 'Atlans', 8: 'Tarkan', 10: 'Icarus', 33: 'Aida',
 };
 export const mapName = (n: number): string => MAP_NAMES[n] ?? `mapa ${n}`;
 

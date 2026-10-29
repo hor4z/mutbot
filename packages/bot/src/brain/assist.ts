@@ -44,12 +44,19 @@ function drinkIfNeeded(): boolean {
   return false;
 }
 
-// --- Auto attack ----------------------------------------------------------------------------------------------------------------------------
+// Si el usuario mandó algo a mano hace menos de esto, el asistente no ataca ni pide ítems: evita que su C3/C4
+// y el del usuario compartan el contador de cifrado al mismo tiempo (eso desincronizaba el descifrado de la
+// página y terminaba descartando los clicks del usuario en silencio). Las pociones por atajo (drinkIfNeeded)
+// no cuentan: van por teclado, no por C3, así que no compiten por el contador.
+const MANUAL_PAUSE_MS = 2500;
+
+// --- Auto attack ------------------------------------------------------------------------------------------------------------------------------
 /** Un golpe o skill por ritmo humano al monstruo más cercano que esté al alcance. No camina. */
 async function assistLoop() {
   while (!assist.reload) {
     await sleep(150);
     if (!assist.enabled || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
+    if (Date.now() - bot.lastManualActionAt < MANUAL_PAUSE_MS) continue;
     if (drinkIfNeeded()) await sleep(150);
     const skill = pickAttackSkill();
     const reach = skill ? castReach(skill.number) : 1;
@@ -78,17 +85,17 @@ async function assistLoop() {
 const SNIPE_REACH = 2;
 const ALERT_TILES = 20;
 const SNIPE_RETRY_MS = 600;
-/** Joyas, piezas de alas y excelentes (el Broken Sword de la quest ya no: se consiguió). */
+/** Zen (siempre, no ocupa lugar en la bolsa), joyas, piezas de alas y excelentes (el Broken Sword de la quest ya no: se consiguió). */
 const wantedDrop = (d: { group: number; num: number; isMoney?: boolean; excellent?: boolean }) =>
-  !d.isMoney && !(d.group === 14 && d.num === 24) && (isJewel(d) || !!d.excellent);
+  d.isMoney || (!(d.group === 14 && d.num === 24) && (isJewel(d) || !!d.excellent));
 const askedAt = new Map<number, number>();
 
 function nearestWanted() {
-  let best: { id: number; x: number; y: number; group: number; num: number; d: number } | null = null;
+  let best: { id: number; x: number; y: number; group: number; num: number; isMoney: boolean; d: number } | null = null;
   for (const dr of drops.values()) {
     if (!wantedDrop(dr)) continue;
     const d = chebyshev(world.x, world.y, dr.x, dr.y);
-    if (!best || d < best.d) best = { id: dr.id, x: dr.x, y: dr.y, group: dr.group, num: dr.num, d };
+    if (!best || d < best.d) best = { id: dr.id, x: dr.x, y: dr.y, group: dr.group, num: dr.num, isMoney: !!dr.isMoney, d };
   }
   return best;
 }
@@ -97,23 +104,27 @@ async function sniperLoop() {
   while (!assist.reload) {
     await sleep(100);
     if (!assist.sniper || !bot.inGameAt || bot.kicked || world.hp <= 0) continue;
+    if (Date.now() - bot.lastManualActionAt < MANUAL_PAUSE_MS) continue;
     const t = nearestWanted();
-    if (!t || t.d > SNIPE_REACH || bagRoom() <= 0) continue;
+    if (!t || t.d > SNIPE_REACH || (!t.isMoney && bagRoom() <= 0)) continue;
     const now = Date.now();
     if (now - (askedAt.get(t.id) ?? 0) < SNIPE_RETRY_MS) continue;
     askedAt.set(t.id, now);
-    log(`Joyero: pido ${itemInfo(t.group, t.num).name} (a ${t.d} casillas).`);
+    log(`Joyero: pido ${t.isMoney ? 'Zen' : itemInfo(t.group, t.num).name} (a ${t.d} casillas).`);
     sendPickup(t.id);
   }
 }
 
 // --- Lo que attach.ts le muestra a la extensión -----------------------------------------------------------------------------------------------
+// El reparto de stats ("Repartir puntos" del flotante) no pasa por acá: la extensión clickea los íconos reales
+// del panel de personaje (packages/extension/src/inject.ts, investStatsNow), sin mandar ningún paquete por el
+// bot. Eso evita compartir el contador de cifrado con lo que el usuario hace a mano (ver attach.ts, onPageC3).
 export function lootHint() {
   const t = nearestWanted();
   if (!t || t.d > ALERT_TILES) return null;
   const dx = t.x - world.x, dy = t.y - world.y;
   const dir = (dy < 0 ? 'N' : dy > 0 ? 'S' : '') + (dx > 0 ? 'E' : dx < 0 ? 'O' : '');
-  return { id: t.id, name: itemInfo(t.group, t.num).name, dist: t.d, dir };
+  return { id: t.id, name: t.isMoney ? 'Zen' : itemInfo(t.group, t.num).name, dist: t.d, dir };
 }
 
 export function skillName(): string {

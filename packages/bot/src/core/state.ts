@@ -129,6 +129,10 @@ export const bot = {
   doing: 'conectando',
   // Punto al que va ahora (campamento, salida, celda de la cacería).
   goalPoint: null as [number, number] | null,
+  // Modo asistente (attach.ts): último C3/C4 que mandó la página sola (el usuario jugando a mano), no lo
+  // que manda el bot. El asistente se pausa un rato después de esto para no compartir el contador de
+  // cifrado con el usuario al mismo tiempo (ver brain/assist.ts, el problema que desconectaba).
+  lastManualActionAt: 0,
 };
 
 /**

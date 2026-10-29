@@ -62,6 +62,10 @@ function onPageC3(frame: Uint8Array, held: boolean) {
 /** Lo que mandó la página (C1 con xor32): se lee el paso y el personaje elegido para saber dónde está y quién es. */
 function onClientFrame(frame: Uint8Array, held = false) {
   if (frame[0] === 0xc3 || frame[0] === 0xc4) {
+    // Solo esto comparte el contador de cifrado con el bot (ver core/connection.ts): el asistente se pausa un
+    // rato después de un C3/C4 de verdad (brain/assist.ts), no con cualquier cosa que mande la página (el
+    // caminar, por ejemplo, es C1 y no comparte nada: pausar con eso lo dejaba frenado todo el tiempo).
+    bot.lastManualActionAt = Date.now();
     try { onPageC3(frame, held); } catch { log('Asistente: no pude leer un C3 de la página.'); }
     return;
   }
