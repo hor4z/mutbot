@@ -4,14 +4,14 @@
  * lo que el usuario prende vive en `assist` (core/state.ts) y sobrevive a cada recarga. Al cambiar un archivo de `src/brain/` los loops de acá
  * terminan limpio y arrancan los nuevos, sin cortar el juego.
  */
-import { ATTACK_PACE_MS, HEAL_AT_PCT, SKILL_PACE_MS } from '../core/config';
-import { sendHit, sendPickup, sendTargetedSkill } from '../core/actions';
+import { ATTACK_PACE_MS, CHAT_PACE_MS, HEAL_AT_PCT, SKILL_PACE_MS, type StatName } from '../core/config';
+import { sayChat, sendHit, sendPickup, sendTargetedSkill } from '../core/actions';
 import { drops } from '../core/loot-state';
 import { itemInfo } from '../core/panel-logic';
-import { assist, bot, expLog, world } from '../core/state';
+import { assist, bot, world, type ComboMode } from '../core/state';
 import { chebyshev, directionTowards, humanPace, log, sleep } from '../core/util';
 import { SKILL_TABLE, castReach, pickAttackSkill, useSkill } from './combat';
-import { isJewel } from './farming';
+import { capStats, isJewel, planStats } from './farming';
 import { bagRoom, watchDrops } from './loot';
 
 // --- Pociones por atajo ---------------------------------------------------------------------------------------------------------------------
@@ -44,78 +44,40 @@ function drinkIfNeeded(): boolean {
   return false;
 }
 
-// --- Auto attack ----------------------------------------------------------------------------------------------------------------------------
-// Índice de red del segundo poder del DK (capturado del click real del usuario en la página, confirmado
-// contra el server: TargetedSkill 146. No está en la lista de skills que manda el server, así que no se
-// puede armar con useSkill. Es de esta sesión de login y puede cambiar en la próxima reconexión).
-const COMBO_SKILL_INDEX = 146;
-/** Fire Breath (pedido del usuario como "fire bash", no hay exacto con ese nombre en la tabla de skills: 49 es
- * el candidato más cercano del DK, AllKnights nivel 110). */
-const FIRE_BASH = 49;
-/** Rageful Blow ("la estrella"): el único de los candidatos que es de área de verdad (AreaSkillAutomaticHits). */
+// Con el giro (Twisting Slash, 41) conectado, el modo (`assist.mode`, elegido con el select del flotante) decide
+// cuánto más tira: liviano = nada más (lo de siempre); intermedio = un extra solo (menos llamativo: área si hay 2+
+// monstruos cerca, sino el de mejor daño/maná); agresivo = los tres, área primero (pegan a todo el grupo) y
+// después los de un solo objetivo para rematar. Rageful Blow ("la estrella") es de área igual que el giro;
+// Death Stab (70 dmg/15 maná) y Fire Breath (30/9) son de un solo objetivo.
 const RAGEFUL_BLOW = 42;
-/** Death Stab: el de mejor daño por maná contra un solo objetivo (70/15), sin área. */
 const DEATH_STAB = 43;
-
-// --- Estrategia automática de combos ---------------------------------------------------------------------------------------------------------
-// Pedido del usuario: "implementa una estrategia de farmeo eficiente con combinaciones de skill y ejecutala". Prueba cada combinación durante un
-// bloque de tiempo, mide la exp/min real que dio (con el expLog que ya alimenta attach.ts) y al terminar la ronda se queda con la que más rindió.
-// Sigue reevaluando cada tanto (COMBO_RETEST_MS) por si cambia el spot o el nivel y conviene otra.
-type ComboPlan = { id: string; combo: boolean; extra: number | null };
-const COMBOS: ComboPlan[] = [
-  { id: 'giro + combo', combo: true, extra: null },
-  { id: 'giro + combo + fire breath', combo: true, extra: FIRE_BASH },
-  { id: 'giro + combo + rageful blow', combo: true, extra: RAGEFUL_BLOW },
-  { id: 'giro + combo + death stab', combo: true, extra: DEATH_STAB },
-];
-const COMBO_BLOCK_MS = 2 * 60_000;
-const COMBO_RETEST_MS = 3 * 60 * 60_000;
-const comboState = ((globalThis as { __comboTrial?: { start: number; last: number; rates: Record<string, number> } }).__comboTrial ??= {
-  start: Date.now(),
-  last: -1,
-  rates: {},
-});
-function bestComboId(): string | undefined {
-  return Object.entries(comboState.rates).sort((a, b) => b[1] - a[1])[0]?.[0];
+const FIRE_BASH = 49;
+/** A partir de cuántos monstruos cerca del objetivo conviene un skill de área en vez de uno de un solo blanco. */
+const GROUP_RADIUS = 3;
+const GROUP_SIZE = 2;
+function groupNear(x: number, y: number): number {
+  let n = 0;
+  for (const m of world.npcs.values()) if (chebyshev(x, y, m.x, m.y) <= GROUP_RADIUS) n++;
+  return n;
 }
-function currentCombo(): ComboPlan {
-  const sinceStart = Date.now() - comboState.start;
-  const totalTrialMs = COMBOS.length * COMBO_BLOCK_MS;
-  const inTrial = sinceStart < totalTrialMs;
-  const block = inTrial ? Math.floor(sinceStart / COMBO_BLOCK_MS) : -1; // -1: ronda de pruebas terminada, se asentó en la ganadora
+/** No se loguea cada golpe (serían varios por segundo): un resumen del combo cada tanto, para verlo sin mirar la pantalla. */
+const COMBO_LOG_GAP_MS = 4000;
+let lastComboLogAt = 0;
+/** Último combo tirado (se muestra en el recuadro flotante de la extensión: ver attach.ts `status()`). */
+let lastCombo = '';
+export const comboLabel = () => lastCombo;
 
-  // Cambió de bloque (o terminó la ronda): cierra el bloque anterior y anota cuánto rindió, ANTES de decidir el plan actual (si no,
-  // el último bloque probado se pierde al pasar al modo asentado).
-  if (comboState.last !== block && comboState.last >= 0 && comboState.last < COMBOS.length) {
-    const prev = COMBOS[comboState.last]!;
-    const rate = expLog.rateSince(comboState.start + comboState.last * COMBO_BLOCK_MS, Date.now());
-    comboState.rates[prev.id] = rate;
-    log(`Estrategia de combos: "${prev.id}" dio ${Math.round(rate)} exp/min.`);
-  }
-
-  if (inTrial) {
-    if (comboState.last !== block) {
-      comboState.last = block;
-      log(`Estrategia de combos: ahora pruebo "${COMBOS[block]!.id}" durante ${COMBO_BLOCK_MS / 60_000} min.`);
-    }
-    return COMBOS[block]!;
-  }
-
-  const winner = COMBOS.find((c) => c.id === bestComboId()) ?? COMBOS[0]!;
-  if (comboState.last !== -1) {
-    comboState.last = -1;
-    log(`Estrategia de combos: probadas todas, me quedo con "${winner.id}" (la de más exp/min). La vuelvo a probar en ${COMBO_RETEST_MS / 3_600_000} h.`);
-  }
-  // Pasado el tiempo de reevaluación, arranca una ronda nueva de pruebas desde cero.
-  if (sinceStart > totalTrialMs + COMBO_RETEST_MS) {
-    comboState.start = Date.now();
-    comboState.last = -1;
-    comboState.rates = {};
-  }
-  return winner;
+/** Tira un skill de la lista si se lo conoce y el maná restante lo alcanza; devuelve lo gastado (0 si no tiró). */
+function tryExtra(targetId: number, num: number, manaLeft: number, fired: string[]): number {
+  const extra = world.skills.get(num);
+  const cost = SKILL_TABLE.get(num)?.mana ?? 0;
+  if (!extra || manaLeft < cost) return 0;
+  useSkill(targetId, extra);
+  fired.push(SKILL_TABLE.get(num)?.name ?? `skill ${num}`);
+  return cost;
 }
 
-/** Un golpe o skill por ritmo humano al monstruo más cercano que esté al alcance. No camina. */
+/** Un golpe o skill por ritmo humano al monstruo más cercano que esté al alcance (~1 casilla). No camina. */
 async function assistLoop() {
   while (!assist.reload) {
     await sleep(150);
@@ -133,14 +95,24 @@ async function assistLoop() {
     assist.target = best.id;
     if (skill && useSkill(best.id, skill)) {
       if (skill.number === 41) {
-        const plan = currentCombo();
-        if (plan.combo && bestD <= 1 && world.mana > 0) sendTargetedSkill(COMBO_SKILL_INDEX, best.id);
-        if (plan.extra != null) {
-          const extra = world.skills.get(plan.extra);
-          if (extra && world.mana >= (SKILL_TABLE.get(plan.extra)?.mana ?? 0)) {
-            const near = [...world.npcs.values()].filter((n) => chebyshev(world.x, world.y, n.x, n.y) <= castReach(plan.extra!)).length;
-            if (near >= 2) useSkill(best.id, extra);
-          }
+        // Combo del usuario: el segundo poder del DK (capturado del click real del usuario en la página: TargetedSkill
+        // con índice 146, no está en la lista de skills que manda el server, así que no se puede armar con useSkill).
+        // El índice 146 es de esta sesión de login y puede cambiar en la próxima reconexión. El costo real de maná
+        // no se sabe (no está en la tabla): se adivina igual al del giro, para no pasarse del presupuesto del resto.
+        let manaLeft = world.mana;
+        const fired: string[] = ['giro'];
+        if (bestD <= 1 && manaLeft > 0) { sendTargetedSkill(146, best.id); manaLeft -= SKILL_TABLE.get(41)?.mana ?? 0; fired.push('golpe 146'); }
+        const mode: ComboMode = assist.mode;
+        if (mode === 'intermedio') {
+          const num = groupNear(best.x, best.y) >= GROUP_SIZE ? RAGEFUL_BLOW : DEATH_STAB;
+          manaLeft -= tryExtra(best.id, num, manaLeft, fired);
+        } else if (mode === 'agresivo') {
+          for (const num of [RAGEFUL_BLOW, DEATH_STAB, FIRE_BASH]) manaLeft -= tryExtra(best.id, num, manaLeft, fired);
+        }
+        lastCombo = fired.join(' + ');
+        if (Date.now() - lastComboLogAt >= COMBO_LOG_GAP_MS) {
+          lastComboLogAt = Date.now();
+          log(`Combo (${mode}): ${lastCombo} (maná ${world.mana}/${world.maxMana}).`);
         }
       }
       await sleep(humanPace(SKILL_PACE_MS));
@@ -180,6 +152,37 @@ async function sniperLoop() {
     askedAt.set(t.id, now);
     log(`Joyero: pido ${itemInfo(t.group, t.num).name} (a ${t.d} casillas).`);
     sendPickup(t.id);
+  }
+}
+
+// --- Reparto de stats (botón "Repartir puntos" del flotante) --------------------------------------------------------------------------------
+// Misma fórmula que el bot completo usaría para Twisting Slash (farming.ts planStats): energía hasta que
+// fuerza − 2000 − energía llegue a 0 (ahí el giro rinde igual por punto en los dos), después mitad y mitad.
+// Pedido del usuario (2026-10-29): sin vitalidad por ahora ("no es necesario"), así que VIT_SHARE en 0 acá
+// (farming.ts la deja en 5 % para el reparto automático del bot completo, que sí la usa).
+const STAT_CMD: Record<StatName, string> = { str: 'str', agi: 'agi', vit: 'vit', ene: 'ene' };
+let investing = false;
+/** Reparte TODOS los puntos libres con /add (un comando por stat, como hace el usuario a mano). No se dispara
+ * solo: lo llama attach.ts cuando el usuario aprieta "Repartir puntos" en el flotante. */
+export async function investStatsNow(): Promise<void> {
+  if (investing) return;
+  investing = true;
+  try {
+    const points = world.levelUpPoints;
+    if (points <= 0) { log('Stats: no hay puntos sin repartir.'); return; }
+    const raw = planStats(points, world.stats.str, world.stats.ene, { VIT_SHARE: 0, ENE_GAP: 2000 });
+    const capped = capStats(raw, world.stats);
+    const plan = (['ene', 'str', 'vit', 'agi'] as StatName[]).map((k) => [k, capped[k]] as [StatName, number]).filter(([, n]) => n > 0);
+    if (!plan.length) { log('Stats: nada para repartir (¿stats en el tope?).'); return; }
+    log(`Stats: repartiendo ${points} puntos (${plan.map(([k, n]) => `${n} ${k}`).join(', ')}).`);
+    for (const [name, n] of plan) {
+      sayChat(bot.charName, `/add ${STAT_CMD[name]} ${n}`);
+      world.stats[name] += n;
+      world.levelUpPoints -= n;
+      await sleep(CHAT_PACE_MS);
+    }
+  } finally {
+    investing = false;
   }
 }
 

@@ -13,7 +13,8 @@ const CONNECT_SERVER_PORT = '44405';
 let gameSock: WebSocket | null = null;
 let bridge: WebSocket | null = null;
 let created = 0;
-/** Desde que se prende el auto attack, los C3 de la página pasan por el bot (ver el envío más abajo) hasta recargar la página. */
+/** Con el auto attack o el Joyero prendidos, los C3 de la página pasan por el bot (ver el envío más abajo) para compartir el contador de
+ * cifrado; con los dos apagados vuelve a dejarlos salir directo (el bot solo escucha el contador, no los retiene: ver onPageC3 en attach.ts). */
 let takeover = false;
 const queue: Uint8Array[] = [];
 let chain: Promise<void> = Promise.resolve();
@@ -91,11 +92,13 @@ NativeWS.prototype.send = function (this: WebSocket, data: Parameters<WebSocket[
 window.WebSocket = HookedWebSocket as unknown as typeof WebSocket;
 
 // --- Botón y estado ----------------------------------------------------------------------------------------------------------------------------
-type Status = { link?: boolean; enabled?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; target?: number; error?: string; sniper?: boolean; loot?: { id: number; name: string; dist: number; dir: string } | null };
+type Status = { link?: boolean; enabled?: boolean; inGame?: boolean; name?: string; hp?: number; maxHp?: number; monsters?: number; skill?: string; combo?: string; mode?: string; points?: number; target?: number; error?: string; sniper?: boolean; loot?: { id: number; name: string; dist: number; dir: string } | null };
 let last: Status = { link: false };
 let box: HTMLDivElement | null = null;
 let btn: HTMLButtonElement | null = null;
 let btn2: HTMLButtonElement | null = null;
+let modeSelect: HTMLSelectElement | null = null;
+let btn3: HTMLButtonElement | null = null;
 let lastLoot = 0;
 let line: HTMLDivElement | null = null;
 
@@ -134,7 +137,7 @@ function dragBox(b: HTMLDivElement, handle: HTMLElement) {
   });
   handle.addEventListener('dblclick', () => {
     const hide = btn?.style.display !== 'none';
-    for (const el of [btn, btn2, line]) if (el) el.style.display = hide ? 'none' : '';
+    for (const el of [btn, btn2, modeSelect, btn3, line]) if (el) el.style.display = hide ? 'none' : '';
     b.style.width = hide ? 'auto' : '210px';
   });
 }
@@ -155,21 +158,42 @@ function build() {
   btn.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
   btn.onclick = () => {
     if (bridge && bridge.readyState === NativeWS.OPEN) {
-      if (!last.enabled) takeover = true;
-      bridge.send(JSON.stringify({ type: 'set', on: !last.enabled }));
+      const next = !last.enabled;
+      if (next) takeover = true;
+      else if (!last.sniper) takeover = false;
+      bridge.send(JSON.stringify({ type: 'set', on: next }));
     }
   };
   btn2 = document.createElement('button');
   btn2.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600';
   btn2.onclick = () => {
     if (bridge && bridge.readyState === NativeWS.OPEN) {
-      if (!last.sniper) takeover = true;
-      bridge.send(JSON.stringify({ type: 'set', sniper: !last.sniper }));
+      const next = !last.sniper;
+      if (next) takeover = true;
+      else if (!last.enabled) takeover = false;
+      bridge.send(JSON.stringify({ type: 'set', sniper: next }));
     }
+  };
+  modeSelect = document.createElement('select');
+  modeSelect.style.cssText = 'width:100%;padding:5px;margin-top:6px;border-radius:6px;border:1px solid #555;background:#333;color:#e8e8e8';
+  for (const [v, t] of [['liviano', 'Combo: liviano'], ['intermedio', 'Combo: intermedio'], ['agresivo', 'Combo: agresivo']] as const) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = t;
+    modeSelect.appendChild(opt);
+  }
+  modeSelect.onchange = () => {
+    if (bridge && bridge.readyState === NativeWS.OPEN) bridge.send(JSON.stringify({ type: 'set', mode: modeSelect!.value }));
+  };
+  btn3 = document.createElement('button');
+  btn3.style.cssText = 'width:100%;padding:6px;margin-top:6px;border-radius:6px;border:0;cursor:pointer;font-weight:600;background:#555;color:#fff';
+  btn3.textContent = 'Repartir puntos';
+  btn3.onclick = () => {
+    if (bridge && bridge.readyState === NativeWS.OPEN) bridge.send(JSON.stringify({ type: 'set', invest: true }));
   };
   line = document.createElement('div');
   line.style.cssText = 'margin-top:6px;color:#aaa;min-height:34px';
-  box.append(title, btn, btn2, line);
+  box.append(title, btn, btn2, modeSelect, btn3, line);
   document.documentElement.appendChild(box);
   paint({});
 }
@@ -192,7 +216,13 @@ function paint(s: Status) {
     if (document.documentElement) build();
     else return;
   }
-  if (!btn || !btn2 || !line) return;
+  if (!btn || !btn2 || !modeSelect || !btn3 || !line) return;
+  if (last.mode && modeSelect.value !== last.mode && document.activeElement !== modeSelect) modeSelect.value = last.mode;
+  modeSelect.disabled = !last.link;
+  const points = last.points ?? 0;
+  btn3.textContent = points > 0 ? `Repartir puntos (${points})` : 'Repartir puntos';
+  btn3.disabled = !last.link || !last.inGame || points <= 0;
+  btn3.style.opacity = btn3.disabled ? '0.5' : '1';
   btn2.textContent = last.sniper ? 'Joyero: ENCENDIDO' : 'Joyero: apagado';
   btn2.style.background = last.sniper ? '#2e9e5b' : '#555';
   btn2.style.color = '#fff';
@@ -209,7 +239,7 @@ function paint(s: Status) {
   else if (last.error) line.textContent = last.error;
   else if (!last.inGame) line.textContent = 'Esperando que entres al mundo (cargá la página con el asistente andando).';
   else if (last.sniper && last.loot) line.textContent = `${last.loot.name} a ${last.loot.dist} casillas al ${last.loot.dir}`;
-  else line.textContent = `${last.name ?? ''} · vida ${last.hp}/${last.maxHp} · ${last.monsters} monstruos · ${last.skill}`;
+  else line.textContent = `${last.name ?? ''} · vida ${last.hp}/${last.maxHp} · ${last.monsters} monstruos · ${last.combo || last.skill}`;
 }
 
 openBridge();

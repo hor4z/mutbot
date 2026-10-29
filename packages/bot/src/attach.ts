@@ -158,7 +158,7 @@ function recordManualPlay() {
 function status(extra: Record<string, unknown> = {}) {
   return JSON.stringify({
     type: 'status', enabled: assist.enabled, inGame: !!bot.inGameAt, name: bot.charName, hp: world.hp, maxHp: world.maxHp, mana: world.mana,
-    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target: assist.target, skill: brain?.skillName() ?? 'golpe', sniper: assist.sniper, loot: brain?.lootHint() ?? null, ...extra,
+    x: world.x, y: world.y, map: world.map, monsters: world.npcs.size, target: assist.target, skill: brain?.skillName() ?? 'golpe', combo: brain?.comboLabel?.() ?? '', mode: assist.mode, sniper: assist.sniper, loot: brain?.lootHint() ?? null, points: world.levelUpPoints, ...extra,
   });
 }
 
@@ -202,13 +202,15 @@ async function main() {
       },
       async message(ws, raw) {
         if (typeof raw === 'string') {
-          let m: { type?: string; on?: boolean; sniper?: boolean } = {};
+          let m: { type?: string; on?: boolean; sniper?: boolean; mode?: string; invest?: boolean } = {};
           try { m = JSON.parse(raw); } catch { return; }
           if (m.type !== 'set') return;
-          if ((m.on || m.sniper) && (await capitanOnline())) { ws.send(status({ error: 'Capitan está conectado desde la estación: desconectalo antes (son dos sesiones de la misma cuenta).' })); return; }
-          if ((m.on || m.sniper) && !bot.inGameAt) { ws.send(status({ error: 'Todavía no vi la entrada al mundo: recargá la página del juego con el asistente andando.' })); return; }
+          if ((m.on || m.sniper || m.invest) && (await capitanOnline())) { ws.send(status({ error: 'Capitan está conectado desde la estación: desconectalo antes (son dos sesiones de la misma cuenta).' })); return; }
+          if ((m.on || m.sniper || m.invest) && !bot.inGameAt) { ws.send(status({ error: 'Todavía no vi la entrada al mundo: recargá la página del juego con el asistente andando.' })); return; }
           if (m.on !== undefined) { assist.enabled = !!m.on; log(`Asistente ${assist.enabled ? 'prendido' : 'apagado'}.`); }
           if (m.sniper !== undefined) { assist.sniper = !!m.sniper; log(`Joyero ${assist.sniper ? 'prendido' : 'apagado'}.`); }
+          if (m.mode === 'liviano' || m.mode === 'intermedio' || m.mode === 'agresivo') { assist.mode = m.mode; log(`Combo: modo ${m.mode}.`); }
+          if (m.invest) void brain?.investStatsNow?.();
           ws.send(status());
           return;
         }
