@@ -44,6 +44,8 @@ const TICK_MS = 5_000;
 const FLEE_WARP_MS = 3_000;
 /** De camino a un lugar lejano, se pelea con lo que esté a este alcance. */
 const WAY_TILES = 8;
+/** A más de esta distancia del spot no se pelea de camino: se corre hasta llegar. */
+const DASH_TILES = 24;
 /** Solo se persigue lo que está a este alcance mientras haya algo; recién sin nada cerca se va más lejos. */
 const CHASE_TILES = 12;
 /** Vida (fracción) por debajo de la cual huye al pueblo si hay monstruos encima, y a la que vuelve a salir. Sin pociones es lo único que lo salva. */
@@ -280,9 +282,10 @@ export async function autonomousLoop(deadline: number): Promise<LoopResult> {
     const place = choosePlace();
     if (!place) { bot.doing = 'esperando stats y vida'; await sleep(500); continue; }
     if (await travelTo(place)) { ctx.target = null; await sleep(500); continue; }
-    // Con un lugar que mandó el usuario (zonaMapa), de camino NO se pelea: máxima prioridad llegar (se cae el objetivo que hubiera). Sin orden del usuario, si hay
-    // monstruos al paso (a 8 tiles) se pelea con ellos en vez de pasar entre medio.
-    const ordered = D.zonaMapa > 0 && farFrom(place, 4);
+    // Con un lugar que mandó el usuario (zonaMapa), o a más de DASH_TILES de donde se va, de camino NO se pelea: se corre (se cae el objetivo que hubiera).
+    // Hay spots buenos al fondo de un camino con monstruos más fuertes que el spot (Arena): parar a pelear en el camino es morir. Más cerca y sin
+    // orden del usuario, si hay monstruos al paso (a 8 tiles) se pelea con ellos en vez de pasar entre medio.
+    const ordered = (D.zonaMapa > 0 && farFrom(place, 4)) || farFrom(place, DASH_TILES);
     if (ordered) ctx.target = null;
     else if (farFrom(place, 4) && (ctx.target == null || !ctx.npcs.has(ctx.target))) {
       const onTheWay = [...ctx.npcs.values()].filter((m) => !unreachable.has(m.id) && chebyshev(m.x, m.y, world.x, world.y) <= WAY_TILES);
