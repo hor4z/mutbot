@@ -107,13 +107,13 @@ function buildPanelEntities(): NonNullable<PanelState['entities']> {
   return {
     monsters: [...world.npcs.values()].slice(0, 150).map((n) => ({ id: n.id, x: n.x, y: n.y, type: n.type, name: monsterName(n.type), target: n.id === tgt, value: hooks.value(n.type) })),
     players: [...world.players.entries()].slice(0, 60).map(([id, p]) => ({ id, x: p.x, y: p.y, ...(p.name ? { name: p.name } : {}) })),
-    drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
+    drops: [...drops.values()].slice(0, 80).map((d) => ({ x: d.x, y: d.y, money: !!d.isMoney, valuable: !d.isMoney && (d.group === 14 && d.num === 11 || (d.group === 13 && [14, 52, 53].includes(d.num)) || !!d.excellent), name: d.isMoney ? `${d.amount ?? ''} zen` : `${d.group}/${d.num}${d.excellent ? ' exc' : ''}` })),
   };
 }
 
 const JEWELS14 = new Set([13, 14, 16, 22, 31]);
 function itemKind(group: number, num: number): NonNullable<PanelState['inventory']>[number]['kind'] {
-  if ((group === 14 && JEWELS14.has(num)) || (group === 12 && num === 15)) return 'joya';
+  if ((group === 14 && JEWELS14.has(num)) || (group === 12 && num === 15) || (group === 13 && [14, 52, 53].includes(num))) return 'joya';
   if (group === 12 && [7, 12, 13, 14, 16, 19].includes(num)) return 'skill';
   if (group === 14 || (group === 13 && num === 3)) return 'pocion';
   return group <= 11 ? 'equipo' : 'otro';
